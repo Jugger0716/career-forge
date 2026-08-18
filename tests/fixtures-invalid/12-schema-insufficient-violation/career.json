@@ -22,6 +22,7 @@
       "id": "career:001",
       "basis": "commit",
       "evidence": [],
+      "verification": { "status": "not-attempted", "attempts": 0, "reasonCode": null },
       "origin": "generated",
       "locked": false,
       "text": "이 프로젝트에서 Kafka Consumer Group과 JPA N+1 문제를 다뤘습니다.",

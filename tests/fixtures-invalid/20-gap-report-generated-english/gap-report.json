@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-18T00:00:00Z",
+  "sourceRepoHead": "0000000000000000000000000000000000000000",
+  "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 2,
+    "period": { "since": "2026-01-01", "until": "2026-08-18" },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": ["dev@example.com"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "nodes": [
+    {
+      "id": "gap:001",
+      "basis": "insufficient",
+      "evidence": [],
+      "verification": { "status": "not-attempted", "attempts": 0, "reasonCode": null },
+      "parentRefs": ["km:001"],
+      "origin": "generated",
+      "locked": true,
+      "topic": "Kafka Consumer Group",
+      "text": "I have only read the docs and never operated a rebalancing incident.",
+      "selfAssessment": "I have only used it from the consumer side and never tuned rebalancing."
+    },
+    {
+      "id": "gap:002",
+      "basis": "insufficient",
+      "evidence": [],
+      "verification": { "status": "not-attempted", "attempts": 0, "reasonCode": null },
+      "parentRefs": ["km:002"],
+      "origin": "generated",
+      "locked": false,
+      "topic": "JPA N+1",
+      "text": "연관 엔티티 조회에서 N+1이 발생하는 조건과 페치 조인의 트레이드오프를 설명하지 못한다.",
+      "selfAssessment": "쿼리 로그를 보고 문제를 인지한 적은 있으나 원인을 설명하지는 못했다."
+    }
+  ]
+}

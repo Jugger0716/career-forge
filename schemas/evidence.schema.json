@@ -192,9 +192,9 @@
           "description": "표시용 축약 해시."
         },
         "authorEmail": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "email",
-          "description": "커밋 작성자 이메일. config.json의 선택 identity 집합과 대조되는 저자 필터의 축(AC-7 (a)축)."
+          "description": "커밋 작성자 이메일. config.json의 선택 identity 집합과 대조되는 저자 필터의 축(AC-7 (a)축). **`excluded: true` 커밋에서는 항상 null이다** — 아래 allOf 조건절이 강제한다. 제외 커밋의 이 값을 읽는 검사가 하나도 없기 때문이다: verify-evidence.mjs는 excluded 체크에서 먼저 return 하므로 authorEmail 대조에 도달하지 않고(CITATION_EXCLUDED_COMMIT), invariants.mjs의 AC-6 불변식과 AC-7 (e)축 집합 동치도 이 필드를 읽지 않는다. 근거와 잔여 위험은 spec.md §6 참조."
         },
         "authorDate": {
           "type": "string",
@@ -213,12 +213,12 @@
         "coAuthors": {
           "type": "array",
           "items": { "type": "string", "x-verbatim": true, "minLength": 1 },
-          "description": "커밋 메시지 트레일러 `Co-authored-by:`의 값 배열. collect-git-facts.mjs가 원장 기록 시점에 scripts/lib/redact.mjs로 알려진 시크릿/PII 패턴(이메일 포함)을 `[REDACTED:<name>]`로 마스킹한 뒤 기록하므로 동료 이메일은 원문이 아니다(A-9). 트레일러가 없으면 빈 배열이며, P0에서는 어떤 필터·집계에도 사용하지 않는다(기록 전용)."
+          "description": "커밋 메시지 트레일러 `Co-authored-by:`의 값 배열. collect-git-facts.mjs가 원장 기록 시점에 scripts/lib/redact.mjs로 알려진 시크릿/PII 패턴(이메일 포함)을 `[REDACTED:<name>]`로 마스킹한 뒤 기록하므로 동료 이메일은 원문이 아니다(A-9). 트레일러가 없으면 빈 배열이며, P0에서는 어떤 필터·집계에도 사용하지 않는다(기록 전용). **`excluded: true` 커밋에서는 항상 빈 배열이다** — 마스킹이 아니라 애초에 기록하지 않는다(spec.md §6)."
         },
         "subject": {
-          "type": "string",
+          "type": ["string", "null"],
           "x-verbatim": true,
-          "description": "커밋 메시지 제목 줄. collect-git-facts.mjs가 원장 기록 시점에 scripts/lib/redact.mjs로 알려진 시크릿/PII 패턴(AWS 키·private key 블록·JWT·password=류 필드·이메일)을 `[REDACTED:<name>]`로 마스킹한 뒤 기록한다(A-9) — 40자 hex 커밋 SHA는 이 도구의 인용 앵커이므로 마스킹 대상에서 명시적으로 제외된다(A-10). AC-19 언어 린트 대상에서는 항상 제외된다(마스킹 후 값을 그대로 원문 취급 — 번역·요약 없음)."
+          "description": "커밋 메시지 제목 줄. collect-git-facts.mjs가 원장 기록 시점에 scripts/lib/redact.mjs로 알려진 시크릿/PII 패턴(AWS 키·private key 블록·JWT·password=류 필드·이메일)을 `[REDACTED:<name>]`로 마스킹한 뒤 기록한다(A-9) — 40자 hex 커밋 SHA는 이 도구의 인용 앵커이므로 마스킹 대상에서 명시적으로 제외된다(A-10). AC-19 언어 린트 대상에서는 항상 제외된다(마스킹 후 값을 그대로 원문 취급 — 번역·요약 없음). **`excluded: true` 커밋에서는 항상 null이다**(spec.md §6) — 제외 커밋의 제목을 읽는 검사가 없고, 제목은 타인의 업무 내용이 가장 직접적으로 드러나는 필드다."
         },
         "insertions": {
           "type": "integer",
@@ -248,8 +248,28 @@
         {
           "if": { "properties": { "excluded": { "const": false } } },
           "then": { "properties": { "exclusionReason": { "const": null } } }
+        },
+        {
+          "if": { "properties": { "excluded": { "const": true } } },
+          "then": {
+            "properties": {
+              "authorEmail": { "type": "null" },
+              "subject": { "type": "null" },
+              "coAuthors": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "excluded": { "const": false } } },
+          "then": {
+            "properties": {
+              "authorEmail": { "type": "string", "format": "email" },
+              "subject": { "type": "string" }
+            }
+          }
         }
-      ]
+      ],
+      "x-invariant-note": "제외 커밋의 PII 3필드(authorEmail·subject·coAuthors) 축소는 spec.md §6이 확정한 정책이며 위 두 절이 그것을 강제한다. 두 절은 세트다 — excluded:false 쪽 절을 빼고 base type만 [\"string\",\"null\"]로 넓히면 본인 커밋도 null이 허용되어 AC-7 (a)축의 원장↔git 실측 대조가 약화된다. 이 제약을 anyOf나 최상위 if/then으로 옮기지 마라: 그 두 형태는 오랫동안 평가되지 않았고(이 저장소의 스키마들이 마침 쓰지 않아 실피해가 없었을 뿐이다) 지금은 평가되지만, 조건부 제약을 allOf 원소로 쓰는 것이 이 저장소의 관례다."
     },
     "fileChange": {
       "type": "object",
