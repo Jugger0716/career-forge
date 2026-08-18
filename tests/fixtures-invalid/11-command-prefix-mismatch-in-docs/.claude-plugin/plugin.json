@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "정상 plugin.json — docs/ 아래 문서에만 잘못된 슬래시 명령 접두사가 섞인 negative 픽스처(케이스 11). README.md만 스캔하던 이전 범위로는 이 위반을 잡지 못한다(AC-18 스캔 범위 확장 검증용).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "MIT"
+}

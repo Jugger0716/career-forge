@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2024-01-01T00:00:00.000Z",
+  "sourceRepoHead": "ff2279779e651b77a4f89c71c4a589971a3ed436",
+  "contentHash": "deadbeefcafe",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 1,
+    "period": { "since": null, "until": null },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": ["owner@example.test"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "commits": [
+    {
+      "id": "commit:d4d498c0458c893545c82f263d672d67bcea0e06",
+      "hash": "d4d498c0458c893545c82f263d672d67bcea0e06",
+      "shortHash": "d4d498c0458c",
+      "authorEmail": "owner@example.test",
+      "authorDate": "2024-01-01T00:00:00.000Z",
+      "parents": ["d41ea8cbcbcccf2caddb5349b21eb0f618bf577c"],
+      "isMerge": false,
+      "coAuthors": [],
+      "subject": "chore: AC-6 (i) 위반 픽스처 — 커밋 레벨 합계가 binary 항목까지 포함해 필터를 제거한 것처럼 계산됐다(임무 M-e 사고 실험의 축소판)",
+      "insertions": 10,
+      "deletions": 2,
+      "files": [
+        {
+          "path": "a.txt",
+          "oldPath": null,
+          "changeType": "M",
+          "insertions": 3,
+          "deletions": 0,
+          "binary": false,
+          "viaMerge": false
+        },
+        {
+          "path": "b.bin",
+          "oldPath": null,
+          "changeType": "M",
+          "insertions": 0,
+          "deletions": 0,
+          "binary": true,
+          "viaMerge": false
+        }
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "license가 Apache-2.0인데 LICENSE 파일 본문은 MIT인 negative 픽스처(케이스 9) — 라이선스 대조가 MIT 하드코딩이 아니라 plugin.json의 license 값 일반으로 동작함을 검증한다.",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "Apache-2.0"
+}

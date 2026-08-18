@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "정상 plugin.json — 이 케이스는 SKILL.md description의 1인칭 서술만 검사한다(케이스 3).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "MIT"
+}
