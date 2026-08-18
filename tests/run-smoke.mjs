@@ -36,12 +36,12 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runValidation, runLangCheck, runSchemaCheck } from "../scripts/validate-plugin.mjs";
 import { walk } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
 import { computeRepoKeyForPath } from "../scripts/lib/store.mjs";
-import { collectGitFacts } from "../scripts/collect-git-facts.mjs";
+import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
 import {
   verifyCitation,
@@ -49,10 +49,17 @@ import {
   verifyMergeFileSetEquivalence,
   checkLayerRefs,
   verifyEvidence,
+  createVerificationCache,
+  verificationCacheKey,
+  exitCodeForReport,
 } from "../scripts/verify-evidence.mjs";
 import {
   catFileExists,
   getCommitFileChanges,
+  getCommitAuthorAndParents,
+  listCommitMetadata,
+  isShallowRepository,
+  isMergeCommit,
   GIT_FIXED_PREFIX_ARGS,
   _internal as gitInternal,
 } from "../scripts/lib/git.mjs";
@@ -74,6 +81,7 @@ import {
   buildOptInSnippet,
   buildLarge300,
   buildChurnKeyDivergence,
+  buildCase17MergeHashInjection,
 } from "../fixtures/make-fixture.mjs";
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -878,6 +886,293 @@ function runVerifyEvidenceSmoke() {
       report(okSnippet, "(5b-ii) 손상된 커밋에 대한 cat-file -e <sha>:<path> → TOOL_ERROR(128, 조회 실패 패턴 불일치, 인용 FAIL 미집계)");
     }
 
+    // ---- (6) 콜드 리뷰 M(A-8) 대응: (a)축 저자 오라클 — 원장 authorEmail을
+    // 조작해도 git 실측 저자와 대조돼 뚫리지 않는지 관측한다. 실패 시나리오
+    // 재현: 동료(Alice) 커밋의 excluded를 false로, authorEmail을 본인
+    // 이메일로 3필드 편집하면 예전에는 (a)축이 원장만 신뢰해 그대로 PASS
+    // 했다(콜드 리뷰 실측). 이제는 git show가 돌려준 실제 저자(alice@…)와
+    // 원장의 조작된 authorEmail이 달라 CITATION_LEDGER_AUTHOR_MISMATCH로
+    // FAIL해야 한다.
+    {
+      const evidence = collect(dirs.multiAuthor);
+      const aliceEntry = evidence.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const tampered = structuredClone(evidence);
+      const tamperedAlice = tampered.commits.find((c) => c.hash === aliceEntry.hash);
+      tamperedAlice.excluded = false; // 실패 시나리오 3필드 편집 재현
+      tamperedAlice.exclusionReason = null;
+      tamperedAlice.authorEmail = OWNER_EMAIL; // 동료 커밋을 "본인 것"으로 위장
+
+      const r = verifyCitation({
+        repoPath: dirs.multiAuthor,
+        evidence: tampered,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: tamperedAlice.id,
+      });
+      const ok = r.verdict === "FAIL" && r.code === "CITATION_LEDGER_AUTHOR_MISMATCH";
+      if (!ok) console.log(`    실제: ${JSON.stringify(r)}`);
+      report(
+        ok,
+        "(6) A-8: 원장 excluded/exclusionReason/authorEmail 3필드를 조작해(동료 커밋→본인 것으로 위장) " +
+        "excluded 체크를 우회해도 git 실측 저자와 불일치해 CITATION_LEDGER_AUTHOR_MISMATCH로 FAIL(원장 조작 방어)"
+      );
+
+      // 대조군: git.mjs 오라클 자체가 실제로 Alice의 진짜 이메일을 돌려주는지
+      // 직접 확인(위 FAIL이 우연이 아니라 오라클이 실제로 다른 값을 낸다는
+      // 근거).
+      const oracle = getCommitAuthorAndParents(dirs.multiAuthor, aliceEntry.hash);
+      const okOracle = oracle.outcome === "ok" && oracle.authorEmail === ALICE_EMAIL;
+      if (!okOracle) console.log(`    실제(oracle): ${JSON.stringify(oracle)}`);
+      report(okOracle, "(6-부가) git.mjs getCommitAuthorAndParents가 Alice 커밋의 실제 저자(alice@…)를 정확히 반환");
+
+      // 무오탐 대조군: 조작되지 않은 원장(authorEmail이 실제 저자와 일치)에서는
+      // 여전히 정상 판정(EXCLUDED_COMMIT — excluded가 그대로 true)이 나야 한다.
+      const rUntampered = verifyCitation({
+        repoPath: dirs.multiAuthor,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: aliceEntry.id,
+      });
+      const okUntampered = rUntampered.verdict === "FAIL" && rUntampered.code === "CITATION_EXCLUDED_COMMIT";
+      if (!okUntampered) console.log(`    실제(무오탐): ${JSON.stringify(rUntampered)}`);
+      report(okUntampered, "(6-무오탐) 조작되지 않은 원장에서는 authorEmail 대조가 새 FAIL을 만들지 않음(EXCLUDED_COMMIT 그대로)");
+    }
+
+    // ---- (7) 콜드 리뷰 M(A-20) 대응: 머지 판정 정본을 parents로 고정 —
+    // 원장 isMerge 플래그 하나만 true→false로 바꿔도(parents는 그대로 2건)
+    // 머지 해시 basis 규칙과 AC-7 집합 동치 검사가 더 이상 우회되지 않는지
+    // 관측한다(콜드 리뷰 실측 재현: 예전에는 이 조작 하나로 두 검사가 동시에
+    // 무력화됐다).
+    {
+      const evidence = collect(dirs.merge, { mergeIncluded: true });
+      const mergeEntry = evidence.commits.find((c) => c.hash === mergeFx.declared.mergeCommitHash);
+
+      const tampered = structuredClone(evidence);
+      const tamperedMerge = tampered.commits.find((c) => c.hash === mergeFx.declared.mergeCommitHash);
+      tamperedMerge.isMerge = false; // parents는 그대로 2건 — 플래그만 조작
+
+      // 조작 전제 확인: parents는 여전히 2건이므로 isMergeCommit(parents)의
+      // 정본 판정으로는 여전히 머지다(플래그만 거짓말을 하고 있는 상태).
+      const okPremise = tamperedMerge.parents.length === 2 && isMergeCommit(tamperedMerge.parents) === true && tamperedMerge.isMerge === false;
+      if (!okPremise) console.log(`    실제(전제): parents=${JSON.stringify(tamperedMerge.parents)} isMerge=${tamperedMerge.isMerge}`);
+      report(okPremise, "(7-전제) 조작 확인: parents는 2건 그대로(isMergeCommit(parents)===true)인데 isMerge 플래그만 false");
+
+      // (7a) 머지 해시 basis:commit 규칙 — isMerge 플래그가 false여도 여전히 FAIL.
+      const rBasisRule = verifyCitation({
+        repoPath: dirs.merge,
+        evidence: tampered,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: mergeEntry.id,
+        nodeBasis: "commit",
+      });
+      const okBasisRule = rBasisRule.verdict === "FAIL" && rBasisRule.code === "CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN";
+      if (!okBasisRule) console.log(`    실제(7a): ${JSON.stringify(rBasisRule)}`);
+      report(
+        okBasisRule,
+        "(7a) A-20: 원장 isMerge:true→false로 조작해도(parents는 2건 그대로) 머지 해시 basis:commit 규칙이 " +
+        "여전히 FAIL(isMergeCommit(parents)가 정본 — 플래그 단독 조작으로 우회 불가)"
+      );
+
+      // (7b) AC-7 집합 동치 검사 — isMerge:false로 조작하면 예전에는 검사 자체가
+      // 스킵됐다(mergeFileSetChecked: 1→0). 이제는 parents 기준으로 여전히
+      // 실행되는지 files[] 항목 1건을 추가로 제거해(원장 직렬화 누락 재현)
+      // 실제로 MISMATCH를 잡는지까지 확인한다(스킵됐다면 결과가 아예 안 나온다).
+      const droppedFile = tamperedMerge.files.pop();
+      const mergeResults = verifyMergeFileSetEquivalence({ repoPath: dirs.merge, evidence: tampered });
+      const okMergeCheck =
+        mergeResults.length === 1 &&
+        mergeResults[0].verdict === "FAIL" &&
+        mergeResults[0].code === "MERGE_FILESET_SET_MISMATCH" &&
+        mergeResults[0].missingInLedger.includes(droppedFile.path);
+      if (!okMergeCheck) console.log(`    실제(7b): ${JSON.stringify(mergeResults)}`);
+      report(
+        okMergeCheck,
+        "(7b) A-20: isMerge:false로 조작된 머지 커밋도 AC-7 집합 동치 검사가 여전히 실행됨(스킵되지 않음) — " +
+        "isMergeCommit(parents) 기준이므로 files[] 누락을 그대로 잡는다(mergeFileSetChecked가 0으로 떨어지지 않음)"
+      );
+    }
+
+    // ---- (8) 콜드 리뷰 M(A-15) 대응: 캐시 재사용 — 동일 (repoPath,sha) 인용을
+    // 반복 검증해도 캐시 Map 크기가 늘지 않는지(=git 프로세스가 매번 새로
+    // 스폰되지 않는지) 관측한다.
+    {
+      const evidence = collect(dirs.multiAuthor);
+      const ownerEntry = evidence.commits.find((c) => c.authorEmail === OWNER_EMAIL);
+      const cache = createVerificationCache();
+      for (let i = 0; i < 5; i++) {
+        verifyCitation({
+          repoPath: dirs.multiAuthor,
+          evidence,
+          selectedIdentities: [OWNER_EMAIL],
+          ledgerId: ownerEntry.id,
+          citationPath: "a.txt",
+          cache,
+        });
+      }
+      const ok = cache.authorParents.size === 1 && cache.fileChanges.size === 1;
+      if (!ok) console.log(`    실제: authorParents.size=${cache.authorParents.size} fileChanges.size=${cache.fileChanges.size}`);
+      report(
+        ok,
+        "(8) A-15: 같은 (repoPath,sha) 인용을 캐시 공유로 5회 검증해도 " +
+        "authorParents/fileChanges 캐시 Map 크기가 1로 유지됨(호출마다 새 git 프로세스를 스폰하지 않음)"
+      );
+
+      // verifyEvidence() 오케스트레이션도 내부에서 만든 캐시(또는 넘겨받은
+      // 캐시)를 인용 루프 전체에 공유하는지 확인한다 — 같은 커밋·경로를
+      // 3개 노드가 인용해도 캐시 크기는 1이어야 한다.
+      const sharedCache = createVerificationCache();
+      const career = {
+        nodes: [
+          { id: "car:1", basis: "commit", evidence: [{ ledgerId: ownerEntry.id, path: "a.txt" }] },
+          { id: "car:2", basis: "commit", evidence: [{ ledgerId: ownerEntry.id, path: "a.txt" }] },
+          { id: "car:3", basis: "commit", evidence: [{ ledgerId: ownerEntry.id, path: "a.txt" }] },
+        ],
+      };
+      const orchestrated = verifyEvidence({
+        repoPath: dirs.multiAuthor,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career },
+        cache: sharedCache,
+      });
+      const okShared =
+        orchestrated.summary.passCitations === 3 &&
+        sharedCache.authorParents.size === 1 &&
+        sharedCache.fileChanges.size === 1;
+      if (!okShared) {
+        console.log(`    실제(공유): pass=${orchestrated.summary.passCitations} authorParents.size=${sharedCache.authorParents.size} fileChanges.size=${sharedCache.fileChanges.size}`);
+      }
+      report(
+        okShared,
+        "(8-부가) verifyEvidence()에 넘긴 캐시가 3개 노드의 동일 커밋·경로 인용 전체에 공유됨(캐시 Map 크기 1)"
+      );
+    }
+
+    // ---- (9) 콜드 리뷰 M(A-22) 대응: case-17 골든이 실제로 의도한 코드로
+    // FAIL하는지 확인한다 — 필드명이 evidenceId였을 때는 CITATION_MALFORMED_LEDGER_ID
+    // (엉뚱한 이유)로 FAIL했다. ledgerId로 고친 뒤에는 basis:commit + 머지
+    // 해시 규칙 위반 코드(CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN)로
+    // FAIL해야 "탐지"로 채점된다(파일 자신의 expectedVerifierOutcome 문구 그대로).
+    {
+      const injection = buildCase17MergeHashInjection(mergeFx.declared);
+      const evidence = collect(dirs.merge, { mergeIncluded: true }); // 실행 설정: mergeIncluded:true
+      const citation = injection.node.evidence[0];
+      const r = verifyCitation({
+        repoPath: dirs.merge,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: citation.ledgerId,
+        citationPath: citation.path ?? null,
+        nodeBasis: injection.node.basis,
+      });
+      const ok = r.verdict === "FAIL" && r.code === "CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN";
+      if (!ok) console.log(`    실제: ${JSON.stringify(r)}`);
+      report(
+        ok,
+        "(9) A-22: case-17 주입 노드(evidence[].ledgerId 필드명 수정 후)가 CITATION_MALFORMED_LEDGER_ID가 아니라 " +
+        "의도한 CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN으로 FAIL(AC-7 대표 재현 케이스가 올바른 이유로 탐지됨)"
+      );
+
+      // fixtures/golden/case-17-merge-hash-claim.json 골든 파일 자체도 같은
+      // 결과를 내는지 확인한다(생성기와 커밋된 골든이 드리프트하지 않음).
+      const goldenPath = path.join(REPO_ROOT, "fixtures", "golden", "case-17-merge-hash-claim.json");
+      const golden = JSON.parse(fs.readFileSync(goldenPath, "utf8"));
+      const goldenCitation = golden.node.evidence[0];
+      const rGolden = verifyCitation({
+        repoPath: dirs.merge,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: goldenCitation.ledgerId,
+        nodeBasis: golden.node.basis,
+      });
+      const okGolden = rGolden.verdict === "FAIL" && rGolden.code === "CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN";
+      if (!okGolden) console.log(`    실제(골든 파일): ${JSON.stringify(rGolden)}`);
+      report(okGolden, "(9-부가) 커밋된 fixtures/golden/case-17-merge-hash-claim.json 자체도 같은 결과로 FAIL(생성기-골든 드리프트 없음)");
+    }
+
+    // ---- (10) 콜드 리뷰 C4(Critical) 대응: fail-open 제거 — 인용 100%가
+    // TOOL_ERROR(도구 오류)뿐이고 확정 위반이 0건이어도 status가 "PASS"가
+    // 되지 않는지, exit 코드가 0이 아닌지 관측한다(실패 시나리오 재현:
+    // --repo 오타/비-git 디렉터리 → 예전에는 [PASS] + exit 0).
+    {
+      const anySha = "a".repeat(40);
+      const career = {
+        nodes: [{ id: "car:only", basis: "commit", evidence: [{ ledgerId: `commit:${anySha}` }] }],
+      };
+      const report_ = verifyEvidence({
+        repoPath: dirs.toolErrorNonGit,
+        evidence: { commits: [] },
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career },
+      });
+      const ok =
+        report_.status === "INCONCLUSIVE" &&
+        report_.ok === false &&
+        report_.summary.totalCitations === 1 &&
+        report_.summary.passCitations === 0 &&
+        report_.summary.failCitations === 0 &&
+        report_.summary.toolErrorCitations === 1 &&
+        report_.summary.unverifiedCitations === 1 &&
+        exitCodeForReport(report_) === 2;
+      if (!ok) console.log(`    실제: status=${report_.status} ok=${report_.ok} summary=${JSON.stringify(report_.summary)} exit=${exitCodeForReport(report_)}`);
+      report(
+        ok,
+        "(10) C4: 인용 전량이 도구 오류(비-git 디렉터리)뿐이면 status=INCONCLUSIVE·ok=false·exit=2 " +
+        "(예전에는 violations.length===0이라는 이유만으로 [PASS]+exit 0이 나왔다 — 가짜 해시가 그대로 통과)"
+      );
+
+      // (10-부가) 도구 오류와 확정 FAIL이 같은 검증 실행에 섞이면 FAIL이
+      // 우선한다(더 강한 신호를 숨기지 않는다) — exit 1. 실제 git 프로세스가
+      // "tool-error"를 내는 경로는 (5a)/(10)에서 이미 별도로 실증했으므로,
+      // 여기서는 그 결과 형태를 캐시에 직접 심어(createVerificationCache()가
+      // 노출하는 공개 확장점 — verifyCitation은 캐시 히트 여부만 보고 그
+      // 값이 실제 git 호출에서 왔는지 구분하지 않는다) 실제 repo(dirs.
+      // multiAuthor)에서 Alice 인용이 진짜 FAIL을 내는 것과 동시에 발생하는
+      // 상황을 재현한다 — verifyEvidence()의 상태 "우선순위 집계 로직" 자체를
+      // 검증하는 것이 목적이다(도구 오류 재현 자체는 이미 다른 절에서 실증됨).
+      const evidenceForMixed = collect(dirs.multiAuthor);
+      const aliceEntry = evidenceForMixed.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const fakeToolErrorSha = "b".repeat(40);
+      const mixedCache = createVerificationCache();
+      mixedCache.authorParents.set(verificationCacheKey(dirs.multiAuthor, fakeToolErrorSha), {
+        outcome: "tool-error",
+        status: -1,
+        stderr: "synthetic tool error for (10-부가) priority test",
+        authorEmail: null,
+        parents: null,
+      });
+      const mixedCareer = {
+        nodes: [
+          { id: "car:toolerr", basis: "commit", evidence: [{ ledgerId: `commit:${fakeToolErrorSha}` }] },
+          { id: "car:realfail", basis: "commit", evidence: [{ ledgerId: aliceEntry.id }] },
+        ],
+      };
+      const mixedReport = verifyEvidence({
+        repoPath: dirs.multiAuthor,
+        evidence: evidenceForMixed,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career: mixedCareer },
+        cache: mixedCache,
+      });
+      const okMixed =
+        mixedReport.status === "FAIL" &&
+        exitCodeForReport(mixedReport) === 1 &&
+        mixedReport.summary.toolErrorCitations === 1 &&
+        mixedReport.summary.failCitations === 1;
+      if (!okMixed) console.log(`    실제(혼합): status=${mixedReport.status} exit=${exitCodeForReport(mixedReport)} summary=${JSON.stringify(mixedReport.summary)}`);
+      report(okMixed, "(10-부가) 도구 오류 1건 + 확정 FAIL 1건이 같이 있으면 INCONCLUSIVE가 아니라 FAIL이 우선(exit 1)");
+
+      // (10-무오탐) 도구 오류 0건 + 위반 0건이면 여전히 PASS/exit 0(회귀 없음).
+      const cleanReport = verifyEvidence({
+        repoPath: dirs.multiAuthor,
+        evidence: collect(dirs.multiAuthor),
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: {},
+      });
+      const okClean = cleanReport.status === "PASS" && cleanReport.ok === true && exitCodeForReport(cleanReport) === 0;
+      if (!okClean) console.log(`    실제(무오탐): status=${cleanReport.status} ok=${cleanReport.ok} exit=${exitCodeForReport(cleanReport)}`);
+      report(okClean, "(10-무오탐) 도구 오류·위반 둘 다 0건이면 여전히 status=PASS·exit=0(회귀 없음)");
+    }
+
     // ---- (16) 옵트인 스니펫: git.mjs catFileExists 원시 동작 양쪽 분기 관측 ----
     {
       const existsR = catFileExists(dirs.optInSnippet, snippetFx.declared.existsAtCommit, snippetFx.declared.path);
@@ -1387,6 +1682,421 @@ function runGitZGuardSmoke() {
 }
 
 // ---------------------------------------------------------------------------
+// 콜드 리뷰 회귀 스모크 — C1(typechange 파서 throw)·C2(--since/--until
+// committerDate 축·조기 중단)·C3(shallow clone 경계 커밋 오인)·
+// M(diff.renames 미고정)·M(--ref all의 refs/stash 유입)·M(churn 버킷
+// vendored/lockfile 오염). 각 항목은 "현재 픽스처에서 문제가 안 난다"가
+// 아니라 실제 git이 낼 수 있는 조건을 플럼빙으로 재현해 관측한다 —
+// 오케스트레이터 지침(이전 라운드가 "픽스처에 그 코드가 없었을 뿐인데
+// 회귀 없음으로 결론지은" 것과 같은 실수를 반복하지 않기 위함).
+// ---------------------------------------------------------------------------
+
+function crInitRepo(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, "init", "-q", "."], { encoding: "utf8" });
+  execFileSync("git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, "config", "user.email", OWNER_EMAIL], { encoding: "utf8" });
+  execFileSync("git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, "config", "user.name", "owner"], { encoding: "utf8" });
+  execFileSync("git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, "config", "commit.gpgsign", "false"], { encoding: "utf8" });
+}
+
+function crGit(dir, args, env) {
+  return execFileSync("git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, ...args], {
+    encoding: "utf8",
+    env: env ? { ...process.env, ...env } : process.env,
+  });
+}
+
+function crWriteFile(dir, relPath, content) {
+  const full = path.join(dir, relPath);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content, "utf8");
+}
+
+function crCommitWithDates(dir, message, authorIso, committerIso) {
+  crGit(dir, ["commit", "-q", "-m", message], { GIT_AUTHOR_DATE: authorIso, GIT_COMMITTER_DATE: committerIso });
+  return crGit(dir, ["rev-parse", "HEAD"]).trim();
+}
+
+/**
+ * C1(Critical) — `git diff --name-status`의 T(typechange) 코드에서
+ * parseNameStatusTokens가 예외를 던져 수집기·검증기가 통째로 죽던 회귀.
+ * 오케스트레이터가 실측 확인한 재현 레시피(symlink 모드 엔트리 → 일반
+ * 파일로 교체, Windows에서 symlink 생성 권한 없이 플럼빙만으로 가능)를
+ * 그대로 쓴다.
+ */
+function runTypeChangeSmoke() {
+  console.log("[C1: typechange(T) 회귀] parseNameStatusTokens가 T 코드에서 더 이상 throw하지 않음을 실제 git 호출로 확인");
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-typechange-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    crInitRepo(dir);
+
+    fs.writeFileSync(path.join(dir, "blob.tmp"), "target.txt", "utf8");
+    const h1 = crGit(dir, ["hash-object", "-w", "blob.tmp"]).trim();
+    crGit(dir, ["update-index", "--add", "--cacheinfo", `120000,${h1},link`]);
+    crWriteFile(dir, "target.txt", "hello\n");
+    crGit(dir, ["add", "target.txt"]);
+    const c1 = crCommitWithDates(dir, "one", "2020-01-01T00:00:00", "2020-01-01T00:00:00");
+
+    const h2 = execFileSync(
+      "git", ["-C", dir, ...GIT_FIXED_PREFIX_ARGS, "hash-object", "-w", "--stdin"],
+      { input: "regular\n", encoding: "utf8" }
+    ).trim();
+    crGit(dir, ["update-index", "--add", "--cacheinfo", `100644,${h2},link`]);
+    const c2 = crCommitWithDates(dir, "two", "2020-01-02T00:00:00", "2020-01-02T00:00:00");
+
+    // 사전 확인: 이 레포가 실제로 name-status="T"를 낸다(재현 전제 성립).
+    const rawStatus = crGit(dir, ["diff", "--name-status", `${c1}`, `${c2}`]).trim();
+    report(rawStatus === "T\tlink", `사전 확인: 실제 git diff --name-status가 'T'를 냄(재현 전제 성립, 실제: '${rawStatus}')`);
+
+    let threw = null;
+    let result = null;
+    try {
+      result = getCommitFileChanges(dir, c2, [c1], false);
+    } catch (e) {
+      threw = e;
+    }
+    const okNoThrow = threw === null && result?.ok === true;
+    if (!okNoThrow) console.log(`    실제: threw=${threw ? threw.message : null} result=${JSON.stringify(result)}`);
+    report(okNoThrow, "C1: getCommitFileChanges가 typechange(T) 커밋에서 throw하지 않고 ok:true 반환(이전에는 여기서 예외로 죽었다)");
+
+    const entry = result?.files?.[0];
+    report(
+      entry?.changeType === "M" && entry?.rawChangeType === "T" && entry?.path === "link",
+      `C1: T가 changeType:"M"으로 정규화되고 rawChangeType:"T"로 원본이 보존됨(실제: changeType=${entry?.changeType}, rawChangeType=${entry?.rawChangeType})`
+    );
+
+    let collectThrew = null;
+    let evidence = null;
+    try {
+      evidence = collectGitFacts({ repoPath: dir, selectedIdentities: [OWNER_EMAIL], ref: "HEAD", maxCommits: 1000 }).evidence;
+    } catch (e) {
+      collectThrew = e;
+    }
+    report(
+      collectThrew === null,
+      `C1: collectGitFacts()가 typechange 커밋이 있는 레포에서 예외 없이 완료됨(실측 재현 레시피 — 이전에는 '수집 실패' + exit 1이었다; 실제: ${collectThrew ? collectThrew.message : "OK"})`
+    );
+    if (evidence) {
+      const c2Entry = evidence.commits.find((c) => c.hash === c2);
+      const c2File = c2Entry?.files?.find((f) => f.path === "link");
+      report(c2File?.rawChangeType === "T", "C1: collectGitFacts 산출 evidence.json에도 rawChangeType:'T'가 그대로 보존됨");
+    }
+
+    // verify-evidence 경로(오케스트레이터 지침이 지목한 더 심각한 쪽 —
+    // 이전에는 try/catch가 전혀 없어 미처리 예외 스택 트레이스로 죽었다).
+    let vThrew = null;
+    let vResult = null;
+    try {
+      vResult = verifyCitation({
+        repoPath: dir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        ledgerId: `commit:${c2}`,
+        citationPath: "link",
+        nodeBasis: "commit",
+      });
+    } catch (e) {
+      vThrew = e;
+    }
+    report(
+      vThrew === null && vResult?.verdict === "PASS",
+      `C1: verifyCitation이 typechange 커밋 인용을 미처리 예외 없이 PASS 처리(실제: threw=${vThrew ? vThrew.message : null}, verdict=${vResult?.verdict})`
+    );
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+/**
+ * C2(Critical) — `--since`/`--until`이 committerDate 기준으로 필터되고
+ * 순회를 조기 중단해 원장이 "누락 0건"을 거짓 단언하던 회귀. authorDate/
+ * committerDate가 서로 다른 커밋 4건(양방향 축 불일치 + 비단조 순서)으로
+ * 재현한다.
+ */
+function runSinceUntilAuthorDateSmoke() {
+  console.log("[C2: --since/--until authorDate 축 회귀] committerDate 축 불일치·조기 중단·거짓 dropped:0 단언이 사라졌음을 확인");
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sinceuntil-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    crInitRepo(dir);
+
+    crWriteFile(dir, "c1.txt", "c1\n");
+    crGit(dir, ["add", "c1.txt"]);
+    const c1 = crCommitWithDates(dir, "feat: c1 (author in-range, committer out-of-range)", "2025-06-15T00:00:00", "2019-01-01T00:00:00");
+
+    crWriteFile(dir, "c2.txt", "c2\n");
+    crGit(dir, ["add", "c2.txt"]);
+    const c2 = crCommitWithDates(dir, "feat: c2 (author out-of-range, committer in-range)", "2019-01-01T00:00:00", "2025-06-15T00:00:00");
+
+    crWriteFile(dir, "c3.txt", "c3\n");
+    crGit(dir, ["add", "c3.txt"]);
+    const c3 = crCommitWithDates(dir, "feat: c3 (both out-of-range)", "2019-06-01T00:00:00", "2019-06-01T00:00:00");
+
+    crWriteFile(dir, "c4.txt", "c4\n");
+    crGit(dir, ["add", "c4.txt"]);
+    const c4 = crCommitWithDates(dir, "feat: c4 (both in-range)", "2025-07-01T00:00:00", "2025-07-01T00:00:00");
+
+    const { evidence } = collectGitFacts({
+      repoPath: dir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      since: "2025-01-01",
+      until: "2025-12-31",
+      maxCommits: 1000,
+    });
+
+    report(evidence.coverage.traversed === 4, `C2: 전량 순회(조기 중단 없음) — traversed===4(실제 ${evidence.coverage.traversed})`);
+
+    const byHash = Object.fromEntries(evidence.commits.map((c) => [c.hash, c]));
+    report(
+      byHash[c1]?.excluded === false,
+      "C2: authorDate가 범위 안인 c1이 committerDate가 범위 밖임에도 population에 포함됨(committerDate가 아니라 authorDate 축임을 확인)"
+    );
+    report(
+      byHash[c2]?.excluded === true && byHash[c2]?.exclusionReason === "period-out-of-range",
+      `C2: authorDate가 범위 밖인 c2가 committerDate 범위 안임에도 제외됨(실제: excluded=${byHash[c2]?.excluded}, reason=${byHash[c2]?.exclusionReason})`
+    );
+    report(
+      byHash[c3]?.excluded === true && byHash[c3]?.exclusionReason === "period-out-of-range",
+      "C2: 양쪽 다 범위 밖인 c3도 period-out-of-range로 제외"
+    );
+    report(byHash[c4]?.excluded === false, "C2: 양쪽 다 범위 안인 c4는 population에 포함");
+    report(
+      evidence.truncated.reason === "none" && evidence.truncated.dropped_commits === 0,
+      "C2: 기간 제외는 truncated(예산 절단) 축과 별개이므로 truncated는 그대로 {none,0} — excluded 가시성으로 처리된다"
+    );
+    report(evidence.commits.length === 4, "C2: 기간 밖 커밋도 원장에 전량 등재됨(누락 없음 — '거짓 dropped:0 단언' 문제가 가시성으로 해소됨)");
+
+    let badThrew = null;
+    try {
+      collectGitFacts({ repoPath: dir, selectedIdentities: [OWNER_EMAIL], ref: "HEAD", since: "2 years ago", maxCommits: 1000 });
+    } catch (e) {
+      badThrew = e;
+    }
+    report(
+      badThrew !== null && /YYYY-MM-DD/.test(badThrew.message),
+      `A-5: git 상대 날짜('2 years ago')처럼 검증되지 않은 --since 값이 Date.parse NaN으로 조용히 흐르지 않고 즉시 거부됨(실제: ${badThrew?.message})`
+    );
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+
+  {
+    let threw = null;
+    try {
+      computeSampling([{ hash: "a".repeat(40), authorEpochSec: 100, churn: 1 }], 1, { since: NaN });
+    } catch (e) {
+      threw = e;
+    }
+    report(threw !== null && /NaN/.test(threw.message), "A-5: computeSampling이 range.since로 NaN을 받으면 조용히 진행하지 않고 즉시 거부(2차 방어선)");
+  }
+}
+
+/**
+ * C3(Critical) — shallow clone의 경계 커밋을 루트 커밋으로 오인해 빈
+ * 트리와 diff, 코드베이스 전체를 그 커밋 1건의 신규 작성분(A)으로
+ * 집계하던 회귀. `git clone --depth`(`file://` 스킴 — 로컬 clone에서는
+ * `--depth`가 무시된다는 git 경고를 피하기 위함, 실측 확인)로 진짜
+ * shallow 레포를 만들어 재현한다.
+ */
+function runShallowCloneSmoke() {
+  console.log("[C3: shallow clone 경계 커밋 회귀] 경계 커밋이 루트로 오인되지 않고 excluded:'shallow-boundary'로 제외됨을 실제 --depth clone으로 확인");
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-shallow-"));
+  try {
+    const srcDir = path.join(tmpBase, "src");
+    crInitRepo(srcDir);
+    crWriteFile(srcDir, "a.txt", "a\n".repeat(50));
+    crGit(srcDir, ["add", "a.txt"]);
+    crCommitWithDates(srcDir, "feat: c1 (would-be shallow boundary)", "2024-01-01T00:00:00", "2024-01-01T00:00:00");
+    crWriteFile(srcDir, "b.txt", "b\n");
+    crGit(srcDir, ["add", "b.txt"]);
+    const c2 = crCommitWithDates(srcDir, "feat: c2", "2024-02-01T00:00:00", "2024-02-01T00:00:00");
+    crWriteFile(srcDir, "c.txt", "c\n");
+    crGit(srcDir, ["add", "c.txt"]);
+    const c3 = crCommitWithDates(srcDir, "feat: c3", "2024-03-01T00:00:00", "2024-03-01T00:00:00");
+
+    const shallowDir = path.join(tmpBase, "shallow");
+    const srcUrl = pathToFileURL(srcDir).href;
+    execFileSync("git", [...GIT_FIXED_PREFIX_ARGS, "clone", "-q", "--depth", "2", srcUrl, shallowDir], { encoding: "utf8" });
+
+    report(isShallowRepository(shallowDir) === true, "사전 확인: file:// --depth 2 clone이 실제로 shallow repository로 감지됨(재현 전제 성립)");
+
+    const { evidence } = collectGitFacts({
+      repoPath: shallowDir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      maxCommits: 1000,
+    });
+
+    report(evidence.coverage.isShallowClone === true, "C3: coverage.isShallowClone===true로 명시 기록됨(spec.md 엣지 케이스 원문 '감지 후 커버리지에 명시')");
+
+    const boundaryEntry = evidence.commits.find((c) => c.hash === c2);
+    report(
+      boundaryEntry?.excluded === true && boundaryEntry?.exclusionReason === "shallow-boundary",
+      `C3: shallow 경계 커밋(c2)이 excluded:true·exclusionReason:'shallow-boundary'로 제외됨(실제: excluded=${boundaryEntry?.excluded}, reason=${boundaryEntry?.exclusionReason})`
+    );
+
+    const c3Entry = evidence.commits.find((c) => c.hash === c3);
+    report(c3Entry?.excluded === false, "C3: 진짜 최신 커밋(c3)은 정상적으로 population에 남음(무오탐)");
+
+    report(
+      evidence.coverage.total === 1,
+      `C3: coverage.total이 shallow 경계 커밋을 빼고 진짜 신규 작성분(c3)만 센다(실제 total=${evidence.coverage.total}) — 4.2배 부풀림 방지 확인`
+    );
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+/**
+ * M — 고정 git 프리픽스가 `diff.renames`를 고정하지 않아 사용자
+ * gitconfig에 따라 같은 레포·같은 인자가 다른 원장을 내던 회귀.
+ * `GIT_CONFIG_GLOBAL`(git 2.32+)로 실제 전역 gitconfig 파일을 격리해
+ * `diff.renames=false`를 주입한 뒤에도 고정 프리픽스가 이를 덮어써
+ * 리네임이 여전히 R로 감지되는지 실제 git 호출로 확인한다.
+ */
+function runDiffRenamesFixedSmoke() {
+  console.log("[M: diff.renames 고정 회귀] 사용자 gitconfig의 diff.renames=false를 고정 프리픽스가 덮어씀을 실제 GIT_CONFIG_GLOBAL로 확인");
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-renamescfg-"));
+  const prevGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
+  try {
+    const dir = path.join(tmpBase, "repo");
+    crInitRepo(dir);
+    crWriteFile(dir, "a.txt", "line1\nline2\nline3\n");
+    crGit(dir, ["add", "a.txt"]);
+    const c1 = crCommitWithDates(dir, "one", "2020-01-01T00:00:00", "2020-01-01T00:00:00");
+    crGit(dir, ["mv", "a.txt", "b.txt"]);
+    fs.appendFileSync(path.join(dir, "b.txt"), "line4\n", "utf8");
+    crGit(dir, ["add", "-A"]);
+    const c2 = crCommitWithDates(dir, "two", "2020-01-02T00:00:00", "2020-01-02T00:00:00");
+
+    const globalCfgPath = path.join(tmpBase, "global.gitconfig");
+    fs.writeFileSync(globalCfgPath, "[diff]\n\trenames = false\n", "utf8");
+    process.env.GIT_CONFIG_GLOBAL = globalCfgPath;
+
+    // 사전 확인: 격리된 전역 config가 실제로 적용되는 상태에서 -c 없이
+    // 호출하면 리네임이 D+A로 갈라짐(재현 전제 성립).
+    const rawNumstat = execFileSync(
+      "git", ["-C", dir, "--no-pager", "diff", "--numstat", c1, c2],
+      { encoding: "utf8", env: process.env }
+    ).trim();
+    const preconditionLines = rawNumstat.split("\n").filter(Boolean);
+    report(
+      preconditionLines.length === 2,
+      `사전 확인: 격리된 GIT_CONFIG_GLOBAL(diff.renames=false)이 실제로 적용되어 -c 없는 호출은 리네임을 D+A(2줄)로 감지함(재현 전제, 실제:\n${rawNumstat})`
+    );
+
+    const result = getCommitFileChanges(dir, c2, [c1], false);
+    const ok = result.ok === true && result.files.length === 1 && result.files[0].changeType === "R" && result.files[0].oldPath === "a.txt";
+    if (!ok) console.log(`    실제: ${JSON.stringify(result)}`);
+    report(
+      ok,
+      "M: getCommitFileChanges(고정 프리픽스 사용)는 GIT_CONFIG_GLOBAL의 diff.renames=false와 무관하게 여전히 리네임 1건(R)으로 감지함"
+    );
+  } finally {
+    if (prevGitConfigGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = prevGitConfigGlobal;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+/**
+ * M — `--ref all`이 `refs/stash`를 진짜 커밋으로 원장에 넣어 untracked
+ * 파일 경로(개인 스크래치·시크릿일 수 있음)까지 evidence.json에 실리던
+ * 회귀. 실제 `git stash push -u`로 재현한다.
+ */
+function runRefAllExcludesStashSmoke() {
+  console.log("[M: --ref all의 refs/stash 유입 회귀] git stash push -u 이후에도 --ref all 순회에 stash 엔트리가 섞이지 않음을 확인");
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-stash-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    crInitRepo(dir);
+    crWriteFile(dir, "a.txt", "hello\n");
+    crGit(dir, ["add", "a.txt"]);
+    crCommitWithDates(dir, "feat: one", "2020-01-01T00:00:00", "2020-01-01T00:00:00");
+
+    fs.writeFileSync(path.join(dir, "a.txt"), "hello2\n", "utf8");
+    fs.writeFileSync(path.join(dir, "untracked-secret.txt"), "should-never-appear\n", "utf8");
+    crGit(dir, ["stash", "push", "-u", "-m", "wip"]);
+
+    const stashList = crGit(dir, ["stash", "list"]).trim();
+    report(stashList.length > 0, `사전 확인: git stash push -u가 실제로 stash 엔트리를 만듦(재현 전제 성립, 실제: '${stashList}')`);
+
+    const r = listCommitMetadata(dir, { ref: "--all" });
+    report(r.ok === true, "M: --all 순회가 stash 존재 상태에서도 정상 완료(ok:true)");
+    report(r.commits.length === 1, `M: --all 순회 결과가 stash 유령 커밋 없이 실제 커밋 1건만 반환(실제: ${r.commits.length}건)`);
+    const hasStashLikeSubject = r.commits.some((c) => /^(On |index on |untracked files on )/.test(c.subject ?? ""));
+    report(!hasStashLikeSubject, "M: stash 특유의 커밋 메시지 패턴('On <branch>: ...' 등)이 결과에 전혀 없음");
+    const hasUntrackedSecretPath = r.commits.some((c) => (c.subject ?? "").includes("untracked-secret"));
+    report(!hasUntrackedSecretPath, "M: untracked 파일 경로가 원장(커밋 메타데이터)에 유입되지 않음");
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+/**
+ * M — churn 버킷(표본의 40%)이 vendored/lockfile 커밋으로 채워지고
+ * `/\.lock$/`가 `package-lock.json`을 놓쳐 lockfile 갱신 커밋이 실제
+ * 작업 커밋을 churn 표본에서 밀어내던 회귀. buildChurnKeyDivergence와
+ * 동일한 K=4(recent3/churn1/even0) 구도를 만들되, churn 경쟁자를
+ * "실제 작업"(seed, 100줄) vs "package-lock.json만 500줄 갱신"으로
+ * 구성해 nonVendoredChurn 정의가 실제 선택 결과를 좌우함을 확인한다.
+ */
+function runChurnVendoredExclusionSmoke() {
+  console.log("[M: churn 버킷 vendored/lockfile 오염 회귀] package-lock.json 등 락파일 갱신 커밋이 churn 표본을 독식하지 않음을 확인");
+
+  // 패턴 자체의 정탐(콜드 리뷰가 지목한 5개 락파일 확장자).
+  const { isVendoredPath } = collectorInternal;
+  for (const p of ["package-lock.json", "sub/package-lock.json", "pnpm-lock.yaml", "go.sum", "composer.lock", "poetry.lock"]) {
+    report(isVendoredPath(p, []) === true, `M: 기본 vendored 패턴이 '${p}'를 잡음(콜드 리뷰 실측 — 이전에는 package-lock.json 등이 누락돼 있었다)`);
+  }
+  report(isVendoredPath("src/app/real-feature.ts", []) === false, "M: 무오탐 — 일반 소스 경로는 vendored로 분류되지 않음");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-churnvendored-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    crInitRepo(dir);
+
+    crWriteFile(dir, "bigfile.txt", Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n") + "\n");
+    crGit(dir, ["add", "bigfile.txt"]);
+    const seed = crCommitWithDates(dir, "chore: seed bigfile (real work)", "2024-01-01T00:00:01", "2024-01-01T00:00:01");
+
+    crWriteFile(dir, "package-lock.json", Array.from({ length: 500 }, (_, i) => `"dep${i}": "1.0.${i}"`).join("\n") + "\n");
+    crGit(dir, ["add", "package-lock.json"]);
+    const lockCommit = crCommitWithDates(dir, "chore(deps): huge lockfile bump", "2024-01-01T00:00:02", "2024-01-01T00:00:02");
+
+    const recentHashes = [];
+    for (let i = 0; i < 3; i++) {
+      crWriteFile(dir, `recent-${i}.txt`, `recent ${i}\n`);
+      crGit(dir, ["add", `recent-${i}.txt`]);
+      recentHashes.push(crCommitWithDates(dir, `feat: recent ${i}`, `2024-01-01T00:00:0${3 + i}`, `2024-01-01T00:00:0${3 + i}`));
+    }
+
+    const { evidence } = collectGitFacts({ repoPath: dir, selectedIdentities: [OWNER_EMAIL], ref: "HEAD", maxCommits: 4 });
+
+    const preconditionOk = evidence.coverage.total === 5 && evidence.coverage.analyzed === 4;
+    report(preconditionOk, `사전 확인: total=5>K=4 조합이 실제로 샘플링에 진입함(실제: total=${evidence.coverage.total}, analyzed=${evidence.coverage.analyzed})`);
+
+    const selectedHashes = new Set(evidence.commits.filter((c) => !c.excluded).map((c) => c.hash));
+    report(
+      selectedHashes.has(seed) === true,
+      "M: 실제 작업 커밋(seed, bigfile 100줄)이 churn 버킷에서 선택됨(nonVendoredChurn 기준)"
+    );
+    report(
+      selectedHashes.has(lockCommit) === false,
+      "M: package-lock.json만 500줄 바꾼 커밋은 churn 버킷에서 탈락함(vendored 제외 — raw churn(500)만 봤다면 seed(100)를 이기고 선택됐을 것이다)"
+    );
+    report(
+      recentHashes.every((h) => selectedHashes.has(h)),
+      "M: recent 버킷 3건은 그대로 선택됨(회귀 없음)"
+    );
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AC-21 골든 게이트(이월 게이트 A-3/B-1/B-2, 임무 지침 D) — 300커밋 픽스처를
 // fixtures/golden/sampling-300.expected.json의 equivalentCollectorInvocation과
 // 동일한 인자로 collectGitFacts에 통과시켜 선택 집합·커버리지 3수치·
@@ -1729,6 +2439,12 @@ async function main() {
   runSection("빠른 절단 불변식 스모크", runFastTruncationInvariantSmoke);
   runSection("git.mjs -z 가드 회귀(파서 자기충족 방어 회귀)", runGitZGuardSmoke);
   runSection("골든 캐시 키 스모크", runGoldenCacheKeySmoke);
+  runSection("C1: typechange(T) 파서 throw 회귀", runTypeChangeSmoke);
+  runSection("C2: --since/--until authorDate 축 회귀", runSinceUntilAuthorDateSmoke);
+  runSection("C3: shallow clone 경계 커밋 회귀", runShallowCloneSmoke);
+  runSection("M: diff.renames 고정 회귀", runDiffRenamesFixedSmoke);
+  runSection("M: --ref all의 refs/stash 유입 회귀", runRefAllExcludesStashSmoke);
+  runSection("M: churn 버킷 vendored/lockfile 오염 회귀", runChurnVendoredExclusionSmoke);
 
   if (negative) {
     await runSectionAsync("negative 스위트", runNegativeSuite);

@@ -6,8 +6,7 @@
     "basis": "commit",
     "evidence": [
       {
-        "evidenceId": "26cc80808288ba236512542aef93a8694c62243a",
-        "role": "quantitative-source"
+        "ledgerId": "commit:26cc80808288ba236512542aef93a8694c62243a"
       }
     ],
     "origin": "generated",

@@ -1,7 +1,7 @@
 {
   "generatedBy": "fixtures/golden/compute-sampling-golden.mjs — 정본 samplingMethod 리터럴의 독립 재계산(collect-git-facts.mjs·scripts/lib/git.mjs 미참조, 순수 git 플럼빙 직접 호출)",
   "canonicalLiteralVerifiedAgainstSchema": true,
-  "samplingMethodLiteral": "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(commitLevelInsertions+commitLevelDeletions desc);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket",
+  "samplingMethodLiteral": "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(nonVendoredChurn desc);churnDef=nonVendoredChurn=sum(insertions+deletions over files[] excl. viaMerge,binary,vendoredPath);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket",
   "parameters": {
     "maxCommits": 50,
     "identity": "owner@devcareer-fixture.test",

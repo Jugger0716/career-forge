@@ -46,6 +46,12 @@ diff fixtures/golden/sampling-300.expected.json /tmp/check.json   # 차이 없�
 | even 구간 내 동점 | `min(authorDate)` | 구간 내 후보를 `(authorDate asc, hash asc)`로 정렬해 최솟값을 취한다(리터럴이 `min(authorDate)`만 말하고 그 안의 2차 타이브레이크를 명시하지 않아, 다른 버킷들과 일관되게 `hash asc`를 보편 2차 키로 채택했다). |
 | `floor` 처리 후 나머지(remainder) | `remainder→recent` | `K - (floor(K*0.4)+floor(K*0.4)+floor(K*0.2))`를 recent 버킷 크기에 가산한다. 이번 300커밋 픽스처(`K=50`)는 정확히 나누어떨어져(`20+20+10=50`) remainder가 0이므로 이 경로는 이 골든 자체로는 관측되지 않는다 — remainder 처리 로직은 코드 리뷰 대상으로 남는다. |
 
+## 정본 리터럴 변경 이력
+
+| 날짜 | 변경 내용 | 골든 수치 영향 |
+|---|---|---|
+| (콜드 리뷰 라운드 대응) | `churn:(commitLevelInsertions+commitLevelDeletions desc)` → `churn:(nonVendoredChurn desc)` + `churnDef=...` 절 추가. churn 랭킹 값이 vendored/lockfile 경로(node_modules, dist, vendor, *.lock, package-lock.json, pnpm-lock.yaml, go.sum, composer.lock, poetry.lock, migrations)를 제외한 합으로 바뀌었다 — lockfile 갱신 커밋이 churn 표본을 독식해 실제 작업 커밋이 밀려나는 문제 대응. `scripts/lib/sampling.mjs`의 `CANONICAL_SAMPLING_METHOD_LITERAL`, `schemas/evidence.schema.json`의 `coverage.samplingMethod` description, 이 스크립트의 `HARDCODED_LITERAL` 세 곳을 함께 갱신했다. | **없음** — `large300` 픽스처(`fixtures/make-fixture.mjs` `buildLarge300`)는 `data/`·`deps/`·`contrib/`·`side/` 접두사만 쓰고 vendored/lockfile 경로를 전혀 포함하지 않으므로, 이 정의 변경은 `sampling-300.expected.json`의 선택 집합·버킷 크기·수치 어느 것도 바꾸지 않는다(재생성 절차로 재확인됨, diff 0바이트). |
+
 ## 실측 검증 기록
 
 | 항목 | 실행 결과 |
