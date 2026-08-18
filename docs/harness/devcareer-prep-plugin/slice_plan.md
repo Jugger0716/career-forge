@@ -31,7 +31,10 @@
 > 키워드 평가, `nodes.minItems`, `verification` 필드, 언어 린트 `origin` 제외)와 T3(제외 커밋 PII
 > 축소)를 반영한 것이다. 이는 슬라이스 B **착수 전** 스펙·계약 개정이며 위 예외 표와는 별개다.
 > 슬라이스 A의 Progress Ledger 행(`done`)이 가리키는 커밋 이후의 변경이므로, 그 행의 근거 커밋만
-> 보고 현재 상태를 판단하지 마라.
+> 보고 현재 상태를 판단하지 마라. 그 Ledger는 이 파일이 아니라
+> `docs/harness/handoff/2026-08-18-devcareer-prep-slice-a-complete.md`에 있고, 핸드오프 문서는
+> 시점 기록이라 갱신되지 않는다(HEAD·게이트 수치가 그 시점 값 그대로 남는다) — 최신 상태는
+> `git log`와 `slice_b_spec_review.md`의 '반영 현황' 절을 보라.
 
 ## 자기 점검 (기계 도출)
 
