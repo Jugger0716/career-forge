@@ -11,15 +11,25 @@
 // 정본 리터럴(schemas/evidence.schema.json의 coverage.samplingMethod
 // description과 완전히 동일한 문자열 — 한 글자도 바꾸지 않는다):
 //   K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:
-//   (authorDate desc,hash asc),churn:(commitLevelInsertions+
-//   commitLevelDeletions desc);floor;remainder→recent;dedup=prior-buckets-
+//   (authorDate desc,hash asc),churn:(nonVendoredChurn desc);churnDef=
+//   nonVendoredChurn=sum(insertions+deletions over files[] excl.
+//   viaMerge,binary,vendoredPath);floor;remainder→recent;dedup=prior-buckets-
 //   excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:
 //   [since,until] equal-split,min(authorDate);even-range-default=
 //   [min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),
 //   carry-to-next-bucket
+//
+// 콜드 리뷰 M 대응(churn 값 정의 변경): churn 랭킹 값이 이제 vendored/
+// lockfile 경로를 제외한 합이다("commitLevelInsertions+commitLevelDeletions"
+// → "nonVendoredChurn"). 값 정의가 바뀌므로 이 리터럴·schemas/evidence.
+// schema.json의 description·fixtures/golden/compute-sampling-golden.mjs의
+// 하드코딩 사본 세 곳을 함께 갱신했다(드리프트 가드 assertNoLiteralDrift
+// 대상). large300 골든 픽스처는 vendored/lockfile 경로를 전혀 쓰지 않으므로
+// (data/, deps/, contrib/, side/ 접두사만 사용) 이 정의 변경이 golden
+// 선택 집합·수치에는 영향을 주지 않는다(재계산으로 확인됨).
 
 export const CANONICAL_SAMPLING_METHOD_LITERAL =
-  "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(commitLevelInsertions+commitLevelDeletions desc);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket";
+  "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(nonVendoredChurn desc);churnDef=nonVendoredChurn=sum(insertions+deletions over files[] excl. viaMerge,binary,vendoredPath);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket";
 
 export const NO_TRUNCATION_SAMPLING_METHOD_LITERAL = "none:full-scan";
 
@@ -119,6 +129,18 @@ function selectEvenBucket(pool, evenCount, minEpoch, maxEpoch) {
  *   evenCount: number, selectedHashes: string[]}}
  */
 export function computeSampling(population, maxCommits, range = {}) {
+  // 콜드 리뷰 A-5 대응: NaN이 range로 들어오면(예: 상위 호출자가 검증
+  // 없이 Date.parse의 결과를 그대로 넘긴 경우) `??`는 NaN을 nullish로
+  // 취급하지 않으므로 조용히 samplingInput의 range로 쓰여 시간 균등
+  // 버킷 전체가 붕괴한다(모든 후보 0건 → "가장 오래된 커밋 뽑기"로 퇴화).
+  // 여기서 즉시 명확한 예외로 거부해 그 조용한 퇴화를 막는다.
+  if (range.since != null && !Number.isFinite(range.since)) {
+    throw new Error(`computeSampling: range.since가 유한한 숫자가 아닙니다(NaN 등 비정상 값) — 값=${range.since}`);
+  }
+  if (range.until != null && !Number.isFinite(range.until)) {
+    throw new Error(`computeSampling: range.until가 유한한 숫자가 아닙니다(NaN 등 비정상 값) — 값=${range.until}`);
+  }
+
   const total = population.length;
   const K = Math.min(maxCommits, total);
 
@@ -145,8 +167,13 @@ export function computeSampling(population, maxCommits, range = {}) {
 
   let evenSelected = [];
   if (evenCount > 0) {
-    const minEpoch = range.since ?? Math.min(...population.map((c) => c.authorEpochSec));
-    const maxEpoch = range.until ?? Math.max(...population.map((c) => c.authorEpochSec));
+    // 위 가드가 NaN을 이미 거부했으므로 여기 도달하면 range.since/until은
+    // 유한 숫자이거나 null/undefined뿐이다. Number.isFinite로 한 번 더
+    // 확인하는 이유는 `??`가 NaN을 nullish로 취급하지 않아 위 가드 없이는
+    // 조용히 통과시키기 때문이다(방어 계층 분리 — 가드가 우회되더라도
+    // 이 지점이 두 번째 방어선이 되게 한다).
+    const minEpoch = Number.isFinite(range.since) ? range.since : Math.min(...population.map((c) => c.authorEpochSec));
+    const maxEpoch = Number.isFinite(range.until) ? range.until : Math.max(...population.map((c) => c.authorEpochSec));
     evenSelected = selectEvenBucket(afterChurn, evenCount, minEpoch, maxEpoch);
   }
 

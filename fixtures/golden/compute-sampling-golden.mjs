@@ -33,8 +33,34 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..", "..");
 // spec.md 구현 5단계가 못 박은 정본 리터럴의 사본. schemas/evidence.schema.json
 // 의 coverage.samplingMethod description 끝에 박힌 백틱 리터럴과 매 실행마다
 // 대조한다(아래 assertNoLiteralDrift).
+//
+// 콜드 리뷰 M 대응(churn 값 정의 변경 — vendored/lockfile 경로 제외):
+// scripts/lib/sampling.mjs의 CANONICAL_SAMPLING_METHOD_LITERAL과 같은 이유로
+// 이 사본도 함께 갱신했다. large300 픽스처는 vendored 경로를 전혀 쓰지
+// 않으므로(아래 VENDORED_PATH_PATTERNS는 이 스크립트를 다른 픽스처에도
+// 정직하게 적용할 수 있도록 두는 것일 뿐, 이 골든 수치 자체는 바뀌지 않는다).
 const HARDCODED_LITERAL =
-  "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(commitLevelInsertions+commitLevelDeletions desc);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket";
+  "K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(nonVendoredChurn desc);churnDef=nonVendoredChurn=sum(insertions+deletions over files[] excl. viaMerge,binary,vendoredPath);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket";
+
+// scripts/collect-git-facts.mjs의 DEFAULT_VENDORED_PATH_PATTERNS와 값으로는
+// 동일한 독립 사본(이 파일은 collect-git-facts.mjs를 의도적으로 참조하지
+// 않는다 — 파일 상단 설명 참조).
+const VENDORED_PATH_PATTERNS = [
+  /^node_modules\//,
+  /^dist\//,
+  /^vendor\//,
+  /^migrations\//,
+  /\.lock$/,
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /(^|\/)go\.sum$/,
+  /(^|\/)composer\.lock$/,
+  /(^|\/)poetry\.lock$/,
+];
+
+function isVendoredPath(filePath) {
+  return VENDORED_PATH_PATTERNS.some((re) => re.test(filePath));
+}
 
 function extractCanonicalLiteralFromSchema() {
   const schemaPath = path.join(REPO_ROOT, "schemas", "evidence.schema.json");
@@ -118,9 +144,11 @@ function collectCommits(dir) {
 /**
  * `--numstat -z` 출력을 NUL 기준으로 파싱해 churn(ins+del) 합을 낸다.
  * 일반 변경 레코드는 한 토큰("ins\tdel\tpath")이고, 리네임/카피는 두
- * 토큰으로 나뉜다("ins\tdel\t" 다음에 oldPath, newPath 두 토큰) — 이
- * 파일에서는 경로 자체가 필요 없으므로 소비만 하고 churn 합산에서는
- * 제외 신호(binary "-")만 확인한다.
+ * 토큰으로 나뉜다("ins\tdel\t" 다음에 oldPath, newPath 두 토큰).
+ *
+ * 콜드 리뷰 M 대응: churn 정의가 nonVendoredChurn(vendored/lockfile 경로
+ * 제외 합)으로 바뀌었으므로, 이제는 경로도 확인해 vendored 항목을 합산에서
+ * 뺀다(리네임/카피는 새 경로 기준으로 판정).
  */
 function sumNumstat(rawZ) {
   const tokens = rawZ.split("\0");
@@ -136,8 +164,10 @@ function sumNumstat(rawZ) {
     }
     const [, insRaw, delRaw, pathPart] = m;
     const binary = insRaw === "-" || delRaw === "-";
-    if (!binary) sum += Number(insRaw) + Number(delRaw);
-    i += pathPart === "" ? 3 : 1; // 리네임/카피는 oldPath/newPath 두 토큰을 더 소비
+    const isRenameOrCopy = pathPart === "";
+    const newPath = isRenameOrCopy ? tokens[i + 2] : pathPart;
+    if (!binary && !isVendoredPath(newPath)) sum += Number(insRaw) + Number(delRaw);
+    i += isRenameOrCopy ? 3 : 1; // 리네임/카피는 oldPath/newPath 두 토큰을 더 소비
   }
   return sum;
 }

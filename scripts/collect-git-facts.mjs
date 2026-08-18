@@ -40,6 +40,8 @@ import {
   listCommitMetadata,
   getCommitFileChanges,
   runGit,
+  isShallowRepository,
+  getAbsoluteGitDir,
 } from "./lib/git.mjs";
 import {
   computeSampling,
@@ -56,14 +58,57 @@ const NULL_SHA = "0".repeat(40); // unborn branch(0커밋) 전용 정본 sentine
 const DEFAULT_BOT_PATTERNS = [/\[bot\]/i, /dependabot/i, /github-actions/i];
 
 // §5 기본 vendored 경로 패턴(집계 전용 — 커밋 제외 축이 아니다. 아래
-// "vendored 경로는 집계에서만 제외한다" 설명 참조).
+// "vendored 경로는 집계에서만 제외한다" 설명 참조). 콜드 리뷰 M 대응 —
+// `/\.lock$/`만으로는 `package-lock.json`·`go.sum`·`composer.lock`·
+// `poetry.lock` 같은 흔한 락파일 확장자를 못 잡아 churn 표본·
+// topChangedFiles가 lockfile 갱신 커밋으로 채워진다(실측: npm 프로젝트에서
+// package-lock.json이 topChangedFiles[0]이 됨). 대표 언어별 락파일을
+// 명시 패턴으로 추가한다.
 const DEFAULT_VENDORED_PATH_PATTERNS = [
   /^node_modules\//,
   /^dist\//,
   /^vendor\//,
   /^migrations\//,
   /\.lock$/,
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /(^|\/)go\.sum$/,
+  /(^|\/)composer\.lock$/,
+  /(^|\/)poetry\.lock$/,
 ];
+
+// coverage.period.since/until 및 CLI --since/--until의 필수 형식(스키마
+// evidence.schema.json coverage.period.{since,until}의 format:"date"와
+// 일치). 콜드 리뷰 A-5 대응 — 검증 없이 임의 문자열을 Date.parse에
+// 넘기면(git 상대 날짜 "2 years ago" 등) NaN이 조용히 만들어져 시간 균등
+// 샘플링 버킷이 "가장 오래된 커밋 뽑기"로 퇴화한다. 이 정규식을 통과한
+// 값만 Date.parse에 넘기므로 NaN이 원천적으로 발생하지 않는다.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * since/until 문자열을 검증하고 UTC epoch(초)로 변환한다. null/undefined는
+ * "미지정"으로 그대로 null을 반환한다. 형식이 어긋나면 명확한 오류를
+ * 던진다(호출자가 이를 controlled exit로 변환한다 — 조용한 NaN 전파 금지).
+ *
+ * @param {string|null|undefined} value
+ * @param {"since"|"until"} label
+ * @returns {number|null}
+ */
+function parsePeriodBoundaryEpoch(value, label) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || !DATE_ONLY_RE.test(value)) {
+    throw new Error(
+      `--${label} 값이 YYYY-MM-DD 형식이 아닙니다: ${JSON.stringify(value)} — ` +
+      `schemas/evidence.schema.json coverage.period.${label}의 format:"date" 계약과 일치해야 합니다` +
+      "(git 상대 날짜 표기 '2 years ago' 등은 지원하지 않습니다 — Date.parse가 조용히 NaN을 내는 것을 막기 위함)."
+    );
+  }
+  const epoch = Math.floor(Date.parse(`${value}T00:00:00Z`) / 1000);
+  if (!Number.isFinite(epoch)) {
+    throw new Error(`--${label} 값을 파싱할 수 없습니다: ${value}`);
+  }
+  return epoch;
+}
 
 // ---------------------------------------------------------------------------
 // 저자 판정
@@ -81,11 +126,37 @@ function isVendoredPath(filePath, customPatterns) {
 
 /**
  * 커밋 한 건의 excluded/exclusionReason을 판정한다. 우선순위:
- * 봇 > 저자 미선택 > 머지 제외 설정. vendored 경로는 여기 관여하지 않는다
- * (파일 경로 단위 성격이라 커밋 전체를 제외하면 실사용 커밋을 통째로
- * 지우게 되므로, 집계(git-facts.json)에서만 걸러낸다).
+ * shallow 경계 > 기간(period) 밖 > 봇 > 저자 미선택 > 머지 제외 설정.
+ * vendored 경로는 여기 관여하지 않는다(파일 경로 단위 성격이라 커밋
+ * 전체를 제외하면 실사용 커밋을 통째로 지우게 되므로, 집계(git-facts.json)
+ * 에서만 걸러낸다).
+ *
+ * shallow 경계(콜드 리뷰 C3)를 최우선으로 두는 이유: 이 판정은 정책이
+ * 아니라 데이터 무결성 문제다 — 경계 커밋의 files[]는 빈 트리 대비 diff라
+ * 애초에 신뢰할 수 없으므로, 저자가 선택 identity와 일치하더라도 population
+ * 에 절대 들어가면 안 된다.
+ *
+ * 기간(period) 필터(콜드 리뷰 C2)를 그다음에 두는 이유: git log 자체에는
+ * 더 이상 --since/--until을 넘기지 않고(committerDate 축·조기 중단 문제
+ * 회피) 전량 순회 결과를 여기서 authorEpochSec 기준으로 걸러낸다. 이렇게
+ * 하면 기간 밖 커밋도 봇/타 저자 커밋과 동일하게 원장에 excluded:true로
+ * 전량 등재되어(AC-9 관측 가능성과 동일한 원칙) "기간 지정 시 원장이
+ * dropped 0건을 거짓 단언"하는 문제가 원천적으로 사라진다 — 누락이 아니라
+ * 가시적 제외가 되기 때문이다.
  */
-function classifyExclusion(commit, { selectedIdentities, botsEnabled, customBotPatterns, mergeIncluded }) {
+function classifyExclusion(commit, {
+  selectedIdentities, botsEnabled, customBotPatterns, mergeIncluded,
+  shallowBoundaryHashes, sinceEpoch, untilEpochExclusive,
+}) {
+  if (shallowBoundaryHashes && shallowBoundaryHashes.has(commit.hash)) {
+    return { excluded: true, exclusionReason: "shallow-boundary" };
+  }
+  if (sinceEpoch != null && commit.authorEpochSec < sinceEpoch) {
+    return { excluded: true, exclusionReason: "period-out-of-range" };
+  }
+  if (untilEpochExclusive != null && commit.authorEpochSec >= untilEpochExclusive) {
+    return { excluded: true, exclusionReason: "period-out-of-range" };
+  }
   if (botsEnabled && isBotAuthor(commit.authorEmail, customBotPatterns)) {
     return { excluded: true, exclusionReason: "bot-pattern" };
   }
@@ -96,6 +167,31 @@ function classifyExclusion(commit, { selectedIdentities, botsEnabled, customBotP
     return { excluded: true, exclusionReason: "merge-excluded" };
   }
   return { excluded: false, exclusionReason: null };
+}
+
+/**
+ * shallow clone 여부와(그렇다면) `.git/shallow`에 기록된 경계 커밋 해시
+ * 집합을 조회한다(콜드 리뷰 C3). `.git/shallow`는 grafted(부모 잘림)
+ * 커밋의 해시를 한 줄에 하나씩 담은 평문 파일이다 — 이 파일이 곧 "부모가
+ * 없다고 보고되지만 진짜 루트가 아닌" 커밋 집합의 정본이다.
+ *
+ * @param {string} repoToplevel
+ * @returns {{isShallow: boolean, boundaryHashes: Set<string>}}
+ */
+function detectShallowBoundary(repoToplevel) {
+  if (!isShallowRepository(repoToplevel)) {
+    return { isShallow: false, boundaryHashes: new Set() };
+  }
+  const gitDir = getAbsoluteGitDir(repoToplevel);
+  if (!gitDir) return { isShallow: true, boundaryHashes: new Set() };
+  const shallowFile = path.join(gitDir, "shallow");
+  if (!fs.existsSync(shallowFile)) return { isShallow: true, boundaryHashes: new Set() };
+  const lines = fs
+    .readFileSync(shallowFile, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return { isShallow: true, boundaryHashes: new Set(lines) };
 }
 
 // ---------------------------------------------------------------------------
@@ -139,22 +235,40 @@ export function collectGitFacts(options) {
 
   const repoToplevel = getRepoToplevel(repoPath);
 
+  // 콜드 리뷰 A-5/C2 대응: since/until을 여기서 한 번만 검증·변환한다.
+  // 검증을 통과한 값만 존재하므로 이 시점 이후로는 NaN이 원리적으로
+  // 발생할 수 없다(sampling.mjs의 시간 균등 버킷 range 계산에도 이 값을
+  // 그대로 재사용 — 별도로 Date.parse를 다시 호출하지 않는다).
+  const sinceEpoch = parsePeriodBoundaryEpoch(since, "since");
+  const untilEpoch = parsePeriodBoundaryEpoch(until, "until");
+  // until은 "그 날짜까지 포함"이므로 다음 날 00:00 UTC 미만까지가 상한이다.
+  const untilEpochExclusive = untilEpoch != null ? untilEpoch + 86400 : null;
+
+  // 콜드 리뷰 C3 대응: shallow clone이면 `.git/shallow`의 경계 커밋 해시를
+  // 미리 조회해 population/집계에서 제외할 준비를 한다.
+  const { isShallow, boundaryHashes: shallowBoundaryHashes } = detectShallowBoundary(repoToplevel);
+
   // 빈 레포/unborn branch: HEAD 모드에서 미리 확인해 git log 자체를 호출
   // 하지 않는다(예외 중단 방지 — HEAD가 unborn이면 `git log HEAD`는 fatal로
   // 종료하므로 이 사전 확인이 없으면 listCommitMetadata가 outcome!=='ok'를
   // 반환해 "알 수 없는 git 오류"로 오인될 수 있다). --all 모드는 unborn
   // 여부와 무관하게 항상 안전하게 빈 출력을 낸다(실측 확인).
+  //
+  // 콜드 리뷰 C2 대응: --since/--until을 listCommitMetadata에 더 이상
+  // 넘기지 않는다(committerDate 축 불일치·조기 중단 회피) — 항상 기간
+  // 무제한으로 전량 순회하고, 기간 필터는 아래 classifyExclusion에서
+  // authorEpochSec 기준으로 적용한다.
   let rawCommits = [];
   if (ref === "HEAD") {
     if (hasAnyCommitOnHead(repoToplevel)) {
-      const r = listCommitMetadata(repoToplevel, { ref: "HEAD", since, until });
+      const r = listCommitMetadata(repoToplevel, { ref: "HEAD" });
       if (!r.ok) {
         throw new Error(`git log(HEAD) 실패(outcome=${r.outcome}): ${r.stderr}`);
       }
       rawCommits = r.commits;
     }
   } else {
-    const r = listCommitMetadata(repoToplevel, { ref: "--all", since, until });
+    const r = listCommitMetadata(repoToplevel, { ref: "--all" });
     if (!r.ok) {
       throw new Error(`git log(--all) 실패(outcome=${r.outcome}): ${r.stderr}`);
     }
@@ -178,19 +292,34 @@ export function collectGitFacts(options) {
       botsEnabled, // 봇 판정은 --all-identities 여부와 독립적으로 항상 적용된다
       customBotPatterns,
       mergeIncluded,
+      shallowBoundaryHashes,
+      sinceEpoch,
+      untilEpochExclusive,
     });
-    // --all-identities는 "저자 미선택" 축만 무력화한다(봇/머지 축은 그대로 적용).
+    // --all-identities는 "저자 미선택" 축만 무력화한다(shallow/기간/봇/머지 축은 그대로 적용).
     const finalExclusion =
       allIdentities && exclusion.exclusionReason === "author-not-selected"
         ? { excluded: false, exclusionReason: null }
         : exclusion;
+
+    // 콜드 리뷰 A-6 대응: churn "랭킹" 값은 evidence.json의 commit-level
+    // insertions/deletions(AC-6 (i) 불변식의 대상 — vendored 포함 전체 합)
+    // 와 별개다. 이 값은 스키마에 노출되지 않고 sampling.mjs의 churn 버킷
+    // 입력으로만 쓰이므로, vendored/lockfile 경로를 랭킹에서 빼도 AC-6 (i)
+    // 와 충돌하지 않는다 — "실제 작업"을 반영하지 못하는 자동 생성 lockfile
+    // 갱신 커밋이 churn 표본을 독식하는 문제를 여기서 막는다.
+    const nonVendoredChurn = diff.files.reduce((sum, f) => {
+      if (f.viaMerge || f.binary) return sum;
+      if (vendoredPathsEnabled && isVendoredPath(f.path, customVendoredPathPatterns)) return sum;
+      return sum + f.insertions + f.deletions;
+    }, 0);
 
     return {
       ...c,
       files: diff.files,
       insertions: diff.insertions,
       deletions: diff.deletions,
-      churn: diff.insertions + diff.deletions,
+      churn: nonVendoredChurn,
       excluded: finalExclusion.excluded,
       exclusionReason: finalExclusion.exclusionReason,
     };
@@ -211,14 +340,19 @@ export function collectGitFacts(options) {
     truncated = { reason: "none", dropped_commits: 0 };
     samplingMethod = NO_TRUNCATION_SAMPLING_METHOD_LITERAL;
   } else {
-    const sinceEpoch = since ? Math.floor(Date.parse(since) / 1000) : undefined;
-    const untilEpoch = until ? Math.floor(Date.parse(until) / 1000) : undefined;
+    // sinceEpoch/untilEpoch는 이미 위에서 검증·계산된 값을 재사용한다(콜드
+    // 리뷰 A-5 — 여기서 다시 Date.parse를 호출하지 않아 NaN이 재도입될
+    // 여지가 없다). since ?? undefined 형태로 null→undefined 변환만 한다
+    // (computeSampling/selectEvenBucket이 "미지정"을 undefined로 기대).
     const samplingInput = population.map((c) => ({
       hash: c.hash,
       authorEpochSec: c.authorEpochSec,
       churn: c.churn,
     }));
-    const result = computeSampling(samplingInput, maxCommits, { since: sinceEpoch, until: untilEpoch });
+    const result = computeSampling(samplingInput, maxCommits, {
+      since: sinceEpoch ?? undefined,
+      until: untilEpoch ?? undefined,
+    });
     selectedHashSet = new Set(result.selectedHashes);
     coverageAnalyzed = result.K;
     truncated = { reason: "budget_commits", dropped_commits: total - result.K };
@@ -259,6 +393,11 @@ export function collectGitFacts(options) {
       selectedIdentities,
     },
     samplingMethod,
+    // 콜드 리뷰 C3 대응: shallow clone 감지 사실을 커버리지에 명시한다
+    // (spec.md 엣지 케이스 원문 — "감지 후 커버리지에 명시"). true면
+    // 경계 커밋들이 commits[]에서 excluded:true·exclusionReason:
+    // "shallow-boundary"로 표시돼 population·집계에서 제외됐다는 뜻이다.
+    isShallowClone: isShallow,
   };
 
   const evidenceWithoutHash = {
@@ -391,6 +530,10 @@ export function writeCollectorOutput({ evidence, gitFacts }, { outDir, repoPath,
   const gitFactsPath = writeJsonAtomic(resolvedOutDir, "git-facts.json", gitFacts);
   return { evidencePath, gitFactsPath, outDir: resolvedOutDir };
 }
+
+// 테스트 전용 export(단위 테스트에 필요 — 프로덕션 로직은 위 공개 함수를
+// 통해서만 호출된다. git.mjs의 `_internal` 패턴과 동일).
+export const _internal = { isVendoredPath, DEFAULT_VENDORED_PATH_PATTERNS, parsePeriodBoundaryEpoch };
 
 // ---------------------------------------------------------------------------
 // CLI

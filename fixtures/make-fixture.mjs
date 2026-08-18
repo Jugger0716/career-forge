@@ -1195,7 +1195,7 @@ export function buildCase17MergeHashInjection(mergeDeclared) {
       id: "case-17-injected-quantitative-claim",
       claim: "이 기간 동안 총 120줄을 추가했다 (인위 주입 — basis 규칙 위반 재현용, 실제 값 아님)",
       basis: "commit",
-      evidence: [{ evidenceId: mergeDeclared.mergeCommitHash, role: "quantitative-source" }],
+      evidence: [{ ledgerId: `commit:${mergeDeclared.mergeCommitHash}` }],
       origin: "generated",
       locked: false,
     },

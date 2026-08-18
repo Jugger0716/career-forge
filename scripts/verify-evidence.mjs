@@ -8,35 +8,53 @@
 // 그대로 import해서 쓴다(자체 구현 금지 — §2·구현 5·6단계).
 //
 // 검증 축(spec.md §2 · 구현 6단계 원문):
-//   (a) 저자 대조 — 인용된 커밋이 원장에 존재하며 excluded !== true 이고
-//       authorEmail이 config가 저장한 선택 identity 집합에 속하는가.
-//       excluded 플래그는 "수집 시점" 판정이고 selectedIdentities는
-//       "검증 시점" 값이므로 둘을 독립적으로 검사한다(원장 스테일 방어).
-//   (b) `git rev-parse --verify --quiet <sha>^{commit}` 커밋 실존성.
-//       (a)축 원장 조회와 무관하게 항상 독립 실행한다 — 원장 포맷을
-//       흉내낸 가짜 해시(원장에 없는 40자 hex)를 이 축이 잡는다.
+//   (a) 저자 대조 — 인용된 커밋이 원장에 존재하며 excluded !== true 이고,
+//       원장 authorEmail이 git이 실제로 보고하는 저자와 일치하며(원장
+//       변조·스테일 방어 — 콜드 리뷰 M 대응), 그 실측 저자가 config가
+//       저장한 선택 identity 집합에 속하는가. excluded 플래그는 "수집
+//       시점" 판정이고 selectedIdentities는 "검증 시점" 값이므로 둘을
+//       독립적으로 검사한다(원장 스테일 방어).
+//   (b) `git show -s --format=%ae<US>%P <sha>` 커밋 실존성 + 저자·부모
+//       오라클(콜드 리뷰 M 대응 — 예전에는 `git rev-parse --verify
+//       --quiet`로 실존성만 확인하고 (a)축이 원장 authorEmail을 그대로
+//       신뢰했다. 이제 (a)축과 머지 판정 둘 다 이 오라클의 실측값을 쓴다
+//       — 원장 필드 조작만으로는 뚫리지 않는다). (a)축 원장 조회와
+//       무관하게 항상 독립 실행한다 — 원장 포맷을 흉내낸 가짜 해시(원장에
+//       없는 40자 hex)를 이 축이 잡는다.
 //   (c) 경로 실존성 — 커밋 트리(<sha>:<path>)가 아니라 그 커밋의 diff
 //       (scripts/lib/git.mjs getCommitFileChanges, 수집기와 동일 구현)에
-//       그 경로가 등장하는가. (b)를 통과한 인용에만 호출한다.
-//   머지 해시 규칙 — 판정은 원장의 isMerge 필드만으로 하며(추가 git 호출
-//       없음 — 이월 게이트 C-3), basis:inference 이외 전부(commit·
-//       external·insufficient·미지정 포함) FAIL — "inference만 허용"의
-//       문언대로 상보 조건으로 집행한다.
-//   (e) AC-7 집합 동치 — 머지 커밋에 대해 원장 files[] 집합과 검증기가
-//       scripts/lib/git.mjs getCommitFileChanges로 재계산한 diff 집합이
-//       동일한가. mergeIncluded 설정과 무관하게 evidence.json 하나로
-//       성립한다(files[]는 두 설정 모두 1부모 diff로 채워지므로) —
+//       그 경로가 등장하는가. (b)를 통과한 인용에만 호출한다. diff base는
+//       원장이 아니라 (b)축 오라클의 실측 parents로 계산한다.
+//   머지 해시 규칙 — 판정 오라클은 원장 `isMerge` 필드가 아니라
+//       `isMergeCommit(parents)`(정본은 항상 parents, git.mjs 단일 구현
+//       — 콜드 리뷰 M 대응: `isMerge` 플래그 하나만 true→false로 바꿔도
+//       parents가 그대로면 더 이상 규칙이 꺼지지 않는다), basis:inference
+//       이외 전부(commit·external·insufficient·미지정 포함) FAIL —
+//       "inference만 허용"의 문언대로 상보 조건으로 집행한다.
+//   (e) AC-7 집합 동치 — 머지 커밋(정본은 동일하게 isMergeCommit(parents))에
+//       대해 원장 files[] 집합과 검증기가 scripts/lib/git.mjs
+//       getCommitFileChanges로 재계산한 diff 집합이 동일한가.
+//       mergeIncluded 설정과 무관하게 evidence.json 하나로 성립한다
+//       (files[]는 두 설정 모두 1부모 diff로 채워지므로) —
 //       verifyMergeFileSetEquivalence()가 담당하며 verifyEvidence()가
 //       artifactsByLayer와 무관하게 항상 함께 실행한다.
 //   (d) 계층 ID 참조 무결성 — knowledge-map→career, gap-report→
 //       knowledge-map, plan→gap-report 방향으로만 parentRefs를 확인한다
 //       (역참조 없음, 단방향 6계층).
 //
-// 도구·레포 오류(3분류의 "tool-error")는 인용 FAIL로 집계하지 않고
-// 별도 섹션(toolErrors)에 보고한다. 옵트인 스니펫 인용(파일 내용 인용)은
+// 도구·레포 오류(3분류의 "tool-error")는 인용 FAIL로 집계하지 않지만
+// (spec.md §2 원문대로) PASS로도 집계하지 않는다 — 별도 섹션(toolErrors)에
+// 보고하고 verifyEvidence()의 status를 INCONCLUSIVE로 떨어뜨린다(콜드
+// 리뷰 C4 대응, 아래 종료 코드 참조). 옵트인 스니펫 인용(파일 내용 인용)은
 // 메인 (a)(b)(c) 축과 별도로 verifySnippetCitation()이 담당하며,
 // changeType:D 항목과 oldPath에는 적용하지 않는다(git cat-file -e가
 // 삭제 경로에서 항상 128로 실패하는 자기모순 회피 — spec.md 배경 §).
+//
+// 인용마다 git 프로세스를 새로 스폰하지 않도록 createVerificationCache()가
+// (repoPath,sha) 단위로 (b)축 오라클·(c)축 diff 결과를 메모이즈한다(콜드
+// 리뷰 M 대응 — 동일 커밋·경로를 반복 인용하는 산출물에서 스폰 수가
+// O(인용 수)에서 O(고유 (repoPath,sha) 수)로 준다). verifyEvidence()가
+// 자동으로 캐시를 만들어 전체 인용·머지 집합 검사에 공유한다.
 //
 // 사용법(CLI):
 //   node scripts/verify-evidence.mjs --repo <path> --evidence <evidence.json>
@@ -51,23 +69,33 @@
 //                                            파일명을 자동 탐색해 로드
 //     [--out <path>]                        JSON 리포트를 파일로도 기록
 //
-// 종료 코드: 인용 FAIL, 미해결 parentRefs, (e)축 머지 집합 동치 위반 중
-// 하나라도 있으면 exit 1, 없으면 exit 0(도구 오류만 있는 경우도 exit 0 —
-// 그 사실은 출력/리포트에 남는다).
+// 종료 코드(콜드 리뷰 C4 대응 — fail-open 제거, 3분기):
+//   0 = PASS         인용 FAIL·미해결 parentRefs·(e)축 위반 0건이고
+//                     도구 오류로 미검증된 인용도 0건.
+//   1 = FAIL          위 위반 중 하나라도 있음(도구 오류가 섞여 있어도
+//                     확정된 위반이 우선한다).
+//   2 = INCONCLUSIVE  확정된 위반은 0건이지만 도구·레포 오류로 일부
+//                     인용을 검증하지 못함(예: --repo 오타, git이 PATH에
+//                     없는 셸) — "성공"이 아니므로 0을 반환하지 않는다.
+//                     CLI 인자 오류(usage)도 같은 exit 2를 쓴다(둘 다
+//                     "결론을 낼 수 없음" 계열).
+// report.ok(boolean)는 status==="PASS"의 축약이다 — INCONCLUSIVE도
+// ok===false다(더 이상 "도구 오류만 있으면 exit 0"이 성립하지 않는다).
 //
 // 프로그래밍 API: verifyCitation / verifySnippetCitation / verifyArtifactInstance /
-// verifyMergeFileSetEquivalence / checkLayerRefs / verifyEvidence — 순수
-// 함수(디스크에 쓰지 않음). CLI는 이 함수들을 호출하고 결과를 출력·파일
-// 기록만 담당한다.
+// verifyMergeFileSetEquivalence / checkLayerRefs / verifyEvidence /
+// exitCodeForReport / createVerificationCache — 순수 함수(디스크에 쓰지
+// 않음). CLI는 이 함수들을 호출하고 결과를 출력·파일 기록만 담당한다.
 
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
-  revParseVerifyCommit,
+  getCommitAuthorAndParents,
   getCommitFileChanges,
   catFileExists,
+  isMergeCommit,
 } from "./lib/git.mjs";
 
 const LEDGER_ID_RE = /^commit:([0-9a-f]{40})$/;
@@ -80,6 +108,63 @@ const LAYER_PARENT = {
 };
 
 const KNOWN_LAYERS = ["career", "knowledge-map", "gap-report", "plan"];
+
+// ---------------------------------------------------------------------------
+// 검증 캐시(콜드 리뷰 M 대응) — 동일 (repoPath, sha)에 대한 git 오라클
+// 호출(저자/부모 조회, diff 조회)을 verifyEvidence() 스코프 안에서 재사용한다.
+// verify-evidence.mjs가 인용마다 git 프로세스를 1~3회 새로 스폰하고
+// 메모이제이션이 전혀 없어 동일 커밋·경로 인용 100건에 실측 21~60초가
+// 걸리던 문제(A-8의 저자 오라클 도입으로 호출 수가 늘어날 수 있었던 지점을
+// 정확히 상쇄한다 — 인용마다 새 git show를 스폰하는 대신 (repoPath,sha) 당
+// 최대 1회만 스폰한다).
+// ---------------------------------------------------------------------------
+
+/**
+ * verifyEvidence() 호출 하나의 스코프에 한정된 캐시를 만든다. 호출자가
+ * 명시적으로 만들어 verifyEvidence()/verifyArtifactInstance()/verifyCitation()/
+ * verifyMergeFileSetEquivalence()에 넘기면 그 스코프 안에서 (repoPath,sha)당
+ * git 오라클 호출이 최대 1회로 줄어든다. 넘기지 않으면 각 함수가 자체
+ * 1회용 캐시를 만들어 기존처럼 캐시 없이 동작한다(순수 함수 단위 테스트
+ * 호환성 — 캐시는 성능 최적화일 뿐 판정 결과에는 영향을 주지 않는다).
+ *
+ * @returns {{authorParents: Map<string, object>, fileChanges: Map<string, object>}}
+ */
+export function createVerificationCache() {
+  return { authorParents: new Map(), fileChanges: new Map() };
+}
+
+/**
+ * (repoPath, sha) → 캐시 Map 키. 이 함수가 유일한 정본이므로 테스트가
+ * 구분자를 따로 하드코딩하지 않아도 된다(캐시를 미리 심어 검증 로직만
+ * 격리 테스트할 때 필요 — 예: tool-error 결과를 직접 주입해 status
+ * 우선순위 집계를 재현). 구분자는 공백이며 repoPath에 공백이 섞여 있어도
+ * (Windows 경로에서 흔함) sha는 항상 40자 hex 고정 길이이므로 문자열
+ * 끝에서부터 파싱하면 항상 역산 가능하다 — 다만 이 함수는 조회용 키일
+ * 뿐이라 역산은 필요하지 않다.
+ *
+ * @param {string} repoPath
+ * @param {string} sha
+ * @returns {string}
+ */
+export function verificationCacheKey(repoPath, sha) {
+  return `${repoPath} ${sha}`;
+}
+
+function getCommitAuthorAndParentsCached(cache, repoPath, sha) {
+  const key = verificationCacheKey(repoPath, sha);
+  if (cache.authorParents.has(key)) return cache.authorParents.get(key);
+  const result = getCommitAuthorAndParents(repoPath, sha);
+  cache.authorParents.set(key, result);
+  return result;
+}
+
+function getCommitFileChangesCached(cache, repoPath, sha, parents, isMerge) {
+  const key = verificationCacheKey(repoPath, sha);
+  if (cache.fileChanges.has(key)) return cache.fileChanges.get(key);
+  const result = getCommitFileChanges(repoPath, sha, parents, isMerge);
+  cache.fileChanges.set(key, result);
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // ledgerId → sha 추출 + 원장 조회
@@ -133,10 +218,13 @@ export function findLedgerEntry(evidence, ledgerId, sha) {
  * @param {string} opts.ledgerId
  * @param {string|null} [opts.citationPath] (c)축 대조 대상 경로(선택)
  * @param {string} [opts.nodeBasis] 이 인용을 담은 노드의 basis(머지 해시 규칙에 필요)
+ * @param {object} [opts.cache] createVerificationCache()의 반환값(선택 —
+ *   verifyEvidence() 스코프에서 재사용하면 (repoPath,sha)당 git 호출이
+ *   최대 1회로 줄어든다. 생략하면 이 호출 하나만을 위한 캐시를 새로 만든다).
  * @returns {{verdict: "PASS"|"FAIL"|"TOOL_ERROR", code: string, message: string,
  *   ledgerId: string, sha: string|null, path: string|null}}
  */
-export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerId, citationPath = null, nodeBasis = null }) {
+export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerId, citationPath = null, nodeBasis = null, cache = createVerificationCache() }) {
   const base = { ledgerId, path: citationPath, sha: null };
 
   const sha = extractShaCandidate(ledgerId);
@@ -145,16 +233,23 @@ export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerI
   }
   base.sha = sha;
 
-  // (b)축 — 원장 조회와 무관하게 항상 독립 실행(가짜 해시를 여기서 잡는다).
-  const bResult = revParseVerifyCommit(repoPath, sha);
-  if (bResult.outcome === "tool-error") {
-    return { ...base, verdict: "TOOL_ERROR", code: "CITATION_GIT_TOOL_ERROR", message: `커밋 실존성 확인 중 도구/레포 오류(status=${bResult.status}): ${bResult.stderr.trim()}` };
+  // (b)축 + 저자·부모 오라클 — 원장 조회와 무관하게 항상 독립 실행한다
+  // (가짜 해시를 여기서 잡는다). 콜드 리뷰 M 대응: 예전에는 (b)축이
+  // 실존성만 확인하고 (a)축은 원장의 authorEmail을 그대로 신뢰했다 —
+  // `git show -s --format=%ae\x1f%P`로 실존성·저자·부모를 한 번에 얻어
+  // (a)축에도 (b)(c)축과 동일한 독립 오라클을 준다(호출 수는 늘지 않는다
+  // — 이전에도 (b)축 1회 호출이 있었고 이번에도 1회다).
+  const oracle = getCommitAuthorAndParentsCached(cache, repoPath, sha);
+  if (oracle.outcome === "tool-error") {
+    return { ...base, verdict: "TOOL_ERROR", code: "CITATION_GIT_TOOL_ERROR", message: `커밋 실존성/저자 확인 중 도구/레포 오류(status=${oracle.status}): ${oracle.stderr.trim()}` };
   }
-  if (bResult.outcome !== "ok") {
-    return { ...base, verdict: "FAIL", code: "CITATION_COMMIT_NOT_FOUND_IN_REPO", message: `git rev-parse --verify --quiet 실패 — 레포에 존재하지 않는 커밋 해시입니다(AC-8 가짜 해시 100% 탐지).` };
+  if (oracle.outcome !== "ok") {
+    return { ...base, verdict: "FAIL", code: "CITATION_COMMIT_NOT_FOUND_IN_REPO", message: `git show 조회 실패 — 레포에 존재하지 않는 커밋 해시입니다(AC-8 가짜 해시 100% 탐지).` };
   }
 
-  // (a)축 — 원장 존재 + excluded + authorEmail.
+  // (a)축 — 원장 존재 + excluded + authorEmail(원장 값이 아니라 위 오라클의
+  // 실측 저자로 판정한다 — 원장 authorEmail을 3필드 편집으로 조작해도
+  // 이 축은 뚫리지 않는다).
   const ledgerEntry = findLedgerEntry(evidence, ledgerId, sha);
   if (!ledgerEntry) {
     return { ...base, verdict: "FAIL", code: "CITATION_LEDGER_ENTRY_NOT_FOUND", message: "커밋은 레포에 실재하지만 원장(evidence.json)에는 없습니다(원장 외부 인용 또는 스테일 원장)." };
@@ -162,11 +257,23 @@ export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerI
   if (ledgerEntry.excluded === true) {
     return { ...base, verdict: "FAIL", code: "CITATION_EXCLUDED_COMMIT", message: `제외된 커밋을 인용했습니다(exclusionReason=${ledgerEntry.exclusionReason}).` };
   }
-  if (!selectedIdentities.includes(ledgerEntry.authorEmail)) {
-    return { ...base, verdict: "FAIL", code: "CITATION_AUTHOR_NOT_SELECTED", message: `저자(${ledgerEntry.authorEmail})가 현재 선택된 identity 집합에 없습니다(원장 excluded 플래그와 무관한 독립 검사 — 스테일 원장 방어).` };
+  if (ledgerEntry.authorEmail !== oracle.authorEmail) {
+    return {
+      ...base,
+      verdict: "FAIL",
+      code: "CITATION_LEDGER_AUTHOR_MISMATCH",
+      message: `원장 authorEmail(${ledgerEntry.authorEmail})이 git이 보고하는 실제 저자(${oracle.authorEmail})와 다릅니다 — 원장이 편집되었거나 스테일합니다.`,
+    };
+  }
+  if (!selectedIdentities.includes(oracle.authorEmail)) {
+    return { ...base, verdict: "FAIL", code: "CITATION_AUTHOR_NOT_SELECTED", message: `저자(${oracle.authorEmail}, git 실측)가 현재 선택된 identity 집합에 없습니다(원장 excluded 플래그와 무관한 독립 검사 — 스테일 원장 방어).` };
   }
 
-  // 머지 해시 규칙 — 판정 오라클은 원장 isMerge 하나뿐(추가 git 호출 없음, 이월 게이트 C-3).
+  // 머지 해시 규칙 — 판정 오라클은 원장 isMerge 플래그가 아니라 위에서
+  // 얻은 실측 parents다(콜드 리뷰 M 대응 — isMerge 한 글자만 true→false로
+  // 바꿔도 parents는 그대로 2건이면 예전에는 규칙이 통째로 꺼졌다.
+  // isMergeCommit()이 scripts/lib/git.mjs의 유일한 정본 계산이므로 이제
+  // 원장 isMerge 필드는 이 판정에 전혀 관여하지 않는다).
   // spec.md §2 원문: "머지 해시 인용은 basis: commit(정량 주장)의 근거로 쓸 수 없으며
   // inference만 허용한다"·AC-7: "머지 해시는 inference 근거로만 허용된다". "…만 허용한다"는
   // "commit만 금지"가 아니라 "inference 외 전부 금지"로 읽는 것이 문언과 일치한다 —
@@ -175,7 +282,8 @@ export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerI
   // 허용을 예외적으로 열어준 것은 "추론"이라고 명시한 경우 하나뿐이다. 따라서 basis가
   // 정확히 "inference"일 때만 통과시키고 그 외 전부(commit·external·insufficient·null·
   // 오탈자 등)를 FAIL 처리한다.
-  if (ledgerEntry.isMerge === true && nodeBasis !== "inference") {
+  const isMergeReal = isMergeCommit(oracle.parents);
+  if (isMergeReal && nodeBasis !== "inference") {
     return {
       ...base,
       verdict: "FAIL",
@@ -185,8 +293,10 @@ export function verifyCitation({ repoPath, evidence, selectedIdentities, ledgerI
   }
 
   // (c)축 — path가 있을 때만. (b)를 통과한 인용에만 호출(선검사 순서 고정).
+  // parents/isMerge도 원장이 아니라 위 오라클 값을 쓴다(diff base가
+  // 실측 parents에서 정확히 계산되게 한다).
   if (citationPath) {
-    const diff = getCommitFileChanges(repoPath, sha, ledgerEntry.parents, ledgerEntry.isMerge);
+    const diff = getCommitFileChangesCached(cache, repoPath, sha, oracle.parents, isMergeReal);
     if (diff.outcome === "tool-error") {
       return { ...base, verdict: "TOOL_ERROR", code: "CITATION_GIT_TOOL_ERROR", message: `경로 실존성(diff) 확인 중 도구/레포 오류(status 미상): ${diff.stderr.trim()}` };
     }
@@ -261,10 +371,12 @@ export function verifySnippetCitation({ repoPath, evidence, ledgerId, snippetPat
  * @param {object} opts.evidence evidence.json 파싱 결과
  * @param {string} opts.repoPath
  * @param {string[]} opts.selectedIdentities
+ * @param {object} [opts.cache] createVerificationCache()의 반환값(선택 —
+ *   verifyEvidence()가 넘겨 여러 인용에 걸쳐 git 호출을 재사용한다).
  * @returns {{citations: object[]}} citations[]는 verifyCitation() 반환값 배열
  *   (layer/nodeId/citationIndex를 덧붙인 형태)
  */
-export function verifyArtifactInstance({ layer, instance, evidence, repoPath, selectedIdentities }) {
+export function verifyArtifactInstance({ layer, instance, evidence, repoPath, selectedIdentities, cache = createVerificationCache() }) {
   const citations = [];
   const nodes = instance?.nodes ?? [];
   for (const node of nodes) {
@@ -277,6 +389,7 @@ export function verifyArtifactInstance({ layer, instance, evidence, repoPath, se
         ledgerId: citation.ledgerId,
         citationPath: citation.path ?? null,
         nodeBasis: node.basis ?? null,
+        cache,
       });
       citations.push({ ...result, layer, nodeId: node.id, citationIndex: idx });
     });
@@ -322,17 +435,23 @@ function fileChangeIdentityKey(f) {
  * @param {object} opts
  * @param {string} opts.repoPath
  * @param {object} opts.evidence evidence.json 파싱 결과
+ * @param {object} [opts.cache] createVerificationCache()의 반환값(선택 —
+ *   verifyCitation()의 (c)축이 같은 머지 커밋 diff를 이미 계산했다면
+ *   재사용해 낭비를 없앤다).
  * @returns {{hash: string, verdict: "PASS"|"FAIL"|"TOOL_ERROR", code: string,
  *   message: string, missingInLedger?: string[], extraInLedger?: string[]}[]}
- *   isMerge===true인 커밋마다 1건. 머지 커밋이 0건이면 빈 배열(공허 —
- *   대다수 실행이 머지 없는 정상 레포이므로 강제 FAIL로 만들지 않는다).
+ *   머지 커밋(정본은 `isMergeCommit(c.parents)` — 원장 `isMerge` 플래그
+ *   단독으로는 이 판정을 우회할 수 없다. 콜드 리뷰 M 대응: `isMerge`만
+ *   true→false로 바꿔도 `parents`가 그대로면 이 검사는 여전히 실행된다)
+ *   마다 1건. 머지 커밋이 0건이면 빈 배열(공허 — 대다수 실행이 머지 없는
+ *   정상 레포이므로 강제 FAIL로 만들지 않는다).
  */
-export function verifyMergeFileSetEquivalence({ repoPath, evidence }) {
+export function verifyMergeFileSetEquivalence({ repoPath, evidence, cache = createVerificationCache() }) {
   const results = [];
   for (const c of evidence?.commits ?? []) {
-    if (c.isMerge !== true) continue;
+    if (!isMergeCommit(c.parents ?? [])) continue;
 
-    const diff = getCommitFileChanges(repoPath, c.hash, c.parents ?? [], true);
+    const diff = getCommitFileChangesCached(cache, repoPath, c.hash, c.parents ?? [], true);
     if (diff.outcome === "tool-error") {
       results.push({
         hash: c.hash,
@@ -429,8 +548,12 @@ export function checkLayerRefs(artifactsByLayer) {
  * @param {object} opts.evidence evidence.json 파싱 결과
  * @param {string[]} opts.selectedIdentities
  * @param {Record<string, object>} opts.artifactsByLayer layer → 산출물 JSON(파싱됨)
+ * @param {object} [opts.cache] createVerificationCache()의 반환값(선택 —
+ *   생략하면 이 호출 하나를 위한 캐시를 만들어 인용/머지 집합 검사가 같은
+ *   (repoPath,sha)의 git 오라클 결과를 공유한다).
  * @returns {{
  *   ok: boolean,
+ *   status: "PASS"|"FAIL"|"INCONCLUSIVE",
  *   summary: object,
  *   violations: object[],
  *   toolErrors: object[],
@@ -439,10 +562,10 @@ export function checkLayerRefs(artifactsByLayer) {
  *   mergeFileSetViolations: object[],
  * }}
  */
-export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifactsByLayer }) {
+export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifactsByLayer, cache = createVerificationCache() }) {
   const allCitations = [];
   for (const [layer, instance] of Object.entries(artifactsByLayer)) {
-    const { citations } = verifyArtifactInstance({ layer, instance, evidence, repoPath, selectedIdentities });
+    const { citations } = verifyArtifactInstance({ layer, instance, evidence, repoPath, selectedIdentities, cache });
     allCitations.push(...citations);
   }
 
@@ -458,31 +581,77 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   // 호출자가 mergeIncluded:true/false 각각으로 수집한 evidence.json을
   // 넘겨 verifyEvidence를 두 번 호출하는 것으로 충족된다(files[]는 두
   // 설정 모두 동일하게 채워지므로 이 함수 자체는 mergeIncluded를 모른다).
-  const mergeFileSetResults = verifyMergeFileSetEquivalence({ repoPath, evidence });
+  const mergeFileSetResults = verifyMergeFileSetEquivalence({ repoPath, evidence, cache });
   const mergeFileSetViolations = mergeFileSetResults.filter((r) => r.verdict === "FAIL");
   const mergeFileSetToolErrors = mergeFileSetResults.filter((r) => r.verdict === "TOOL_ERROR");
 
-  const ok = violations.length === 0 && layerRefViolations.length === 0 && mergeFileSetViolations.length === 0;
+  const allToolErrors = [...toolErrors, ...mergeFileSetToolErrors];
+
+  // 콜드 리뷰 C4(Critical) 대응 — fail-open 제거. 이전에는 `ok`가
+  // violations/layerRefViolations/mergeFileSetViolations 셋만 봤으므로
+  // 인용 100%가 TOOL_ERROR(예: --repo 오타, git이 PATH에 없는 셸)여도
+  // violations.length===0이라는 이유만으로 ok=true → "[PASS]" exit 0이
+  // 나왔다(실측: 가짜 커밋 해시 인용이 도구 오류 뒤에 숨어 그대로 통과).
+  // spec.md §2 "도구·레포 오류는 인용 FAIL로 집계하지 않는다"는 분류
+  // 자체는 유지하되(hasFailures 산식에 toolErrors를 넣지 않는다), 검증되지
+  // 않은 인용이 하나라도 있으면 PASS를 선언하지 않고 종료 코드도 성공이
+  // 아니게 만든다 — status를 3분기로 나눈다:
+  //   FAIL         — violations/layerRefViolations/mergeFileSetViolations 중
+  //                  하나라도 있음(정본 판정 — 도구 오류가 섞여 있어도
+  //                  우선한다. "검증 불가"보다 "확정된 위반 발견"이 더
+  //                  강한 신호이므로 이걸 숨기지 않는다).
+  //   INCONCLUSIVE — 정본 판정 위반은 0건이지만 toolErrors가 1건 이상 —
+  //                  "검증 완료 못 함"을 PASS로 위장하지 않는다.
+  //   PASS         — 위반 0건 + 도구 오류 0건(모든 인용·머지 집합 검사가
+  //                  정상적으로 완결됨).
+  const hasFailures = violations.length > 0 || layerRefViolations.length > 0 || mergeFileSetViolations.length > 0;
+  const hasUnverified = allToolErrors.length > 0;
+  const status = hasFailures ? "FAIL" : hasUnverified ? "INCONCLUSIVE" : "PASS";
+  const ok = status === "PASS";
 
   return {
     ok,
+    status,
     summary: {
       totalCitations: allCitations.length,
       passCitations: passed.length,
       failCitations: violations.length,
       toolErrorCitations: toolErrors.length,
+      // 콜드 리뷰 C4 대응: "검증 완료 N건 / 미검증 M건"을 명시 보고한다.
+      // verifiedCitations는 PASS 또는 FAIL로 확정 판정된 인용(=git 조회가
+      // 실제로 완결된 것), unverifiedCitations는 도구 오류로 판정 자체를
+      // 못 내린 인용이다.
+      verifiedCitations: passed.length + violations.length,
+      unverifiedCitations: toolErrors.length,
       layerRefTotal: layerRefViolations.length + layerRefUnverifiable.length,
       layerRefUnresolved: layerRefViolations.length,
       layerRefUnverifiable: layerRefUnverifiable.length,
       mergeFileSetChecked: mergeFileSetResults.length,
       mergeFileSetViolations: mergeFileSetViolations.length,
+      mergeFileSetToolErrors: mergeFileSetToolErrors.length,
     },
     violations,
-    toolErrors: [...toolErrors, ...mergeFileSetToolErrors],
+    toolErrors: allToolErrors,
     layerRefViolations,
     layerRefUnverifiable,
     mergeFileSetViolations,
   };
+}
+
+/**
+ * status → CLI 종료 코드(콜드 리뷰 C4 대응 — 3분기 계약을 한 곳에 고정한다).
+ * PASS=0(검증 통과) / FAIL=1(확정된 위반 발견) / INCONCLUSIVE=2(도구·레포
+ * 오류로 일부 인용을 검증하지 못함 — 성공도 실패도 아니므로 0을 반환하지
+ * 않는다. --repo/--evidence 누락 등 CLI 인자 오류도 별도로 exit 2를 쓰므로
+ * "결론을 낼 수 없음"이라는 같은 종료 코드 계열을 공유한다).
+ *
+ * @param {{status: "PASS"|"FAIL"|"INCONCLUSIVE"}} report
+ * @returns {0|1|2}
+ */
+export function exitCodeForReport(report) {
+  if (report.status === "FAIL") return 1;
+  if (report.status === "INCONCLUSIVE") return 2;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,11 +744,18 @@ function printReport(report) {
     `[verify-evidence] citations: total=${report.summary.totalCitations} pass=${report.summary.passCitations} ` +
     `fail=${report.summary.failCitations} toolError=${report.summary.toolErrorCitations}`
   );
+  // 콜드 리뷰 C4 대응: "검증 완료 N건 / 미검증 M건"을 항상 명시 출력한다
+  // (M>0이면 아래 status 줄이 [PASS]가 아니라 [INCONCLUSIVE](또는
+  // [FAIL])로 나오지만, 그 이유를 이 줄이 숫자로 먼저 보여준다).
+  console.log(
+    `[verify-evidence] 검증 완료: ${report.summary.verifiedCitations}건 / 미검증(도구 오류): ${report.summary.unverifiedCitations}건`
+  );
   console.log(
     `[verify-evidence] layerRefs: unresolved=${report.summary.layerRefUnresolved} unverifiable=${report.summary.layerRefUnverifiable}`
   );
   console.log(
-    `[verify-evidence] mergeFileSet: checked=${report.summary.mergeFileSetChecked} violations=${report.summary.mergeFileSetViolations}`
+    `[verify-evidence] mergeFileSet: checked=${report.summary.mergeFileSetChecked} violations=${report.summary.mergeFileSetViolations} ` +
+    `toolError=${report.summary.mergeFileSetToolErrors}`
   );
   for (const v of report.violations) {
     console.error(`[FAIL] ${v.code} (${v.layer}#${v.nodeId}[${v.citationIndex}] ledgerId=${v.ledgerId}): ${v.message}`);
@@ -603,7 +779,21 @@ function printReport(report) {
       console.error(`[UNVERIFIABLE] ${e.code} (${e.layer}#${e.nodeId} → ${e.parentLayer}): ${e.message}`);
     }
   }
-  console.log(report.ok ? "[PASS] verify-evidence" : "[FAIL] verify-evidence");
+  // 콜드 리뷰 C4(Critical) 대응 — fail-open 제거의 가시적 지점. 이전에는
+  // report.ok가 violations 셋만 반영해 도구 오류로 100% 미검증인 경우도
+  // "[PASS] verify-evidence" + exit 0이 나왔다. 이제 report.status가
+  // INCONCLUSIVE이면 절대 [PASS]를 출력하지 않는다 — 위 "검증 완료 N건 /
+  // 미검증 M건" 줄과 함께 호출자가 종료 코드만 보고 "통과"로 오인할 수
+  // 없게 한다.
+  if (report.status === "PASS") {
+    console.log("[PASS] verify-evidence");
+  } else if (report.status === "INCONCLUSIVE") {
+    console.log(
+      `[INCONCLUSIVE] verify-evidence — 확정된 위반은 없지만 도구·레포 오류로 ${report.summary.unverifiedCitations + report.summary.mergeFileSetToolErrors}건을 검증하지 못했습니다(PASS 아님, exit 2).`
+    );
+  } else {
+    console.log("[FAIL] verify-evidence");
+  }
 }
 
 function main() {
@@ -637,7 +827,25 @@ function main() {
     process.exit(2);
   }
 
-  const report = verifyEvidence({ repoPath: opts.repo, evidence, selectedIdentities, artifactsByLayer });
+  // 콜드 리뷰 C1 대응(방어 4): getCommitFileChanges 자체는 이제 파싱
+  // 예외를 삼켜 {outcome:"tool-error"}로 변환하므로(scripts/lib/git.mjs)
+  // 이 경로로는 더 이상 예외가 올라오지 않지만, 예상치 못한 다른 런타임
+  // 오류(예: evidence.json/artifact JSON의 형태가 극단적으로 어긋나
+  // verifyArtifactInstance 내부에서 TypeError가 나는 경우)까지 미처리
+  // 예외 스택 트레이스로 죽지 않도록 최상위에도 방어선을 둔다 — 이전에는
+  // 이 지점에 어떤 try/catch도 없어 리포트 0줄·--out 파일 미기록으로
+  // 죽었다. 여기서는 프로그램 버그로 취급해 exit 1을 쓴다(이 자리에서
+  // "미처리 예외"와 "확정된 인용 FAIL"이 같은 exit 1을 공유하는 문제는
+  // 이번 라운드 수정 대상이 아니다 — 콜드 리뷰 C4가 지목한 것은 fail-open
+  // (도구 오류가 PASS로 위장되는 것)이며, 그 문제는 아래 exitCodeForReport의
+  // status:"INCONCLUSIVE"→exit 2 분기로 닫힌다).
+  let report;
+  try {
+    report = verifyEvidence({ repoPath: opts.repo, evidence, selectedIdentities, artifactsByLayer });
+  } catch (e) {
+    console.error(`[오류] 검증 실패(미처리 예외 — 버그로 취급): ${e.message}`);
+    process.exit(1);
+  }
   printReport(report);
 
   if (opts.outPath) {
@@ -645,7 +853,7 @@ function main() {
     console.log(`[verify-evidence] 리포트 기록: ${opts.outPath}`);
   }
 
-  process.exit(report.ok ? 0 : 1);
+  process.exit(exitCodeForReport(report));
 }
 
 const isMainModule = (() => {

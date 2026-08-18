@@ -61,7 +61,7 @@
     "coverage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["analyzed", "total", "traversed", "period", "exclusions", "samplingMethod"],
+      "required": ["analyzed", "total", "traversed", "period", "exclusions", "samplingMethod", "isShallowClone"],
       "description": "커버리지 메타데이터. AC-10이 모든 산출물 헤더에 기재율 100%를 요구한다.",
       "properties": {
         "analyzed": {
@@ -125,7 +125,11 @@
           "type": "string",
           "x-verbatim": true,
           "minLength": 1,
-          "description": "절단이 없으면 고정 리터럴 `none:full-scan`. 절단 시에는 구현 5단계가 정의한 다음 정본 리터럴을 한 글자도 바꾸지 않고 그대로 기재한다(재서술 금지): `K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(commitLevelInsertions+commitLevelDeletions desc);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket`"
+          "description": "절단이 없으면 고정 리터럴 `none:full-scan`. 절단 시에는 구현 5단계가 정의한 다음 정본 리터럴을 한 글자도 바꾸지 않고 그대로 기재한다(재서술 금지): `K=min(max_commits,total);ratio=recent40/churn40/even20;order=recent:(authorDate desc,hash asc),churn:(nonVendoredChurn desc);churnDef=nonVendoredChurn=sum(insertions+deletions over files[] excl. viaMerge,binary,vendoredPath);floor;remainder→recent;dedup=prior-buckets-excluded,backfill-next-rank;tie=churn:(authorDate desc,hash asc),even:[since,until] equal-split,min(authorDate);even-range-default=[min(authorDate),max(authorDate)];even-backfill=(authorDate asc,hash asc),carry-to-next-bucket`"
+        },
+        "isShallowClone": {
+          "type": "boolean",
+          "description": "`git rev-parse --is-shallow-repository`로 감지한 shallow clone 여부(콜드 리뷰 C3). true면 grafted(부모 잘림) 경계 커밋이 존재했으며, 그 커밋은 `.git/shallow`에 기록된 해시로 식별되어 commits[]에서 excluded:true·exclusionReason:\"shallow-boundary\"로 표시된다 — 빈 트리 대비 diff가 실제 신규 작성 분량이 아니므로 population·churn·git-facts.json 집계에서 제외된다."
         }
       }
     },
@@ -200,11 +204,11 @@
         "parents": {
           "type": "array",
           "items": { "$ref": "#/$defs/commitHash" },
-          "description": "부모 커밋 해시 배열(`%P`). 머지 판정의 유일한 정본이며 `viaMerge`나 `excluded`/`exclusionReason`으로 역추정하지 않는다."
+          "description": "부모 커밋 해시 배열(`%P`). 머지 판정의 유일한 정본이며 `viaMerge`나 `excluded`/`exclusionReason`으로 역추정하지 않는다. `isMerge`는 이 필드에서 파생된 캐시일 뿐 별도 정본이 아니다 — verify-evidence.mjs는 머지 규칙 판정에 이 필드(또는 그로부터 재계산한 `isMergeCommit(parents)`)를 쓰고 `isMerge` 플래그 단독 조작으로 규칙을 우회할 수 없다."
         },
         "isMerge": {
           "type": "boolean",
-          "description": "`parents.length >= 2`와 항상 같아야 하는 불변식(AC-6 (iii)). 이 값이 머지 판정의 유일한 정본이다."
+          "description": "`parents.length >= 2`와 항상 같아야 하는 파생 캐시(AC-6 (iii) 불변식이 두 값의 일치를 강제한다). 정본은 `parents`이며, 이 필드 단독으로는 머지 판정을 바꿀 수 없다 — verify-evidence.mjs가 머지 해시 basis 규칙과 AC-7 집합 동치 검사 양쪽에서 `parents` 기반 재계산을 판정 오라클로 쓴다."
         },
         "coAuthors": {
           "type": "array",
@@ -283,6 +287,10 @@
         "viaMerge": {
           "type": "boolean",
           "description": "머지 커밋의 1부모 diff로 유입된 항목이면 true. 항목 단위 집계와 커밋 레벨 insertions/deletions 정량 집계 양쪽에서 제외된다."
+        },
+        "rawChangeType": {
+          "type": ["string", "null"],
+          "description": "콜드 리뷰 C1 대응. git이 name-status에서 실제로 낸, A/M/D/R 외의 원본 코드(예: 'T' 타입체인지 — 일반 파일 ↔ symlink, 서브모듈 전환 등). changeType은 이런 코드를 'M'으로 정규화하고, 원본은 이 필드에 보존한다. 정규 코드(A/M/D/R)에서는 이 필드 자체가 없거나 null이다."
         }
       }
     }
