@@ -1,0 +1,23 @@
+{
+  "schemaNote": "이 파일은 산출물 스키마(career.schema.json 등)의 정식 인스턴스가 아니라, AC-7의 '머지 해시를 basis:commit 근거로 인용한 정량 주장' 위반 패턴을 재현하기 위해 인위 주입한 최소 노드 조각이다. verify-evidence.mjs(구현 6단계)가 이 노드를 FAIL 처리해야 하며, 기대 REJECT 사유는 basis:commit + 머지 해시 규칙 위반 코드여야 한다((a)축 '제외 커밋 인용' 사유가 아니다).",
+  "node": {
+    "id": "case-17-injected-quantitative-claim",
+    "claim": "이 기간 동안 총 120줄을 추가했다 (인위 주입 — basis 규칙 위반 재현용, 실제 값 아님)",
+    "basis": "commit",
+    "evidence": [
+      {
+        "evidenceId": "26cc80808288ba236512542aef93a8694c62243a",
+        "role": "quantitative-source"
+      }
+    ],
+    "origin": "generated",
+    "locked": false
+  },
+  "fixtureSourceMergeCommit": "26cc80808288ba236512542aef93a8694c62243a",
+  "fixtureSourceMergeParents": [
+    "ba6631cf20dd02a10921ac9e0b31c7f17f4577fd",
+    "bd5a8bf7be04fa613e8fee51592c9f0c28f11cdd"
+  ],
+  "executionSetting": "머지 포함 설정(mergeIncluded: true)에서 실행 — 제외 설정에서는 (a)축 FAIL로 뭉개져 basis 규칙이 평가되지 않는다.",
+  "expectedVerifierOutcome": "REJECT — basis:commit 근거가 머지 커밋 해시를 인용함(머지 해시는 inference 근거로만 허용). (a)축 '제외 커밋 인용' 사유가 아니라 별도의 머지 해시 정량 주장 위반 코드로 FAIL해야 탐지로 채점한다(AC-7)."
+}
