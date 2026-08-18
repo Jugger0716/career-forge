@@ -20,7 +20,7 @@
     "contentHash": {
       "type": "string",
       "minLength": 1,
-      "description": "이 파일 본문(이 필드 자신은 제외)의 해시. 사용자 수동 편집 감지(AC-16)에 쓰인다."
+      "description": "이 파일 본문(generatedAt과 이 필드 자신은 제외)의 SHA-256 해시. 우발적 손상·부분 편집을 잡기 위한 필드이며, 키 없는 SHA-256이므로 해시까지 함께 재계산해 다시 써넣는 의도적 위조는 막지 못한다. 현재(P0 MVP) evidence.json은 scripts/verify-evidence.mjs·scripts/validate-plugin.mjs --schema-check가 이 방식으로 재계산·대조하지만(scripts/lib/content-hash.mjs), career.json을 비롯한 L1+ 산출물은 이를 쓰는 결정적 생성기가 아직 이 레포에 구현되어 있지 않다(skills/ 계층의 몫) — 즉 이 필드는 스키마가 요구하는 형태만 강제될 뿐, 이 레이어에서는 아직 재계산·대조되지 않는다."
     },
     "coverage": { "$ref": "#/$defs/coverage" },
     "truncated": { "$ref": "#/$defs/truncated" },

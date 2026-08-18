@@ -17,7 +17,11 @@
       "pattern": "^[0-9a-f]{40}$",
       "description": "생성 시점 대상 레포 HEAD. AC-22 스테일 판정의 정본 값."
     },
-    "contentHash": { "type": "string", "minLength": 1 },
+    "contentHash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "이 파일 본문(generatedAt과 이 필드 자신은 제외)의 SHA-256 해시. 우발적 손상·부분 편집을 잡기 위한 필드이며, 키 없는 SHA-256이므로 의도적 위조는 막지 못한다(evidence.json에서만 scripts/verify-evidence.mjs·validate-plugin.mjs --schema-check가 scripts/lib/content-hash.mjs로 재계산·대조한다 — 이 L1+ 레이어는 그 결정적 생성기가 이 레포에 아직 구현되어 있지 않다)."
+    },
     "coverage": { "$ref": "#/$defs/coverage" },
     "truncated": { "$ref": "#/$defs/truncated" },
     "nodes": {

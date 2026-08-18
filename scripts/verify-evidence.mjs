@@ -41,6 +41,13 @@
 //   (d) 계층 ID 참조 무결성 — knowledge-map→career, gap-report→
 //       knowledge-map, plan→gap-report 방향으로만 parentRefs를 확인한다
 //       (역참조 없음, 단방향 6계층).
+//   contentHash — evidence.json 본문을 scripts/lib/content-hash.mjs로
+//       독립 재계산해 기록된 contentHash와 대조한다(콜드 리뷰 A-7 대응).
+//       불일치는 hasFailures에 포함되는 정식 위반(EVIDENCE_CONTENT_HASH_
+//       MISMATCH)이다. sourceRepoHead 스테일 경고는 별도로 --repo의 현재
+//       HEAD와 evidence.sourceRepoHead를 대조해 report.sourceRepoHeadStaleness
+//       에 담는다 — 이쪽은 FAIL이 아니라 정보성 경고다(레포에 새 커밋이
+//       쌓이는 것 자체는 오류가 아니다).
 //
 // 도구·레포 오류(3분류의 "tool-error")는 인용 FAIL로 집계하지 않지만
 // (spec.md §2 원문대로) PASS로도 집계하지 않는다 — 별도 섹션(toolErrors)에
@@ -96,7 +103,9 @@ import {
   getCommitFileChanges,
   catFileExists,
   isMergeCommit,
+  runGit,
 } from "./lib/git.mjs";
+import { checkContentHashInvariant } from "./lib/invariants.mjs";
 
 const LEDGER_ID_RE = /^commit:([0-9a-f]{40})$/;
 const RAW_HASH_RE = /^[0-9a-f]{40}$/;
@@ -562,6 +571,29 @@ export function checkLayerRefs(artifactsByLayer) {
  *   mergeFileSetViolations: object[],
  * }}
  */
+/**
+ * 콜드 리뷰 A-7 대응: evidence.json의 sourceRepoHead가 `--repo`의 현재
+ * HEAD와 다르면 스테일 경고를 낸다. FAIL이 아니다 — 대상 레포에 새 커밋이
+ * 쌓이는 것 자체는 정상이므로, 이 값은 "이 원장이 최신 HEAD를 반영하지
+ * 않을 수 있다"는 정보일 뿐이다. git 조회가 실패하면(비-git 디렉터리 등)
+ * checked:false로 보고하고 stale 여부를 판정하지 않는다 — verifyEvidence()의
+ * hasFailures/hasUnverified(toolErrors) 집계에는 관여하지 않는 완전히
+ * 별도의 정보성 필드다(toolErrorCitations 등 기존 카운트를 건드리지 않는다).
+ *
+ * @param {string} repoPath
+ * @param {object} evidence
+ * @returns {{checked: boolean, stale: boolean, currentHead: string|null, sourceRepoHead: string|null}}
+ */
+function checkSourceRepoHeadStale(repoPath, evidence) {
+  const sourceRepoHead = evidence?.sourceRepoHead ?? null;
+  const r = runGit(repoPath, ["rev-parse", "HEAD"]);
+  if (r.outcome !== "ok") {
+    return { checked: false, stale: false, currentHead: null, sourceRepoHead };
+  }
+  const currentHead = r.stdout.trim();
+  return { checked: true, stale: sourceRepoHead !== currentHead, currentHead, sourceRepoHead };
+}
+
 export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifactsByLayer, cache = createVerificationCache() }) {
   const allCitations = [];
   for (const [layer, instance] of Object.entries(artifactsByLayer)) {
@@ -587,6 +619,14 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
 
   const allToolErrors = [...toolErrors, ...mergeFileSetToolErrors];
 
+  // 콜드 리뷰 A-7 대응: evidence.json 자체의 contentHash 재계산·대조는
+  // artifactsByLayer(인용)와 무관하게 항상 실행한다((e)축과 같은 성격 —
+  // evidence.json 하나만 있어도 성립하는 검사). sourceRepoHead 스테일
+  // 여부는 별도로 계산해 정보성 필드로만 반환한다(hasFailures에 포함하지
+  // 않는다 — 위 checkSourceRepoHeadStale 주석 참조).
+  const contentHashViolations = checkContentHashInvariant(evidence);
+  const sourceRepoHeadStaleness = checkSourceRepoHeadStale(repoPath, evidence);
+
   // 콜드 리뷰 C4(Critical) 대응 — fail-open 제거. 이전에는 `ok`가
   // violations/layerRefViolations/mergeFileSetViolations 셋만 봤으므로
   // 인용 100%가 TOOL_ERROR(예: --repo 오타, git이 PATH에 없는 셸)여도
@@ -604,7 +644,9 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   //                  "검증 완료 못 함"을 PASS로 위장하지 않는다.
   //   PASS         — 위반 0건 + 도구 오류 0건(모든 인용·머지 집합 검사가
   //                  정상적으로 완결됨).
-  const hasFailures = violations.length > 0 || layerRefViolations.length > 0 || mergeFileSetViolations.length > 0;
+  const hasFailures =
+    violations.length > 0 || layerRefViolations.length > 0 || mergeFileSetViolations.length > 0 ||
+    contentHashViolations.length > 0;
   const hasUnverified = allToolErrors.length > 0;
   const status = hasFailures ? "FAIL" : hasUnverified ? "INCONCLUSIVE" : "PASS";
   const ok = status === "PASS";
@@ -629,12 +671,16 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
       mergeFileSetChecked: mergeFileSetResults.length,
       mergeFileSetViolations: mergeFileSetViolations.length,
       mergeFileSetToolErrors: mergeFileSetToolErrors.length,
+      // 콜드 리뷰 A-7 대응.
+      contentHashViolations: contentHashViolations.length,
     },
     violations,
     toolErrors: allToolErrors,
     layerRefViolations,
     layerRefUnverifiable,
     mergeFileSetViolations,
+    contentHashViolations,
+    sourceRepoHeadStaleness,
   };
 }
 
@@ -757,6 +803,17 @@ function printReport(report) {
     `[verify-evidence] mergeFileSet: checked=${report.summary.mergeFileSetChecked} violations=${report.summary.mergeFileSetViolations} ` +
     `toolError=${report.summary.mergeFileSetToolErrors}`
   );
+  // 콜드 리뷰 A-7 대응.
+  for (const v of report.contentHashViolations ?? []) {
+    console.error(`[FAIL] ${v.code}: ${v.message}`);
+  }
+  const staleness = report.sourceRepoHeadStaleness;
+  if (staleness?.checked && staleness.stale) {
+    console.error(
+      `[경고] sourceRepoHead 스테일: evidence.json은 ${staleness.sourceRepoHead}에서 생성됐지만 --repo의 현재 ` +
+      `HEAD는 ${staleness.currentHead}입니다 — 원장이 최신 커밋을 반영하지 않을 수 있습니다(FAIL 아님, 재수집을 권장합니다).`
+    );
+  }
   for (const v of report.violations) {
     console.error(`[FAIL] ${v.code} (${v.layer}#${v.nodeId}[${v.citationIndex}] ledgerId=${v.ledgerId}): ${v.message}`);
   }

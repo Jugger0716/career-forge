@@ -31,6 +31,15 @@
 //     (i)를 "자기 자신과" 비교하는 형태로 잘못 재정의하지 않는 한 (i)에서
 //     그대로 잡힌다 — 이 모듈의 (i)는 항상 원장의 files[]로부터 독립
 //     재계산한 합과 비교하므로 자기충족이 불가능하다.
+//
+// 콜드 리뷰 A-7 대응: checkContentHashInvariant는 위 다섯 절과 성격이
+// 다르다(필드 "사이의" 관계가 아니라 본문 전체 대 해시 필드 하나의 관계)
+// 지만, "evidence.json 하나만으로 독립 재계산해 대조한다"는 이 모듈의
+// 공통 계약을 그대로 만족하므로 여기 함께 둔다 — scripts/lib/content-
+// hash.mjs의 단일 해시 함수가 쓰기(collect-git-facts.mjs)와 검증(이 함수)
+// 양쪽의 정본이다.
+
+import { computeEvidenceContentHash } from "./content-hash.mjs";
 
 function isQuantityCountedFile(f) {
   return f?.viaMerge !== true && f?.binary !== true;
@@ -225,10 +234,44 @@ export function checkCoverageTraversedInvariant(evidence) {
 }
 
 /**
- * 절단·머지 관련 전역 교차 불변식(T-1, T-2, AC-6 (i)(ii)(iii), coverage
- * 3수치 관계)을 모두 실행해 위반을 합쳐 반환한다. `--schema-check
- * <evidence.json>`의 프로덕션 진입점(scripts/validate-plugin.mjs)이 구조
- * 검증 다음 단계로 호출한다.
+ * 콜드 리뷰 A-7 대응: evidence.json 본문(schemaVersion/sourceRepoHead/
+ * coverage/truncated/commits — generatedAt·contentHash 자신은 제외)을
+ * `scripts/lib/content-hash.mjs`의 정본 함수로 독립 재계산해 기록된
+ * `contentHash`와 대조한다. 우발적 손상·부분 편집(필드 하나만 손으로
+ * 고치고 해시는 그대로 둔 경우)을 잡는다 — 해시까지 함께 재계산해 다시
+ * 써넣는 의도적 위조는 키 없는 SHA-256의 원리적 한계로 이 검사가 막지
+ * 못한다(A-8의 (b)축 git 오라클 재도출이 그 축을 담당한다).
+ *
+ * `contentHash` 필드 자체가 없거나 빈 문자열이면(스키마 구조 검증이 이미
+ * required 위반으로 잡을 형태, 또는 verify-evidence.mjs의 순수 함수
+ * 테스트가 넘기는 최소 스텁 객체) 여기서는 건너뛴다 — "필드가 있을 때
+ * 그 값이 맞는지"만 이 함수의 책임이다.
+ *
+ * @param {object} evidence
+ * @returns {{code: string, message: string}[]}
+ */
+export function checkContentHashInvariant(evidence) {
+  if (typeof evidence?.contentHash !== "string" || evidence.contentHash.length === 0) {
+    return [];
+  }
+  const recomputed = computeEvidenceContentHash(evidence);
+  if (recomputed !== evidence.contentHash) {
+    return [{
+      code: "EVIDENCE_CONTENT_HASH_MISMATCH",
+      message:
+        `contentHash 불일치: evidence.json에 기록된 값(${evidence.contentHash})이 본문(schemaVersion/` +
+        `sourceRepoHead/coverage/truncated/commits) 재계산값(${recomputed})과 다릅니다 — 우발적 손상 또는 ` +
+        "부분 편집으로 원장 본문이 해시 기록 이후 바뀌었을 수 있습니다.",
+    }];
+  }
+  return [];
+}
+
+/**
+ * 절단·머지·해시 관련 전역 교차 불변식(T-1, T-2, AC-6 (i)(ii)(iii),
+ * coverage 3수치 관계, contentHash)을 모두 실행해 위반을 합쳐 반환한다.
+ * `--schema-check <evidence.json>`의 프로덕션 진입점(scripts/validate-
+ * plugin.mjs)이 구조 검증 다음 단계로 호출한다.
  *
  * AC-6 (iv)(비공허성)는 여기 포함하지 않는다 — 머지 커밋이 없는 정상
  * evidence.json(대다수 실행)에도 무조건 적용하면 참인 산출물을 거짓
@@ -247,6 +290,7 @@ export function checkEvidenceInvariants(evidence) {
     ...checkMergeViaMergeInvariant(evidence),
     ...checkIsMergeOracleInvariant(evidence),
     ...checkCoverageTraversedInvariant(evidence),
+    ...checkContentHashInvariant(evidence),
   ];
 }
 
