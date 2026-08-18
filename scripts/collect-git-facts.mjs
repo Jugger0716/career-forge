@@ -374,9 +374,19 @@ export function collectGitFacts(options) {
   // 트레일러의 시크릿/PII를 마스킹한다. hash/shortHash/authorEmail은
   // 구조화된 identity·인용 앵커 필드이므로(AC-7 (a)축·해시 할루시네이션
   // 차단) 대상에서 제외한다 — 특히 email 패턴을 authorEmail에 적용하면
-  // required 필드가 통째로 사라진다(A-10 실패 시나리오). excluded:true
-  // 커밋(원장에 전량 등재)도 동일하게 마스킹한다 — 타인 커밋이 오히려
-  // 마스킹 사각지대가 되면 안 된다.
+  // required 필드가 통째로 사라진다(A-10 실패 시나리오).
+  //
+  // excluded:true 커밋은 마스킹보다 강한 처리를 받는다 — authorEmail·
+  // subject·coAuthors를 **아예 기록하지 않는다**(각각 null·null·[]).
+  // spec.md §6이 확정한 정책이며, 근거는 "제외 커밋의 이 세 필드를 읽는
+  // 검사가 하나도 없다"는 것이다(verify-evidence.mjs는 excluded 체크에서
+  // 먼저 return 하고, invariants.mjs와 (e)축 집합 동치는 files[]·parents·
+  // insertions/deletions만 읽는다). 마스킹은 알려진 패턴만 가리지만 동료의
+  // 이메일과 커밋 제목 자체는 알려진 패턴이 아니므로 그대로 남는다 —
+  // 값이 애초에 파일에 닿지 않게 하는 것이 유일한 실효 방어다.
+  // 따라서 아래 redactField는 excluded:false 경로에서만 호출되며,
+  // redactionSummary 히트 수도 그만큼만 집계된다(기록하지 않는 값을
+  // 마스킹했다고 보고하지 않는다).
   const redactionHits = new Map(); // name -> 누적 count(보고용)
   function accumulateHits(hits) {
     for (const { name, count } of hits) {
@@ -396,12 +406,12 @@ export function collectGitFacts(options) {
       id: `commit:${c.hash}`,
       hash: c.hash,
       shortHash: c.hash.slice(0, 12),
-      authorEmail: c.authorEmail,
+      authorEmail: c.excluded ? null : c.authorEmail,
       authorDate: c.authorDateIso,
       parents: c.parents,
       isMerge: c.isMerge,
-      coAuthors: c.coAuthors.map(redactField),
-      subject: redactField(c.subject),
+      coAuthors: c.excluded ? [] : c.coAuthors.map(redactField),
+      subject: c.excluded ? null : redactField(c.subject),
       insertions: c.insertions,
       deletions: c.deletions,
       files: c.files,

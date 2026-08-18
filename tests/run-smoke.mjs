@@ -184,6 +184,32 @@ const NEGATIVE_CASES = [
   // 기록된 contentHash 한 글자만 실제 재계산값과 다르면 그 자체로 FAIL이어야
   // 한다 — 재계산·대조 코드가 없던 시절에는 이 케이스가 [PASS]를 냈다.
   { n: 18, dir: "18-evidence-content-hash-mismatch", mode: "schema", file: "evidence.json", code: "EVIDENCE_CONTENT_HASH_MISMATCH", label: "A-7: contentHash가 본문 재계산값과 1글자 다름(본문 자체는 참)" },
+  // 슬라이스 B 스펙 심사 C-3 / 게이트 A-1: nodes가 빈 배열인 산출물은
+  // AC-13이 금지한 "빈손 출력"인데, 개정 전에는 --schema-check ·
+  // --lang-check · verify-evidence 세 게이트를 전부 exit 0으로 통과했다
+  // (실측). nodes.minItems=1로 스키마 레벨에서 막고 여기서 관측한다.
+  //
+  // messageIncludes가 필요한 이유: SCHEMA_CHECK_VIOLATION은 모든 구조
+  // 위반이 공유하는 범용 코드라(케이스 12·21도 같은 코드), 코드만 보면
+  // "아무 이유로든 FAIL이면 통과"가 되어 minItems가 실제로 작동한다는
+  // 증거가 되지 않는다 — 위반 메시지에 minItems(1)이 들어 있는지까지 본다.
+  { n: 19, dir: "19-career-empty-nodes", mode: "schema", file: "career.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "minItems(1)", label: "C-3: nodes가 빈 배열(AC-13 '빈손 출력')" },
+  // 게이트 A-4 / 심사 M-2: AC-19 언어 린트의 origin:"user" 제외가 정확히
+  // 좁게 작동하는지를 tests/fixtures-valid/gap-report.json과 짝으로 관측한다
+  // — 두 파일은 gap:001 노드의 origin 값 하나만 다르다. positive만 두면
+  // "제외가 너무 넓어 전부 통과"와 구별되지 않고, negative만 두면 사용자
+  // 입력 오탐(M-2가 실측한 것)이 회귀로 잡히지 않는다.
+  { n: 20, dir: "20-gap-report-generated-english", mode: "lang", code: "FREETEXT_ENGLISH_DETECTED", label: "M-2 대조군: origin:\"generated\" 노드의 영문 free-text는 계속 FAIL" },
+  // 게이트 A-2 / 심사 C-4: verification 필드의 조건부 제약이 실제로 FAIL을
+  // 내는지. status가 refuted인데 attempts=0 · reasonCode=null인 자기모순
+  // 노드다(다른 절과 겹치지 않도록 basis=commit + evidence 비공허로 격리).
+  { n: 21, dir: "21-career-verification-refuted-contradiction", mode: "schema", file: "career.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "verification", label: "C-4: verification.status=refuted인데 attempts=0·reasonCode=null" },
+  // T3(spec.md §6): excluded 커밋의 PII 3필드 축소를 어긴 원장. 실제
+  // 픽스처 레포에서 수집한 참인 원장을 기반으로 excluded 항목 하나에만
+  // authorEmail·subject·coAuthors를 되살려 넣고 contentHash를 재계산했으므로,
+  // 이 케이스의 위반은 PII 유출 3건으로 정확히 격리된다(다른 케이스처럼
+  // 부수 위반이 섞여 있지 않다).
+  { n: 22, dir: "22-evidence-excluded-commit-pii-leak", mode: "schema", file: "evidence.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "authorEmail", label: "T3: excluded 커밋에 authorEmail·subject·coAuthors가 남은 원장" },
 ];
 
 // AC-3(b): 알 수 없는 SPDX 라이선스는 FAIL이 아니라 명시적 SKIP(경고)으로
@@ -206,6 +232,25 @@ function report(ok, label) {
     failed += 1;
     console.log(`  FAIL  ${label}`);
   }
+}
+
+/**
+ * 원장에서 "실제 저자가 <email>인 커밋"의 항목을 찾는다.
+ *
+ * T3(spec.md §6) 이후 `excluded: true` 커밋의 원장 `authorEmail`은 null이므로
+ * `commits.find((c) => c.authorEmail === X)`로는 타 저자 커밋을 더 이상 찾을
+ * 수 없다(찾으면 undefined가 되어 `.id` 접근에서 TypeError로 스위트가 크래시한다).
+ *
+ * 대신 git 오라클에 직접 묻는다. 이 방식이 원래 의도("이 항목이 실제로 Alice의
+ * 커밋이다")에 더 가깝고, 원장 필드 조작에 영향받지 않는다 — 조작된 원장을
+ * 입력으로 쓰는 케이스(3필드 편집 재현)에서도 대상 커밋을 정확히 집어낸다.
+ */
+function findEntryByRealAuthor(repoPath, evidence, email) {
+  for (const c of evidence.commits) {
+    const oracle = getCommitAuthorAndParents(repoPath, c.hash);
+    if (oracle.outcome === "ok" && oracle.authorEmail === email) return c;
+  }
+  return undefined;
 }
 
 // AC-6 / AC-12: scripts/lib/schema-validate.mjs의 validateInstance는 지금까지
@@ -279,6 +324,58 @@ function runSchemaValidatorSmoke() {
       console.log(`    errors=${JSON.stringify(errors)} warnings=${JSON.stringify(warnings)}`);
     }
     report(ok, "validateInstance: 지원 범위 밖 키워드(minProperties)를 조용히 통과시키지 않고 경고함");
+  }
+
+  // (4) 최상위(allOf로 감싸지 않은) if/then 이 실제로 평가되는지. 이 형태는
+  // 예전에 KNOWN_SCHEMA_KEYWORDS에 이름만 있고 한 번도 읽히지 않아 오류도
+  // 경고도 없이 통과했다 — 즉 제약이 애초에 없는 것과 구별되지 않았다.
+  // "위반을 넣으면 실제로 FAIL이 난다"를 여기서 관측한다. 대조군(위반이
+  // 아닌 인스턴스)을 함께 두지 않으면 조건이 상시 참이어도 이 검사가
+  // 통과하므로 두 방향을 모두 본다.
+  {
+    const schema = {
+      type: "object",
+      properties: { kind: { type: "string" }, code: { type: ["string", "null"] } },
+      if: { properties: { kind: { const: "refuted" } } },
+      then: { properties: { code: { type: "string", minLength: 1 } } },
+    };
+    const violating = validateInstance(schema, { kind: "refuted", code: null });
+    const conforming = validateInstance(schema, { kind: "refuted", code: "NO_SUPPORT" });
+    const notTriggered = validateInstance(schema, { kind: "verified", code: null });
+    const ok =
+      violating.some((e) => e.includes("type 불일치")) &&
+      conforming.length === 0 &&
+      notTriggered.length === 0;
+    if (!ok) {
+      console.log(
+        `    violating=${JSON.stringify(violating)} conforming=${JSON.stringify(conforming)} notTriggered=${JSON.stringify(notTriggered)}`
+      );
+    }
+    report(ok, "validateInstance: 최상위 if/then을 실제로 평가함(위반 FAIL / 준수 PASS / 전건 거짓 PASS)");
+  }
+
+  // (5) anyOf 가 실제로 평가되는지. 같은 이력이며, T3(제외 커밋 PII 축소)
+  // 설계에서 authorEmail을 "이메일 또는 해시"로 넓히는 변형이 검토됐다가
+  // 바로 이 미평가 때문에 기각됐다 — 쓰레기 값이 위반 0건으로 통과했기
+  // 때문이다. 그 관측을 회귀로 고정한다.
+  {
+    const schema = {
+      anyOf: [
+        { type: "string", format: "email" },
+        { type: "string", pattern: "^sha256:[0-9a-f]{16}$" },
+      ],
+    };
+    const violating = validateInstance(schema, "!!!not-an-email-nor-hash!!!");
+    const asEmail = validateInstance(schema, "dev@example.com");
+    const asHash = validateInstance(schema, "sha256:0123456789abcdef");
+    const ok =
+      violating.some((e) => e.includes("anyOf")) && asEmail.length === 0 && asHash.length === 0;
+    if (!ok) {
+      console.log(
+        `    violating=${JSON.stringify(violating)} asEmail=${JSON.stringify(asEmail)} asHash=${JSON.stringify(asHash)}`
+      );
+    }
+    report(ok, "validateInstance: anyOf를 실제로 평가함(어느 분기도 못 맞추면 FAIL, 각 분기는 PASS)");
   }
 }
 
@@ -520,6 +617,52 @@ function runRedactSmoke() {
       );
     } finally {
       fs.rmSync(tmpBase2, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (E) T3(spec.md §6): 제외 커밋의 PII 3필드를 수집기가 실제로
+  // 기록하지 않는지. 스키마 조건절(tests/fixtures-invalid/22-…)은 "유출된
+  // 원장이 FAIL 한다"를 관측하지만, 그것만으로는 **수집기가 애초에 그런
+  // 원장을 만들지 않는다**는 것이 관측되지 않는다 — 두 관측은 서로를
+  // 대신하지 못한다.
+  //
+  // 대조군을 같은 단언에 묶는다: 본인(비-excluded) 커밋의 authorEmail·
+  // subject는 그대로 남아야 한다. 대조군 없이 "제외 커밋이 null이다"만
+  // 보면, 모든 커밋의 필드를 통째로 비우는 구현도 통과한다.
+  {
+    const tmpBase3 = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-t3-"));
+    try {
+      const dir = path.join(tmpBase3, "repo");
+      buildMultiAuthor(dir);
+      const { evidence } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        ref: "HEAD",
+        maxCommits: 1000,
+      });
+      const excluded = evidence.commits.filter((c) => c.excluded === true);
+      const included = evidence.commits.filter((c) => c.excluded !== true);
+
+      report(
+        excluded.length >= 1,
+        `T3 비공허성: buildMultiAuthor + identity=OWNER 수집에 excluded 커밋이 존재함(실제 ${excluded.length}건) — 0건이면 아래 단언들이 공허하게 통과한다`
+      );
+      report(
+        excluded.every((c) => c.authorEmail === null && c.subject === null && c.coAuthors.length === 0),
+        `T3: excluded 커밋의 authorEmail·subject는 null이고 coAuthors는 빈 배열(실제: ${JSON.stringify(excluded.map((c) => ({ authorEmail: c.authorEmail, subject: c.subject, coAuthors: c.coAuthors })))})`
+      );
+      report(
+        excluded.every(
+          (c) => typeof c.hash === "string" && Array.isArray(c.files) && typeof c.exclusionReason === "string"
+        ),
+        "T3 무오탐: 관측 가능성이 실제로 요구하는 필드(hash·files[]·exclusionReason)는 excluded 커밋에도 그대로 남음 — AC-7 (a)축·AC-9·(e)축 집합 동치가 여기 걸려 있다"
+      );
+      report(
+        included.length >= 1 && included.every((c) => c.authorEmail === OWNER_EMAIL && typeof c.subject === "string"),
+        `T3 대조군: 본인(비-excluded) 커밋의 authorEmail·subject는 축소되지 않음(실제 ${included.length}건, authorEmail=${JSON.stringify(included.map((c) => c.authorEmail))}) — 이 대조군이 없으면 전 커밋을 비우는 구현도 통과한다`
+      );
+    } finally {
+      fs.rmSync(tmpBase3, { recursive: true, force: true });
     }
   }
 }
@@ -823,7 +966,7 @@ function runVerifyEvidenceSmoke() {
     // ---- (2) 타 저자 커밋 인용(Alice) → (a)축 FAIL ----
     {
       const evidence = collect(dirs.multiAuthor);
-      const aliceEntry = evidence.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const aliceEntry = findEntryByRealAuthor(dirs.multiAuthor, evidence, ALICE_EMAIL);
       const r = verifyCitation({
         repoPath: dirs.multiAuthor,
         evidence,
@@ -1110,7 +1253,7 @@ function runVerifyEvidenceSmoke() {
     // FAIL해야 한다.
     {
       const evidence = collect(dirs.multiAuthor);
-      const aliceEntry = evidence.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const aliceEntry = findEntryByRealAuthor(dirs.multiAuthor, evidence, ALICE_EMAIL);
       const tampered = structuredClone(evidence);
       const tamperedAlice = tampered.commits.find((c) => c.hash === aliceEntry.hash);
       tamperedAlice.excluded = false; // 실패 시나리오 3필드 편집 재현
@@ -1345,7 +1488,7 @@ function runVerifyEvidenceSmoke() {
       // 상황을 재현한다 — verifyEvidence()의 상태 "우선순위 집계 로직" 자체를
       // 검증하는 것이 목적이다(도구 오류 재현 자체는 이미 다른 절에서 실증됨).
       const evidenceForMixed = collect(dirs.multiAuthor);
-      const aliceEntry = evidenceForMixed.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const aliceEntry = findEntryByRealAuthor(dirs.multiAuthor, evidenceForMixed, ALICE_EMAIL);
       const fakeToolErrorSha = "b".repeat(40);
       const mixedCache = createVerificationCache();
       mixedCache.authorParents.set(verificationCacheKey(dirs.multiAuthor, fakeToolErrorSha), {
@@ -1437,7 +1580,7 @@ function runVerifyEvidenceSmoke() {
     {
       const evidence = collect(dirs.multiAuthor);
       const ownerEntry = evidence.commits.find((c) => c.authorEmail === OWNER_EMAIL);
-      const aliceEntry = evidence.commits.find((c) => c.authorEmail === ALICE_EMAIL);
+      const aliceEntry = findEntryByRealAuthor(dirs.multiAuthor, evidence, ALICE_EMAIL);
       const career = {
         nodes: [
           { id: "car:ok", basis: "commit", evidence: [{ ledgerId: ownerEntry.id }] },
@@ -3271,12 +3414,22 @@ async function runNegativeSuite() {
       result = await runLangCheck({ outDir: caseDir });
     }
     const hasCode = result.errors.some((e) => e.code === c.code);
-    const ok = !result.ok && hasCode;
+    // 범용 오류 코드(SCHEMA_CHECK_VIOLATION 등)를 쓰는 케이스는 코드 일치만
+    // 보면 "다른 이유로 FAIL해도 통과"하는 자기충족 검사가 된다 —
+    // messageIncludes가 있는 케이스는 위반 메시지에 그 문자열이 실제로
+    // 들어 있는지까지 확인해 겨냥한 절이 발화했음을 관측한다.
+    const hasMessage = c.messageIncludes
+      ? result.errors.some((e) => e.code === c.code && String(e.message).includes(c.messageIncludes))
+      : true;
+    const ok = !result.ok && hasCode && hasMessage;
     if (!ok) {
-      console.log(`    케이스 (${c.n}) ${c.label}: ok=${result.ok} 기대 코드 '${c.code}' 존재=${hasCode}`);
+      console.log(`    케이스 (${c.n}) ${c.label}: ok=${result.ok} 기대 코드 '${c.code}' 존재=${hasCode} 기대 메시지 조각=${c.messageIncludes ?? "(없음)"} 존재=${hasMessage}`);
       for (const e of result.errors) console.log(`      실제 오류: ${e.code}: ${e.message}`);
     }
-    report(ok, `케이스 (${c.n}) ${c.label} → exit 1 + ${c.code}`);
+    report(
+      ok,
+      `케이스 (${c.n}) ${c.label} → exit 1 + ${c.code}${c.messageIncludes ? ` (메시지에 '${c.messageIncludes}' 포함)` : ""}`
+    );
   }
 
   const positiveDir = path.join(TESTS_DIR, "fixtures-valid");

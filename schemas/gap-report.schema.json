@@ -26,6 +26,8 @@
     "truncated": { "$ref": "#/$defs/truncated" },
     "nodes": {
       "type": "array",
+      "minItems": 1,
+      "description": "갭 노드 목록. 노드가 0개인 산출물은 AC-13이 금지한 '빈손 출력'이다 — minItems로 스키마 레벨에서 막는다. FactChecker가 전 항목을 반증했더라도 항목 단위 강등(verification.status=refuted)으로 남겨 출력하며, 아무것도 내보내지 않는 경로는 없다.",
       "items": { "$ref": "#/$defs/gapNode" }
     }
   },
@@ -93,10 +95,34 @@
       "enum": ["inference", "external", "insufficient"],
       "description": "갭 분석은 지식맵(commit basis 금지)에서 파생된 추론이므로 knowledge-map과 동일하게 commit basis를 쓸 수 없다."
     },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "attempts", "reasonCode"],
+      "description": "2단 팩트체크(LLM 반증 판정)의 결과. basis와 **직교하는 별도 축**이다 — basis는 '이 주장이 어떤 등급의 근거를 갖는가'이고 이 필드는 '그 근거가 반증 시도를 견뎠는가'이다. 따라서 강등이 basis를 바꾸지 않는다. AC-13의 '근거 부족 - 미검증' 배지는 이 필드에서만 파생하며, 렌더 마크다운이 배지를 자기 판단으로 붙이지 않는다(정본은 JSON이고 마크다운은 그 뷰라는 §1 결정이 여기 걸려 있다). plan.schema.json의 verificationStatus와 이름이 비슷하지만 다른 축이다 — 그쪽은 생성된 문제의 신뢰 등급이고 이쪽은 사실 주장의 반증 결과다. 두 필드를 통합하지 마라.",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["verified", "refuted", "not-attempted"],
+          "description": "verified=FactChecker가 반증하지 못했다. refuted=재생성 상한(2회)까지 반증당해 강등됐다. not-attempted=아직 판정 대상이 아니었다. 'refuted'와 'not-attempted'를 구분하지 않으면 '검증을 시도했고 반증당함'과 '애초에 근거가 없음'이 같은 값으로 뭉개져, 재실행 시 재시도 상한이 초기화된다."
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "이 노드에 대해 수행한 재생성 시도 횟수. spec.md §3이 상한을 2회로 고정했으므로 2를 넘을 수 없다. 재실행 시 기존 산출물의 값을 이어받는다 — 매 실행 0으로 초기화하면 상한이 사실상 무한이 된다."
+        },
+        "reasonCode": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "강등 사유의 기계 판독 코드(예: NO_SUPPORTING_DIFF). status가 refuted가 아니면 null이다. 자유 서술이 아니므로 AC-19 언어 린트 대상이 아니며(x-freeText를 붙이지 않는다), AC-8 오염 스위트의 기대 REJECT 사유 문자열 대조에 그대로 쓸 수 있다. 사람이 읽을 설명이 필요하면 노드 text에 한국어로 적는다."
+        }
+      }
+    },
     "gapNode": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "basis", "evidence", "parentRefs", "origin", "locked", "topic", "text", "selfAssessment"],
+      "required": ["id", "basis", "evidence", "verification", "parentRefs", "origin", "locked", "topic", "text", "selfAssessment"],
       "properties": {
         "id": {
           "type": "string",
@@ -116,7 +142,12 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "knowledge-map.json nodes[].id 참조 목록. AC-14 계층 ID 참조 무결성 검사 대상. 상위(plan)로의 역참조는 금지."
         },
-        "origin": { "type": "string", "enum": ["generated", "user"] },
+        "verification": { "$ref": "#/$defs/verification" },
+        "origin": {
+          "type": "string",
+          "enum": ["generated", "user"],
+          "description": "이 노드가 LLM 생성분인지 사용자 수동 추가분인지. **이 값은 병합·편집 감지 로직(구현 7단계)만 설정하며 생성 템플릿이 직접 기입하지 않는다** — AC-19 언어 린트의 origin:user 제외가 자기면제 통로가 되지 않게 하기 위해서다."
+        },
         "locked": { "type": "boolean" },
         "topic": {
           "type": "string",
@@ -139,6 +170,18 @@
         {
           "if": { "properties": { "evidence": { "maxItems": 0 } } },
           "then": { "properties": { "basis": { "const": "insufficient" } } }
+        },
+        {
+          "if": { "properties": { "verification": { "properties": { "status": { "const": "not-attempted" } } } } },
+          "then": { "properties": { "verification": { "properties": { "attempts": { "const": 0 }, "reasonCode": { "type": "null" } } } } }
+        },
+        {
+          "if": { "properties": { "verification": { "properties": { "status": { "const": "refuted" } } } } },
+          "then": { "properties": { "verification": { "properties": { "attempts": { "const": 2 }, "reasonCode": { "type": "string", "minLength": 1 } } } } }
+        },
+        {
+          "if": { "properties": { "verification": { "properties": { "status": { "const": "verified" } } } } },
+          "then": { "properties": { "verification": { "properties": { "reasonCode": { "type": "null" } } } } }
         }
       ]
     }

@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-18T00:00:00.000Z",
+  "sourceRepoHead": "5ba8c084a10148a1e3777aceede0805267ddff57",
+  "contentHash": "5608f3de9e83c9f87526e83957a14a0c1f42cc4c13fbe52df40cfebf971a6fb7",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 3,
+    "period": {
+      "since": null,
+      "until": null
+    },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": [
+        "owner@devcareer-fixture.test"
+      ]
+    },
+    "samplingMethod": "none:full-scan",
+    "isShallowClone": false
+  },
+  "truncated": {
+    "reason": "none",
+    "dropped_commits": 0
+  },
+  "commits": [
+    {
+      "id": "commit:5ba8c084a10148a1e3777aceede0805267ddff57",
+      "hash": "5ba8c084a10148a1e3777aceede0805267ddff57",
+      "shortHash": "5ba8c084a101",
+      "authorEmail": "alice@example.test",
+      "authorDate": "2023-12-08T13:46:40+09:00",
+      "parents": [
+        "35baa283b16ebd522ccc5ba6c75f190fbb54d154"
+      ],
+      "isMerge": false,
+      "coAuthors": [
+        "Co-authored-by: Carol Park <carol@example.test>"
+      ],
+      "subject": "feat: alice adds b",
+      "insertions": 1,
+      "deletions": 0,
+      "files": [
+        {
+          "path": "c.txt",
+          "oldPath": null,
+          "changeType": "A",
+          "insertions": 1,
+          "deletions": 0,
+          "binary": false,
+          "viaMerge": false
+        }
+      ],
+      "excluded": true,
+      "exclusionReason": "author-not-selected"
+    },
+    {
+      "id": "commit:35baa283b16ebd522ccc5ba6c75f190fbb54d154",
+      "hash": "35baa283b16ebd522ccc5ba6c75f190fbb54d154",
+      "shortHash": "35baa283b16e",
+      "authorEmail": null,
+      "authorDate": "2023-12-08T12:46:40+09:00",
+      "parents": [
+        "f74653f5efd7951de998e0a857fd8311fe42b92c"
+      ],
+      "isMerge": false,
+      "coAuthors": [],
+      "subject": null,
+      "insertions": 1,
+      "deletions": 0,
+      "files": [
+        {
+          "path": "b.txt",
+          "oldPath": null,
+          "changeType": "A",
+          "insertions": 1,
+          "deletions": 0,
+          "binary": false,
+          "viaMerge": false
+        }
+      ],
+      "excluded": true,
+      "exclusionReason": "author-not-selected"
+    },
+    {
+      "id": "commit:f74653f5efd7951de998e0a857fd8311fe42b92c",
+      "hash": "f74653f5efd7951de998e0a857fd8311fe42b92c",
+      "shortHash": "f74653f5efd7",
+      "authorEmail": "owner@devcareer-fixture.test",
+      "authorDate": "2023-12-08T11:46:40+09:00",
+      "parents": [],
+      "isMerge": false,
+      "coAuthors": [],
+      "subject": "chore: owner adds a",
+      "insertions": 1,
+      "deletions": 0,
+      "files": [
+        {
+          "path": "a.txt",
+          "oldPath": null,
+          "changeType": "A",
+          "insertions": 1,
+          "deletions": 0,
+          "binary": false,
+          "viaMerge": false
+        }
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ]
+}

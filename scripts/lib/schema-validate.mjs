@@ -26,6 +26,19 @@
 // 한계). state.schema.json의 `artifactEntryOrNull`(`null | artifactEntry`)
 // 처럼 분기가 상호 배타적인 실사용 패턴에서는 결과가 동일하지만, 엄밀한
 // oneOf 배타성 검사가 필요한 스키마가 추가되면 이 한계를 재검토해야 한다.
+// anyOf는 이와 달리 "최소 1개"가 스펙 그대로이므로 정확한 구현이다 — 두
+// 블록이 코드상 닮았다는 이유로 합치면 이 구분이 사라진다.
+//
+// **조건부 키워드의 평가 범위(이력이 있는 지점이므로 남긴다).** 예전에는
+// `anyOf`와 **최상위(allOf로 감싸지 않은) `if`/`then`/`else`** 가 위 지원
+// 목록에 이름만 올라 있고 `validateInstance`가 한 번도 읽지 않았다. 두
+// 키워드 모두 KNOWN_SCHEMA_KEYWORDS에 들어 있었으므로 "지원 범위 밖
+// 키워드" 경고 대상도 아니었다 — 즉 그 형태로 쓴 제약은 **오류도 경고도
+// 없이 존재하지 않는 것처럼** 동작했다. 이 저장소의 7개 스키마가 마침
+// 그 형태를 쓰지 않아 실피해가 없었을 뿐이고, 조건부 제약을 새로 넣는
+// 순간(슬라이스 B) 그 근거는 소멸한다. 지금은 둘 다 평가한다. 새 조건부
+// 제약을 쓸 때는 어느 형태를 써도 되지만, **기존 스키마와의 일관성을 위해
+// `allOf`의 원소로 쓰는 관례를 유지**한다.
 
 const KNOWN_SCHEMA_KEYWORDS = new Set([
   "$schema", "$id", "title", "description", "default",
@@ -170,7 +183,17 @@ export function validateInstance(schema, instance, root = schema, path = "$", wa
     ).length;
     if (matchCount === 0) errors.push(`${path}: oneOf 중 어느 것도 만족하지 않음`);
     // 참고: "정확히 1개"가 아니라 "최소 1개"만 강제한다(모듈 상단 주석의
-    // 문서화된 한계).
+    // 문서화된 한계). 아래 anyOf 블록과 코드가 거의 같아 보이지만 의미는
+    // 다르다 — anyOf 쪽은 "최소 1개"가 스펙 그대로의 정확한 구현이고,
+    // 이쪽은 스펙(정확히 1개)을 완화한 근사다. 두 블록을 "중복"으로 보고
+    // 합치지 마라.
+  }
+
+  if (Array.isArray(resolved.anyOf)) {
+    const matchCount = resolved.anyOf.filter(
+      (sub) => validateInstance(sub, instance, root, path, warnings).length === 0
+    ).length;
+    if (matchCount === 0) errors.push(`${path}: anyOf 중 어느 것도 만족하지 않음`);
   }
 
   if (resolved.const !== undefined && JSON.stringify(instance) !== JSON.stringify(resolved.const)) {
@@ -259,6 +282,22 @@ export function validateInstance(schema, instance, root = schema, path = "$", wa
       } else {
         errors.push(...validateInstance(sub, instance, root, path, warnings));
       }
+    }
+  }
+
+  // 최상위(allOf로 감싸지 않은) if/then/else. 이 형태는 KNOWN_SCHEMA_KEYWORDS에
+  // 등록만 되어 있고 평가되지 않았다 — 즉 오류도 경고도 없이 제약이 애초에
+  // 없는 것처럼 동작했다. allOf 원소의 if/then과 의미가 같아야 하므로 같은
+  // 로직을 노드 자신에 대해 한 번 더 적용한다.
+  //
+  // 위치 주의: type 조기 return(위)보다 뒤이므로 type이 이미 틀린 인스턴스는
+  // 여기 도달하지 않는다. allOf 블록과 동일한 성질이며 의도된 것이다.
+  if (resolved.if) {
+    const ifErrors = validateInstance(resolved.if, instance, root, path, warnings);
+    if (ifErrors.length === 0 && resolved.then) {
+      errors.push(...validateInstance(resolved.then, instance, root, path, warnings));
+    } else if (ifErrors.length > 0 && resolved.else) {
+      errors.push(...validateInstance(resolved.else, instance, root, path, warnings));
     }
   }
 
