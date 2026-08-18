@@ -104,6 +104,11 @@ import {
   buildCoAuthorTrailer,
   buildVendoredPaths,
   buildBinaryFile,
+  buildEmptyRepo,
+  buildSingleCommit,
+  buildKorean,
+  buildSpacePath,
+  buildEmptyMessage,
   FAKE_COMMIT_HASH_IN_SUBJECT,
 } from "../fixtures/make-fixture.mjs";
 import { redactSecrets, containsSecretPattern } from "../scripts/lib/redact.mjs";
@@ -1850,6 +1855,204 @@ function runCoAuthorsBinaryVendoredGitFactsSmoke() {
 }
 
 // ---------------------------------------------------------------------------
+// T3(구현자 — 픽스처 커버리지 정직화, 콜드 리뷰 A-14 잔여): buildEmptyRepo·
+// buildSingleCommit·buildKorean·buildSpacePath·buildEmptyMessage 5종이
+// fixtures/README.md 표에는 AC-6/AC-17 "오라클 대상"으로 광고돼 있었지만
+// tests/·scripts/ 어디에서도 import되지 않아 자동 검증이 0이었다(grep 0건).
+// 아래 5개 절 각각이 그 픽스처를 실제로 collectGitFacts()에 먹여 해당 AC가
+// 요구하는 프로덕션 동작을 단언한다. 판별력은 이 스모크를 작성하는 과정에서
+// 대응하는 프로덕션 코드 경로를 직접 무력화해 FAIL로 뒤집히는 것을 실행
+// 관측한 뒤 원복했다(관측 결과는 이 작업의 notes에 기록 — 이 파일 자체에는
+// 되돌리는 임시 변이를 남기지 않는다):
+//   (a) buildEmptyRepo    : hasAnyCommitOnHead 사전 확인을 제거하면
+//                           `git log HEAD`가 unborn branch에서 fatal로 죽어
+//                           collectGitFacts()가 예외를 던지는 것을 관측.
+//   (b) buildSingleCommit : classifyExclusion의 shallow-boundary 판정을
+//                           "shallowBoundaryHashes 대조"에서 "parents.length
+//                           ===0"으로 바꾸면(콜드 리뷰 A-3이 실제로 겪은
+//                           클래스의 버그) 진짜 루트 커밋이 shallow-boundary로
+//                           오분류되어 excluded:true·total:0이 되는 것을 관측.
+//   (c) buildKorean       : runGit의 spawnSync encoding을 "utf8"→"latin1"로
+//                           바꾸면 한글 경로·subject가 깨진 멀티바이트 문자열로
+//                           나오는 것을 관측(ASCII 픽스처로는 이 결함이
+//                           원리적으로 드러나지 않는다 — latin1/utf8이 ASCII
+//                           바이트에서는 동일하므로 이 축은 한글 픽스처만
+//                           변별력을 가진다).
+//   (d) buildSpacePath    : getCommitFileChanges의 numstat/name-status 호출에서
+//                           `-z`를 제거하면 tokenizeZ의 NUL 부재 가드가
+//                           throw하는 것을 관측(공백 포함 경로가 실제로 이
+//                           가드를 실경로로 통과하는 유일한 픽스처).
+//   (e) buildEmptyMessage : conventionalCommitTypeDistribution 계산에서
+//                           `m ? m[1].toLowerCase() : "other"`의 null 가드를
+//                           제거하면 빈 subject(정규식 미매치)에서
+//                           TypeError로 죽는 것을 관측.
+// ---------------------------------------------------------------------------
+
+function runFixtureCoverageHonestySmoke() {
+  console.log("[픽스처 커버리지 정직화 스모크(A-14 잔여)] buildEmptyRepo·buildSingleCommit·buildKorean·buildSpacePath·buildEmptyMessage 실배선");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-a14b-"));
+  try {
+    // ---- (a) buildEmptyRepo: AC-6 — 0커밋/unborn branch에서 예외 없이
+    // 정상 종료하고 빈 원장을 낸다. ----
+    {
+      const dir = path.join(tmpBase, "emptyRepo");
+      buildEmptyRepo(dir);
+      let evidence;
+      let threw = null;
+      try {
+        evidence = collectGitFacts({
+          repoPath: dir,
+          selectedIdentities: [OWNER_EMAIL],
+          allIdentities: true,
+          ref: "HEAD",
+          maxCommits: 1000,
+        }).evidence;
+      } catch (e) {
+        threw = e;
+      }
+      if (threw) console.log(`    예외 발생: ${threw.message}`);
+      report(
+        threw === null,
+        "buildEmptyRepo: 빈 레포/unborn branch에서 collectGitFacts()가 예외 없이 정상 종료함(AC-6)"
+      );
+      report(
+        !!evidence &&
+          evidence.commits.length === 0 &&
+          evidence.coverage.traversed === 0 &&
+          evidence.coverage.total === 0 &&
+          evidence.coverage.analyzed === 0 &&
+          evidence.sourceRepoHead === "0".repeat(40) &&
+          evidence.truncated.reason === "none" &&
+          evidence.truncated.dropped_commits === 0 &&
+          evidence.coverage.samplingMethod === "none:full-scan",
+        `buildEmptyRepo: 빈 원장(commits=[], traversed=total=analyzed=0, sourceRepoHead=null-sha, samplingMethod="none:full-scan")이 정확히 기재됨(실제: ${JSON.stringify(evidence?.coverage)}, sourceRepoHead=${evidence?.sourceRepoHead})`
+      );
+    }
+
+    // ---- (b) buildSingleCommit: AC-5/AC-6 — 부모 없는 루트 커밋의 diff
+    // base가 빈 트리가 되어 신규 작성분이 정확히 집계되고, shallow-boundary로
+    // 오탐되지 않는다(콜드 리뷰 A-3 클래스 회귀 방지). ----
+    {
+      const dir = path.join(tmpBase, "singleCommit");
+      buildSingleCommit(dir);
+      const { evidence } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        maxCommits: 1000,
+      });
+      const c = evidence.commits[0];
+      report(
+        evidence.commits.length === 1 &&
+          c.parents.length === 0 &&
+          c.excluded === false &&
+          c.exclusionReason === null &&
+          evidence.coverage.isShallowClone === false &&
+          evidence.coverage.total === 1,
+        `buildSingleCommit: 진짜 단일 루트 커밋이 shallow-boundary로 오탐되지 않고 population에 정상 포함됨(실제: excluded=${c?.excluded}, reason=${c?.exclusionReason}, isShallowClone=${evidence.coverage.isShallowClone}, total=${evidence.coverage.total})`
+      );
+      report(
+        c.files.length === 1 &&
+          c.files[0].path === "README.md" &&
+          c.files[0].changeType === "A" &&
+          c.files[0].oldPath === null &&
+          c.insertions === c.files[0].insertions &&
+          c.deletions === 0,
+        `buildSingleCommit: 빈 트리 대비 diff로 README.md가 changeType=A로 신규 작성 집계되고 커밋 레벨 합계와 일치함(실제: ${JSON.stringify(c.files)}, 커밋레벨=${c.insertions}/${c.deletions})`
+      );
+    }
+
+    // ---- (c) buildKorean: AC-17 — 한글 파일명·한글 커밋 메시지가 옥탈
+    // 이스케이프나 인코딩 깨짐 없이 UTF-8 그대로 원장에 들어간다. ----
+    {
+      const dir = path.join(tmpBase, "korean");
+      const built = buildKorean(dir);
+      const { evidence } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        maxCommits: 1000,
+      });
+      const allPaths = new Set(evidence.commits.flatMap((c) => c.files.map((f) => f.path)));
+      const allSubjects = new Set(evidence.commits.map((c) => c.subject));
+      const pathsOk = built.declared.paths.every((p) => allPaths.has(p));
+      const noOctalEscape = [...allPaths, ...allSubjects].every((s) => !/\\\d{3}/.test(s));
+      if (!pathsOk || !noOctalEscape) {
+        console.log(`    실제 paths: ${JSON.stringify([...allPaths])}, subjects: ${JSON.stringify([...allSubjects])}`);
+      }
+      report(
+        pathsOk,
+        `buildKorean: 한글 파일명 2건(하위 디렉터리 포함)이 원장 files[].path에 원문 그대로 등재됨(선언값: ${JSON.stringify(built.declared.paths)})`
+      );
+      report(
+        noOctalEscape,
+        "buildKorean: 경로·subject 어디에도 옥탈 이스케이프 패턴(\\\\NNN)이 남지 않음(core.quotepath=false + -z 계약 확인, AC-17)"
+      );
+      report(
+        [...allSubjects].some((s) => s.startsWith("한글 커밋 메시지")) &&
+          [...allSubjects].some((s) => s.startsWith("두 번째 한글 커밋")),
+        `buildKorean: 한글 커밋 메시지 2건이 subject에 원문 그대로 보존됨(실제: ${JSON.stringify([...allSubjects])})`
+      );
+    }
+
+    // ---- (d) buildSpacePath: AC-17 — 공백 포함 경로가 `-z` 파싱에서
+    // 잘리거나 깨지지 않는다. ----
+    {
+      const dir = path.join(tmpBase, "spacePath");
+      const built = buildSpacePath(dir);
+      const { evidence } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        maxCommits: 1000,
+      });
+      const c = evidence.commits[0];
+      report(
+        c?.files.length === 1 && c.files[0].path === built.declared.path,
+        `buildSpacePath: 공백 포함 경로("${built.declared.path}")가 잘리거나 변형되지 않고 files[0].path에 완전 일치함(실제: ${JSON.stringify(c?.files)})`
+      );
+    }
+
+    // ---- (e) buildEmptyMessage: AC-6 — 빈 커밋 메시지에서 subject 처리·
+    // conventional-commit 분류가 예외 없이 "other"로 정상 처리된다. ----
+    {
+      const dir = path.join(tmpBase, "emptyMessage");
+      buildEmptyMessage(dir);
+      let result;
+      let threw = null;
+      try {
+        result = collectGitFacts({
+          repoPath: dir,
+          selectedIdentities: [OWNER_EMAIL],
+          allIdentities: true,
+          ref: "HEAD",
+          maxCommits: 1000,
+        });
+      } catch (e) {
+        threw = e;
+      }
+      if (threw) console.log(`    예외 발생: ${threw.message}`);
+      report(threw === null, "buildEmptyMessage: 빈 커밋 메시지에서 collectGitFacts()가 예외 없이 정상 종료함(AC-6)");
+      const emptyMsgCommit = result?.evidence.commits.find((c) => c.subject === "");
+      report(
+        !!emptyMsgCommit,
+        `buildEmptyMessage: 빈 메시지 커밋의 subject가 빈 문자열로 정확히 기록됨(실제 subjects: ${JSON.stringify(result?.evidence.commits.map((c) => c.subject))})`
+      );
+      report(
+        (result?.gitFacts.conventionalCommitTypeDistribution.other ?? 0) >= 1,
+        `buildEmptyMessage: conventional-commit 분류가 빈 subject를 예외 없이 "other" 버킷으로 처리함(실제: ${JSON.stringify(result?.gitFacts.conventionalCommitTypeDistribution)})`
+      );
+    }
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 임무 A(구현자 — 탐지 경로 보강, 블로커 A): 골든 게이트(--golden, ~1분) 없이도
 // M-f(coverage.traversed에 total 복사)·M-h(절단인데 reason="none")·
 // M-i(절단인데 samplingMethod="none:full-scan")가 **기본 스모크**에서 잡히게
@@ -3161,6 +3364,7 @@ function runCommonSections() {
   runSection("redact.mjs 마스킹 스모크(A-9/A-10)", runRedactSmoke);
   runSection("evidence.schema.json 구조 검증 스모크(A-13)", runEvidenceSchemaCheckSmoke);
   runSection("coAuthors·binary·vendored·git-facts 집계 스모크(A-14)", runCoAuthorsBinaryVendoredGitFactsSmoke);
+  runSection("픽스처 커버리지 정직화 스모크(A-14 잔여)", runFixtureCoverageHonestySmoke);
 }
 
 async function main() {
