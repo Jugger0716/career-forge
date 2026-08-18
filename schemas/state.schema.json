@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devcareer-prep.local/schemas/state.schema.json",
+  "title": "DevCareer Prep State Registry",
+  "description": "산출물 레지스트리(state.json). 저장 루트 정본 ~/.devcareer/<repo-key>/(또는 명시 동의 시 <repo>/.devcareer/) 아래에 놓인다(§6·§9·AC-15). 경로 인덱스·schemaVersion·생성 스킬만 보관하며 sourceRepoHead·contentHash는 절대 두지 않는다 — 그 두 값의 진실 원천은 각 산출물 파일 자신이며(AC-16), 레지스트리에 중복 보관하면 파일 쓰기와 레지스트리 갱신 사이 크래시로 두 값이 갈릴 수 있다(AC-22). state.json이 없거나 이 스키마에 부적합하면 스킬은 예외 중단 없이 재수집 안내로 정상 종료해야 한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "updatedAt", "artifacts"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "0.1.0",
+      "description": "state.json 자신의 형식 버전(각 artifacts.*.schemaVersion과는 별개 — 그쪽은 해당 산출물 파일 자신의 스키마 버전이다)."
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "이 레지스트리가 마지막으로 갱신된 시각."
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "각 계층 산출물의 경로 인덱스. 아직 생성되지 않은 계층은 null이다.",
+      "required": ["evidence", "career", "knowledgeMap", "gapReport", "plan"],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/artifactEntryOrNull" },
+        "career": { "$ref": "#/$defs/artifactEntryOrNull" },
+        "knowledgeMap": { "$ref": "#/$defs/artifactEntryOrNull" },
+        "gapReport": { "$ref": "#/$defs/artifactEntryOrNull" },
+        "plan": { "$ref": "#/$defs/artifactEntryOrNull" }
+      }
+    }
+  },
+  "$defs": {
+    "artifactEntryOrNull": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/artifactEntry" }
+      ]
+    },
+    "artifactEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "schemaVersion", "generatedBySkill"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!\\\\)(?![A-Za-z]:).+$",
+          "description": "저장 루트(scripts/lib/store.mjs가 해석) 기준 상대 경로. 로컬 절대경로를 저장하지 않는다(AC-15) — 루트 자체는 이 파일에 값으로 남지 않는다."
+        },
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "이 산출물 파일 자신의 schemaVersion 값과 동일해야 한다(레지스트리 캐시)."
+        },
+        "generatedBySkill": {
+          "type": "string",
+          "minLength": 1,
+          "description": "이 산출물을 생성한 스킬 이름(예: career-from-git, skill-gap, prep-plan)."
+        }
+      }
+    }
+  }
+}
