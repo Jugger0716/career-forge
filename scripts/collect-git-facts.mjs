@@ -17,7 +17,6 @@
 //     [--merge-included]                    기본 false(머지 제외)
 //     [--since <date>] [--until <date>]     기본 미지정(전체 기간)
 //     [--max-commits <n>]                   기본 1000
-//     [--include-diff]                      기본 false(--no-diff가 P0 기본값)
 //     [--no-bots-exclude] [--no-vendored-exclude]
 //     [--out <dir>]                         지정 시 store.mjs 저장 루트 해석을
 //                                            건너뛰고 이 디렉터리에 직접 쓴다
@@ -29,10 +28,18 @@
 // {evidence, gitFacts} 반환). writeCollectorOutput()이 실제 파일 쓰기(원자적
 // temp→rename)를 담당한다. 미래의 skills/career-from-git이 이 API를
 // 직접 호출할 수 있도록 CLI와 로직을 분리했다.
+//
+// 콜드 리뷰 A-38 대응: CLI에는 `--include-diff`를 노출하지 않는다. diff
+// 원문 인용 경로 자체가 P0에 아직 없다(evidence.schema.json이 diff 원문을
+// 담지 않는다 — schemas/config.schema.json의 snippetQuoting 설명 참조).
+// 켜도 관측 가능한 산출물 차이가 0인 플래그를 광고하면 사용자를 속이므로,
+// 구현 7단계 이후 실제로 diff 원문을 수집하게 되는 시점에 플래그를 다시
+// 노출한다. collectGitFacts()는 여전히 options.includeDiff를 프로그래밍
+// API로 받되(향후 확장을 위한 자리표시자, 아래 void 처리) CLI 표면에는
+// 올리지 않는다.
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -49,6 +56,8 @@ import {
   NO_TRUNCATION_SAMPLING_METHOD_LITERAL,
 } from "./lib/sampling.mjs";
 import { getRepoToplevel, resolveStorageRoot } from "./lib/store.mjs";
+import { computeEvidenceContentHash } from "./lib/content-hash.mjs";
+import { redactSecrets } from "./lib/redact.mjs";
 
 const SCHEMA_VERSION = "0.1.0";
 const NULL_SHA = "0".repeat(40); // unborn branch(0커밋) 전용 정본 sentinel(git의 null-oid 관례).
@@ -359,6 +368,27 @@ export function collectGitFacts(options) {
     samplingMethod = CANONICAL_SAMPLING_METHOD_LITERAL;
   }
 
+  // 콜드 리뷰 A-9/A-10 대응: subject·coAuthors는 diff 원문이 아니므로
+  // `--no-diff` 기본값의 보호 범위 밖이다 — 원장에 등재되는 이 두 필드에
+  // scripts/lib/redact.mjs를 여기서 실제로 배선해 커밋 제목·co-author
+  // 트레일러의 시크릿/PII를 마스킹한다. hash/shortHash/authorEmail은
+  // 구조화된 identity·인용 앵커 필드이므로(AC-7 (a)축·해시 할루시네이션
+  // 차단) 대상에서 제외한다 — 특히 email 패턴을 authorEmail에 적용하면
+  // required 필드가 통째로 사라진다(A-10 실패 시나리오). excluded:true
+  // 커밋(원장에 전량 등재)도 동일하게 마스킹한다 — 타인 커밋이 오히려
+  // 마스킹 사각지대가 되면 안 된다.
+  const redactionHits = new Map(); // name -> 누적 count(보고용)
+  function accumulateHits(hits) {
+    for (const { name, count } of hits) {
+      redactionHits.set(name, (redactionHits.get(name) ?? 0) + count);
+    }
+  }
+  function redactField(text) {
+    const { text: masked, hits } = redactSecrets(text);
+    accumulateHits(hits);
+    return masked;
+  }
+
   // 순회 순서를 보존한 채 "제외 커밋(전량)" ∪ "선택된 population 커밋"만 남긴다.
   const finalCommits = enriched
     .filter((c) => c.excluded || selectedHashSet.has(c.hash))
@@ -370,14 +400,19 @@ export function collectGitFacts(options) {
       authorDate: c.authorDateIso,
       parents: c.parents,
       isMerge: c.isMerge,
-      coAuthors: c.coAuthors,
-      subject: c.subject,
+      coAuthors: c.coAuthors.map(redactField),
+      subject: redactField(c.subject),
       insertions: c.insertions,
       deletions: c.deletions,
       files: c.files,
       excluded: c.excluded,
       exclusionReason: c.exclusionReason,
     }));
+
+  const redactionSummary = {
+    totalHits: [...redactionHits.values()].reduce((a, b) => a + b, 0),
+    byPattern: Object.fromEntries([...redactionHits.entries()].sort(([a], [b]) => a.localeCompare(b))),
+  };
 
   const sourceRepoHead = resolveSourceRepoHead(repoToplevel);
 
@@ -400,35 +435,34 @@ export function collectGitFacts(options) {
     isShallowClone: isShallow,
   };
 
-  const evidenceWithoutHash = {
+  // 콜드 리뷰 A-7 대응: 해시 산식을 scripts/lib/content-hash.mjs의 단일
+  // 함수로 뺐다 — 쓰기(여기)와 검증(verify-evidence.mjs, validate-plugin.mjs
+  // --schema-check)이 같은 구현·같은 키 순서를 공유한다. generatedAt은
+  // 해시 대상에서 제외되므로(computeEvidenceContentHash 자체가 그 필드를
+  // 읽지 않는다) 같은 레포·같은 옵션의 두 번째 실행도 동일한 contentHash를
+  // 낸다(결정성 게이트에 이 사실을 이용할 수 있다).
+  const evidence = {
     schemaVersion: SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     sourceRepoHead,
+    contentHash: "", // 아래에서 본문 기준으로 재계산해 채운다.
     coverage,
     truncated,
     commits: finalCommits,
   };
-  const contentHash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify(evidenceWithoutHash), "utf8")
-    .digest("hex");
-
-  const evidence = {
-    schemaVersion: evidenceWithoutHash.schemaVersion,
-    generatedAt: evidenceWithoutHash.generatedAt,
-    sourceRepoHead: evidenceWithoutHash.sourceRepoHead,
-    contentHash,
-    coverage: evidenceWithoutHash.coverage,
-    truncated: evidenceWithoutHash.truncated,
-    commits: evidenceWithoutHash.commits,
-  };
+  evidence.contentHash = computeEvidenceContentHash(evidence);
 
   const gitFacts = buildGitFacts(finalCommits, { vendoredPathsEnabled, customVendoredPathPatterns });
 
   void includeDiff; // P0에서는 diff 원문을 evidence.json 스키마가 담지 않는다(§4) —
   // 이 플래그는 향후 옵트인 스니펫 경로(구현 7단계 이후)를 위한 자리표시자다.
 
-  return { evidence, gitFacts };
+  // redactionSummary는 evidence.json 스키마에 없는 별도 반환값이다(스키마가
+  // additionalProperties:false라 evidence 본문에 필드를 얹을 수 없다) —
+  // CLI(main())가 "무엇이 가려졌는지" stderr에 보고하는 데만 쓴다. 순수
+  // 함수 계약(디스크에 쓰지 않음)은 유지된다 — console 출력이 아니라
+  // 반환값이므로 호출자가 보고 여부를 결정한다.
+  return { evidence, gitFacts, redactionSummary };
 }
 
 function resolveSourceRepoHead(repoToplevel) {
@@ -548,7 +582,6 @@ function parseArgs(argv) {
     since: null,
     until: null,
     maxCommits: 1000,
-    includeDiff: false,
     botsEnabled: true,
     vendoredPathsEnabled: true,
     out: null,
@@ -589,9 +622,6 @@ function parseArgs(argv) {
       case "--max-commits":
         opts.maxCommits = Number(argv[++i]);
         break;
-      case "--include-diff":
-        opts.includeDiff = true;
-        break;
       case "--no-bots-exclude":
         opts.botsEnabled = false;
         break;
@@ -619,7 +649,7 @@ function printUsage() {
   console.error(
     "사용법: node scripts/collect-git-facts.mjs --repo <path> [--ref HEAD|all] " +
     "[--identity <email>]... [--all-identities] [--merge-included] [--since <date>] " +
-    "[--until <date>] [--max-commits <n>] [--include-diff] [--no-bots-exclude] " +
+    "[--until <date>] [--max-commits <n>] [--no-bots-exclude] " +
     "[--no-vendored-exclude] [--out <dir>] [--storage home|repo] [--repo-opt-in]"
   );
 }
@@ -648,7 +678,6 @@ function main() {
       since: opts.since,
       until: opts.until,
       maxCommits: opts.maxCommits,
-      includeDiff: opts.includeDiff,
       botsEnabled: opts.botsEnabled,
       vendoredPathsEnabled: opts.vendoredPathsEnabled,
     });
@@ -657,7 +686,17 @@ function main() {
     process.exit(1);
   }
 
-  const { evidence, gitFacts } = result;
+  const { evidence, gitFacts, redactionSummary } = result;
+
+  if (redactionSummary.totalHits > 0) {
+    const byPattern = Object.entries(redactionSummary.byPattern)
+      .map(([name, count]) => `${name}=${count}`)
+      .join(", ");
+    console.error(
+      `[마스킹] 커밋 제목·co-author 트레일러에서 시크릿/PII 패턴 ${redactionSummary.totalHits}건을 ` +
+      `[REDACTED:*]로 치환했습니다 (${byPattern}).`
+    );
+  }
 
   if (evidence.commits.length === 0 && evidence.coverage.traversed === 0) {
     console.error(

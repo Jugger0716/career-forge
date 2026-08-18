@@ -10,7 +10,7 @@
 
 | 파일 | 정본 여부 | 근거 |
 |---|---|---|
-| `sampling-300.expected.json` | 골든(정본) | `compute-sampling-golden.mjs`가 **정본 `samplingMethod` 리터럴을 리터럴 자체로부터 독립 재구현**해 계산한 결과. `collect-git-facts.mjs`나 `scripts/lib/git.mjs`를 전혀 참조하지 않는다(둘 다 아직 존재하지 않는다). |
+| `sampling-300.expected.json` | 골든(정본) | `compute-sampling-golden.mjs`가 **정본 `samplingMethod` 리터럴을 리터럴 자체로부터 독립 재구현**해 계산한 결과. `collect-git-facts.mjs`나 `scripts/lib/git.mjs`는 이 레포에 이미 구현돼 있지만, 이 스크립트는 그 둘을 의도적으로 import·참조하지 않는다 — 수집기 구현이 버그를 가지면 같은 버그로 스스로를 검증하는 자기순환이 되기 때문이다(독립 오라클 설계, 아래 리네임·삭제 절과 동일 원칙). |
 | `compute-sampling-golden.mjs` | 재계산 스크립트(근거 그 자체) | 실행할 때마다 `schemas/evidence.schema.json`의 `coverage.samplingMethod` description에서 정본 리터럴을 정규식으로 추출해 자신의 하드코딩 사본(`HARDCODED_LITERAL`)과 **완전 일치**하는지 검사한다. 다르면 즉시 예외를 던진다(드리프트 구조적 차단 — 아래 "드리프트 방지 자체 검증" 참조). |
 | `case-17-merge-hash-claim.json` | 픽스처 주입 산출물(정본 아님, `fixtures/make-fixture.mjs`의 `merge` 시나리오 선언값을 그대로 반영) | `fixtures/make-fixture.mjs --emit-golden`이 `merge` 시나리오의 실제 머지 커밋 해시로 생성. 리네임/삭제 경로처럼 "무엇이 참인지"는 이 값이 아니라 `make-fixture.mjs`의 `buildMerge()`가 정본이다 — 이 파일은 그 정본 값을 담아 (17) 케이스를 재현 가능하게 만드는 부산물일 뿐이다. |
 

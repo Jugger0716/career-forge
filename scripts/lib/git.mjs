@@ -2,10 +2,10 @@
 //
 // 구현 5·6단계가 명령한 "공유 git 호출 계층"의 단일 구현. §7·구현 5단계·
 // 구현 6단계가 요구하는 세 계약을 이 파일 하나에 둔다 — scripts/collect-
-// git-facts.mjs(구현 5단계, 이 Run)와 scripts/verify-evidence.mjs(구현
-// 6단계, 이후 Run)가 이 파일을 동일하게 import해서 쓴다. 계약이 두 곳에
-// 따로 구현되면 (exit code, stderr 패턴) 3분류나 머지 diff 산식이
-// 드리프트할 위험이 있다 — 이 파일이 그 드리프트를 원천 차단한다.
+// git-facts.mjs(구현 5단계)와 scripts/verify-evidence.mjs(구현 6단계)가
+// 이 파일을 동일하게 import해서 쓴다(둘 다 이 레포에 이미 구현돼 있다).
+// 계약이 두 곳에 따로 구현되면 (exit code, stderr 패턴) 3분류나 머지 diff
+// 산식이 드리프트할 위험이 있다 — 이 파일이 그 드리프트를 원천 차단한다.
 //
 // 계약 1 — 고정 프리픽스: 모든 git 호출은
 //   `git -C <repo> --no-pager -c core.quotepath=false -c i18n.logOutputEncoding=UTF-8`
@@ -245,8 +245,6 @@ const RS = "\x1e"; // Record Separator — 커밋 레코드 구분자
 // 개행이 섞여도 레코드 구분(RS)과 충돌하지 않게 한다(RS/US는 커밋 메시지에
 // 사실상 등장하지 않는 제어 문자).
 const LOG_FORMAT = `%H${US}%P${US}%ae${US}%aI${US}%at${US}%s${US}%B${RS}`;
-
-const CO_AUTHOR_LINE_RE = /^co-authored-by:.*$/im;
 
 /**
  * 커밋 메시지 본문에서 `Co-authored-by:` 트레일러 원문 줄 전체를 추출한다

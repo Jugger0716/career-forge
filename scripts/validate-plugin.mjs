@@ -67,6 +67,7 @@ import { scanUnsupportedKeywords, validateInstance } from "./lib/schema-validate
 import { lintFreeText } from "./lib/lang-lint.mjs";
 import { STATE_DIR_NAME } from "./lib/store.mjs";
 import { checkEvidenceInvariants } from "./lib/invariants.mjs";
+import { checkSamplingMethodLiteralDrift } from "./lib/sampling-literal-drift.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -409,6 +410,7 @@ function checkNamingConsistency(root, pluginJson, errors, warnings) {
 
   const pluginName = pluginJson.name;
   const pluginLicense = pluginJson.license;
+  const pluginVersion = pluginJson.version;
 
   // package.json
   const pkgPath = path.join(root, "package.json");
@@ -430,6 +432,21 @@ function checkNamingConsistency(root, pluginJson, errors, warnings) {
           file: rel,
         });
       }
+      // 콜드 리뷰 A-35 대응: version은 plugin.json/marketplace.json/
+      // package.json 세 파일에 완전 중복으로 존재한다(같은 값을 세 곳에
+      // 수기로 맞춰야 한다) — 릴리스 시 한 곳만 올리고 잊는 드리프트를
+      // 여기서 잡는다. description/keywords는 package.json에서 npm 배포용
+      // 문구·필드 구성이 plugin.json과 원래 다르게 설계돼 있어(package.json
+      // 에는 keywords 필드 자체가 없다) 여기서는 name/license/version만
+      // 대조하고, description/keywords 완전 중복은 marketplace.json
+      // plugins[] 항목(아래)에서만 검사한다.
+      if (pluginVersion && pkg.version && pkg.version !== pluginVersion) {
+        errors.push({
+          code: "PLUGIN_VERSION_MISMATCH",
+          message: `package.json version('${pkg.version}')이 plugin.json version('${pluginVersion}')과 다릅니다.`,
+          file: rel,
+        });
+      }
     } catch {
       // package.json 파싱 실패는 이 스크립트의 별도 관심사가 아니다(스펙 범위 밖 파일).
     }
@@ -448,6 +465,50 @@ function checkNamingConsistency(root, pluginJson, errors, warnings) {
           message: `marketplace.json의 plugins[].name(${names.join(", ")})에 plugin.json name('${pluginName}')이 없습니다.`,
           file: rel,
         });
+      }
+      // 콜드 리뷰 A-35 대응: metadata.version과 plugins[n].version(플러그인
+      // 자기 항목)이 plugin.json version과 완전 중복 필드다 — 셋 다 대조한다.
+      if (pluginVersion && marketplace.metadata?.version && marketplace.metadata.version !== pluginVersion) {
+        errors.push({
+          code: "PLUGIN_VERSION_MISMATCH",
+          message: `marketplace.json metadata.version('${marketplace.metadata.version}')이 plugin.json version('${pluginVersion}')과 다릅니다.`,
+          file: rel,
+        });
+      }
+      const matchingEntry = (marketplace.plugins ?? []).find((p) => p.name === pluginName);
+      if (matchingEntry) {
+        if (pluginVersion && matchingEntry.version && matchingEntry.version !== pluginVersion) {
+          errors.push({
+            code: "PLUGIN_VERSION_MISMATCH",
+            message: `marketplace.json의 plugins[].version('${matchingEntry.version}', name='${pluginName}')이 plugin.json version('${pluginVersion}')과 다릅니다.`,
+            file: rel,
+          });
+        }
+        // description/keywords는 plugin.json ↔ marketplace.json 사이에서만
+        // 완전 중복이다(값을 그대로 복사해 온 필드) — 한쪽만 고치는
+        // 드리프트를 여기서 잡는다.
+        if (
+          pluginJson.description !== undefined &&
+          matchingEntry.description !== undefined &&
+          matchingEntry.description !== pluginJson.description
+        ) {
+          errors.push({
+            code: "PLUGIN_DESCRIPTION_MISMATCH",
+            message: `marketplace.json의 plugins[].description(name='${pluginName}')이 plugin.json description과 다릅니다.`,
+            file: rel,
+          });
+        }
+        if (
+          Array.isArray(pluginJson.keywords) &&
+          Array.isArray(matchingEntry.keywords) &&
+          JSON.stringify(matchingEntry.keywords) !== JSON.stringify(pluginJson.keywords)
+        ) {
+          errors.push({
+            code: "PLUGIN_KEYWORDS_MISMATCH",
+            message: `marketplace.json의 plugins[].keywords(name='${pluginName}')가 plugin.json keywords와 다릅니다(값 또는 순서 불일치).`,
+            file: rel,
+          });
+        }
       }
     } catch {
       // 무시 — marketplace.json 자체 파싱은 이 검사의 관심사 밖
@@ -530,6 +591,44 @@ function checkCommandPrefixConsistency(root, pluginName, errors) {
   }
 }
 
+/**
+ * 콜드 리뷰 A-19 대응: 정본 samplingMethod 리터럴 네 곳(spec.md·스키마
+ * description·sampling.mjs 상수·골든 스크립트 하드코딩 사본)이 서로
+ * 일치하는지 검사한다. 이 검사는 검사 대상 "루트"(negative 픽스처 mini
+ * 레포 등)와 무관하게 **이 레포 자신**(REPO_ROOT)의 네 파일을 항상
+ * 대조한다 — 그 네 파일은 이 레포에만 존재하고(픽스처 mini 레포는 schemas/
+ * ·fixtures/golden/·docs/를 두지 않는다) 정본 리터럴의 동기화는 검사
+ * 대상 plugin 인스턴스가 아니라 이 소스 레포 자체의 내부 일관성이기
+ * 때문이다.
+ *
+ * @param {{errors: object[]}} sink
+ */
+function checkSamplingMethodLiteralConsistency(errors) {
+  const result = checkSamplingMethodLiteralDrift(REPO_ROOT);
+  if (result.ok) return;
+
+  if (result.missing.length > 0) {
+    errors.push({
+      code: "SAMPLING_METHOD_LITERAL_EXTRACT_FAILED",
+      message:
+        `정본 samplingMethod 리터럴을 다음 위치에서 추출하지 못했습니다(파일 부재 또는 형태 변경): ` +
+        `${result.missing.join(", ")}`,
+      file: result.missing[0],
+    });
+  }
+  for (const m of result.mismatches) {
+    errors.push({
+      code: "SAMPLING_METHOD_LITERAL_DRIFT",
+      message:
+        `정본 samplingMethod 리터럴이 '${m}'에서 다른 세 곳과 다릅니다 — spec.md 구현 5단계 본문· ` +
+        "schemas/evidence.schema.json의 coverage.samplingMethod description·scripts/lib/sampling.mjs의 " +
+        "CANONICAL_SAMPLING_METHOD_LITERAL·fixtures/golden/compute-sampling-golden.mjs의 HARDCODED_LITERAL " +
+        "네 곳을 모두 동기화하십시오(콜드 리뷰 A-19).",
+      file: m,
+    });
+  }
+}
+
 function checkWorkingTreeCR(root, explicitRoot, errors) {
   const excludeDirs = [...ALWAYS_EXCLUDED_DIR_NAMES].map((n) => path.join(root, n));
   if (!explicitRoot) {
@@ -602,6 +701,7 @@ export async function runValidation({ root, explicitRoot = false } = {}) {
   checkDocPathReferences(resolvedRoot, errors);
   checkNamingConsistency(resolvedRoot, pluginJson, errors, warnings);
   checkStateDirConsistency(resolvedRoot, pluginJson, errors);
+  checkSamplingMethodLiteralConsistency(errors);
   checkWorkingTreeCR(resolvedRoot, explicitRoot, errors);
 
   return { ok: errors.length === 0, errors, warnings };

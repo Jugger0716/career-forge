@@ -4,24 +4,38 @@
 // validate-plugin.mjs를 위한 스모크 러너. 의존성 0.
 //
 // 사용법:
-//   node tests/run-smoke.mjs              기본 스모크: 정상 레포에서 exit 0 확인
-//                                          + 스키마 검증기 스모크(아래)
-//   node tests/run-smoke.mjs --negative    tests/fixtures-invalid/ 7케이스가
-//                                          각각 exit 1 + 케이스 고유 오류 코드를
-//                                          내는지, tests/fixtures-valid/의 positive
-//                                          픽스처가 exit 0을 내는지 자동 확인
-//                                          + 스키마 검증기 스모크(아래)
+//   node tests/run-smoke.mjs              기본 스모크: 공통 섹션(스키마
+//                                          검증기·verify-evidence·불변식·
+//                                          회귀 등 19개, 아래) 전부 + 정상
+//                                          레포에서 exit 0 확인.
+//   node tests/run-smoke.mjs --negative    negative 스위트만: tests/
+//                                          fixtures-invalid/의 각 케이스가
+//                                          exit 1 + 케이스 고유 오류 코드를
+//                                          내는지, tests/fixtures-valid/의
+//                                          positive 픽스처가 exit 0을
+//                                          내는지 확인. 공통 섹션은 기본
+//                                          모드가 이미 실행했다는 전제로
+//                                          여기서는 재실행하지 않는다
+//                                          (A-36 대응 — 이전에는 여기서도
+//                                          공통 섹션 전체를 다시 돌려 동일
+//                                          단언 172건이 두 모드에서 문자열
+//                                          단위로 중복 실행됐다). 이 모드를
+//                                          단독으로 돌리면 negative 스위트
+//                                          고유의 단언만 보이므로, 전체
+//                                          커버리지를 확인하려면 플래그
+//                                          없이 먼저 한 번 돌려야 한다 —
+//                                          package.json의 `npm test`는
+//                                          기본 모드 → --negative →
+//                                          --golden 순서로 세 번 호출해
+//                                          이 순서를 강제한다.
 //   node tests/run-smoke.mjs --golden      AC-21 골든 게이트만 단독 실행
 //                                          (300커밋 픽스처 생성/캐시 +
 //                                          fixtures/golden/sampling-300.
 //                                          expected.json 대조 — 최초 1회
 //                                          ~1분, 이후 캐시 재사용). 다른
-//                                          모드와 배타적. package.json의
-//                                          `npm test`가 기본 모드 다음에
-//                                          이 플래그로 다시 호출해 항상
-//                                          함께 돈다.
+//                                          모드와 배타적.
 //
-// 두 모드 모두 실행 전 runSchemaValidatorSmoke()를 호출한다 — AC-6/AC-12의
+// 기본 모드는 실행 전 runSchemaValidatorSmoke()를 호출한다 — AC-6/AC-12의
 // 게이트인 scripts/lib/schema-validate.mjs validateInstance가 (a) 실제
 // 픽스처를 실제 스키마로 검증하고, (b) required/enum/type 위반을 실제로
 // 잡고, (c) 지원 범위 밖 키워드를 조용히 통과시키지 않는지 확인한다.
@@ -38,9 +52,9 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runValidation, runLangCheck, runSchemaCheck } from "../scripts/validate-plugin.mjs";
-import { walk } from "../scripts/lib/fs-walk.mjs";
+import { walk, listFilesByExt } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
-import { computeRepoKeyForPath } from "../scripts/lib/store.mjs";
+import { computeRepoKeyForPath, getRepoToplevel } from "../scripts/lib/store.mjs";
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
 import {
@@ -60,6 +74,7 @@ import {
   listCommitMetadata,
   isShallowRepository,
   isMergeCommit,
+  runGit,
   GIT_FIXED_PREFIX_ARGS,
   _internal as gitInternal,
 } from "../scripts/lib/git.mjs";
@@ -67,7 +82,10 @@ import {
   checkEvidenceInvariants,
   checkTruncatedDroppedCommitsInvariant,
   checkMergeNonVacuous,
+  checkContentHashInvariant,
 } from "../scripts/lib/invariants.mjs";
+import { computeEvidenceContentHash } from "../scripts/lib/content-hash.mjs";
+import { checkSamplingMethodLiteralDrift } from "../scripts/lib/sampling-literal-drift.mjs";
 import {
   OWNER_EMAIL,
   ALICE_EMAIL,
@@ -82,7 +100,13 @@ import {
   buildLarge300,
   buildChurnKeyDivergence,
   buildCase17MergeHashInjection,
+  buildSecretsInCommitMetadata,
+  buildCoAuthorTrailer,
+  buildVendoredPaths,
+  buildBinaryFile,
+  FAKE_COMMIT_HASH_IN_SUBJECT,
 } from "../fixtures/make-fixture.mjs";
+import { redactSecrets, containsSecretPattern } from "../scripts/lib/redact.mjs";
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TESTS_DIR, "..");
@@ -150,6 +174,11 @@ const NEGATIVE_CASES = [
   // 격리 관측한다 — commits[]의 excluded 건수(1)로 재계산한
   // 기대 traversed(2)와 기재된 traversed(1)가 다르다.
   { n: 17, dir: "17-evidence-coverage-traversed-copied-from-total", mode: "schema", file: "evidence.json", code: "EVIDENCE_INVARIANT_COVERAGE_TRAVERSED_VIOLATION", label: "M-f: coverage.traversed에 total을 그대로 복사(excluded 커밋 반영 누락)" },
+  // 콜드 리뷰 A-7 대응: contentHash 필드는 본문(schemaVersion/sourceRepoHead/
+  // coverage/truncated/commits)이 참이고 다른 모든 불변식을 만족해도,
+  // 기록된 contentHash 한 글자만 실제 재계산값과 다르면 그 자체로 FAIL이어야
+  // 한다 — 재계산·대조 코드가 없던 시절에는 이 케이스가 [PASS]를 냈다.
+  { n: 18, dir: "18-evidence-content-hash-mismatch", mode: "schema", file: "evidence.json", code: "EVIDENCE_CONTENT_HASH_MISMATCH", label: "A-7: contentHash가 본문 재계산값과 1글자 다름(본문 자체는 참)" },
 ];
 
 // AC-3(b): 알 수 없는 SPDX 라이선스는 FAIL이 아니라 명시적 SKIP(경고)으로
@@ -306,9 +335,187 @@ function runStoreKeySmoke() {
       }
     }
     report(ok, "AC-15: 4가지 경로 표기(+레포 하위 디렉터리)가 동일한 <repo-key>로 수렴함");
+
+    // ---- 콜드 리뷰 A-21 대응: store.mjs의 getRepoToplevel이 이제
+    // scripts/lib/git.mjs의 runGit()을 통해서만 git을 호출한다. 정상
+    // 레포에서 실제 `git rev-parse --show-toplevel`과 같은 값을 내는지,
+    // 그리고 비-git 디렉터리에서는 조용히 죽지 않고 명확한 한국어 오류로
+    // throw하는지를 관측한다(예전에는 execFileSync 직접 호출이라
+    // "Command failed: ..." 영어 원문만 노출됐다). ----
+    {
+      const expected = execFileSync("git", ["-C", tmpBase, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+      const actual = getRepoToplevel(tmpBase);
+      report(actual === expected, `A-21: store.mjs의 getRepoToplevel()이 git.mjs의 runGit() 경유로도 실제 git 출력과 동일(실제: '${actual}')`);
+    }
+    {
+      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-a21-nongit-"));
+      try {
+        let threw = null;
+        try {
+          getRepoToplevel(nonGitDir);
+        } catch (e) {
+          threw = e;
+        }
+        const ok2 = threw !== null && /outcome=/.test(threw.message) && /git 레포 최상위 경로를 확인할 수 없습니다/.test(threw.message);
+        if (!ok2) console.log(`    실제: threw=${threw ? threw.message : "없음"}`);
+        report(ok2, "A-21: 비-git 디렉터리에서 getRepoToplevel()이 3분류(outcome) 정보를 담은 한국어 오류로 throw함");
+      } finally {
+        fs.rmSync(nonGitDir, { recursive: true, force: true });
+      }
+    }
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
     fs.rmSync(homeRoot, { recursive: true, force: true });
+  }
+}
+
+// 콜드 리뷰 A-21 대응: §7 정본 git 프리픽스와 (exit code, stderr) 3분류가
+// 예전에는 scripts/lib/git.mjs와 scripts/lib/store.mjs 두 곳에 독립
+// 구현돼 있었다(store.mjs는 자체 GIT_FIXED_PREFIX_ARGS + execFileSync
+// 직접 호출) — git.mjs만 고쳐도(예: diff.renames 고정 추가) store.mjs
+// 사본은 따라가지 않아 4개 게이트가 전부 녹색으로 남았다. store.mjs가
+// 이제 git.mjs의 runGit()을 import해서 쓰도록 고쳤으므로(위 repo-key
+// 스모크가 동작을 확인한다), 이 스모크는 "프로덕션 코드에 git 프로세스를
+// 직접 스폰하는 지점이 scripts/lib/git.mjs 한 곳뿐"이라는 구조적 사실을
+// 텍스트 스캔으로 고정한다 — 새 스크립트가 또 다시 자체 git 호출을
+// 추가하는 회귀를 잡는다. fixtures/make-fixture.mjs·fixtures/golden/
+// compute-sampling-golden.mjs는 "독립 재구현" 의도가 파일 상단에 명시된
+// 별도 사본이므로 이 검사 범위 밖이다(A-21 원문이 그렇게 트리아지했다).
+function runProductionGitCallSiteSmoke() {
+  console.log("[프로덕션 git 호출지 단일화 스모크] A-21 — scripts/*.mjs·scripts/lib/*.mjs 중 git.mjs 자신 외에 직접 git을 스폰하는 곳이 없는지 확인");
+
+  const SPAWN_GIT_RE = /\b(?:execFileSync|spawnSync|execSync|spawn)\s*\(\s*["']git["']/;
+  const targets = [
+    ...listFilesByExt(path.join(REPO_ROOT, "scripts"), ".mjs"),
+    ...listFilesByExt(path.join(REPO_ROOT, "scripts", "lib"), ".mjs"),
+  ];
+  const uniqueTargets = [...new Set(targets)].filter((f) => path.resolve(f) !== path.resolve(REPO_ROOT, "scripts", "lib", "git.mjs"));
+
+  report(uniqueTargets.length > 0, `사전 확인: scripts/·scripts/lib/ 아래 git.mjs를 제외한 .mjs 파일이 최소 1개 존재함(스캔 대상 확보, 실제 ${uniqueTargets.length}개)`);
+
+  const offenders = [];
+  for (const f of uniqueTargets) {
+    const text = fs.readFileSync(f, "utf8");
+    if (SPAWN_GIT_RE.test(text)) offenders.push(path.relative(REPO_ROOT, f));
+  }
+  if (offenders.length > 0) console.log(`    직접 git 스폰 발견: ${offenders.join(", ")}`);
+  report(offenders.length === 0, "A-21: scripts/lib/git.mjs 외에는 프로덕션 코드에 git 프로세스 직접 스폰 지점이 0개(store.mjs가 runGit()을 재사용)");
+}
+
+// ---------------------------------------------------------------------------
+// 콜드 리뷰 A-9/A-10 대응: scripts/lib/redact.mjs가 더 이상 import 0건인
+// 죽은 코드가 아님을 (1) 순수 함수 단위 정탐/오탐 오라클로, (2) 실제
+// collectGitFacts() 산출물에 배선됐는지로 이중 확인한다. 절대 규칙 —
+// 「시크릿이 마스킹된다」와 「40자 커밋 SHA는 마스킹되지 않는다」 둘 다
+// 이 함수 안에서 단언으로 고정한다.
+// ---------------------------------------------------------------------------
+function runRedactSmoke() {
+  console.log("[redact.mjs 마스킹 스모크] A-9/A-10 — 패턴 정탐/오탐 단위 오라클 + collectGitFacts() 실배선 관측");
+
+  // ---- (A) 순수 함수 단위: 정탐(마스킹돼야 함) ----
+  const mustRedact = [
+    ["AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", "aws-access-key"],
+    ["AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws-secret-key"],
+    ["DB_PASSWORD=hunter2horse", "password-field(콜드 리뷰 미탐 사례 — 언더스코어 키)"],
+    ["db_password=hunter2horse", "password-field(콜드 리뷰 미탐 사례 — 선행 밑줄 \\b 미성립)"],
+    ["password: hunter2horse", "password-field(콜드 리뷰 미탐 사례 — 콜론 구분자)"],
+    ['"password": "hunter2horse"', "password-field(콜드 리뷰 미탐 사례 — JSON 따옴표 키/값)"],
+    ["MYSQL_PWD=hunter2horse", "password-field(콜드 리뷰 미탐 사례 — pwd 변형)"],
+    ["-----BEGIN RSA PRIVATE KEY-----\nMIIBOwIBAAJBAKfakekey==", "private-key-block(콜드 리뷰 미탐 사례 — END 마커 없는 잘린 PEM)"],
+    ["-----begin rsa private key-----\nabc\n-----end rsa private key-----", "private-key-block(소문자 헤더)"],
+    ["token=eyJhbGciOiJIUzI1NiJ9.eyA.sig", "jwt(콜드 리뷰 미탐 사례 — payload가 eyA로 시작)"],
+    ["token=eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.", "jwt(콜드 리뷰 미탐 사례 — alg:none 빈 서명)"],
+    ["contact: leaked-person@example.test", "email"],
+  ];
+  for (const [input, label] of mustRedact) {
+    const { text, hits } = redactSecrets(input);
+    report(hits.length > 0, `정탐: "${input}" → 마스킹 히트 발생(${label}, 실제 hits=${JSON.stringify(hits)}, 결과="${text}")`);
+    report(containsSecretPattern(input), `정탐: containsSecretPattern("${input}")===true(${label})`);
+  }
+
+  // ---- (B) 순수 함수 단위: 오탐 금지(절대 규칙 — 40자 커밋 SHA는 시크릿이 아니다) ----
+  const mustNotRedact = [
+    `commit ${FAKE_COMMIT_HASH_IN_SUBJECT} in scripts/lib/git.mjs`,
+    `commit:${FAKE_COMMIT_HASH_IN_SUBJECT}`,
+    FAKE_COMMIT_HASH_IN_SUBJECT,
+    FAKE_COMMIT_HASH_IN_SUBJECT.slice(0, 12), // shortHash 형태
+  ];
+  for (const input of mustNotRedact) {
+    const { text, hits } = redactSecrets(input);
+    const ok = hits.length === 0 && text === input;
+    if (!ok) console.log(`    실제: hits=${JSON.stringify(hits)} text="${text}"`);
+    report(ok, `오탐 금지(절대 규칙): 40자 hex 커밋 SHA "${input}"는 마스킹되지 않고 원문 그대로 보존됨`);
+  }
+
+  // ---- (C) 실배선: collectGitFacts()가 실제로 subject/coAuthors를 마스킹하는지 ----
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-redact-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    buildSecretsInCommitMetadata(dir);
+
+    const { evidence, redactionSummary } = collectGitFacts({
+      repoPath: dir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      maxCommits: 1000,
+    });
+
+    const c = evidence.commits[0];
+
+    report(
+      !c.subject.includes("AKIAIOSFODNN7EXAMPLE") && !c.subject.includes("Sup3rSecret!"),
+      `배선: collect-git-facts.mjs가 원장 subject에서 AWS 키·password= 값을 실제로 마스킹함(실제 subject="${c.subject}")`
+    );
+    report(
+      c.subject.includes("[REDACTED:aws-access-key]") && c.subject.includes("[REDACTED:password-field]"),
+      "배선: subject에 [REDACTED:aws-access-key]·[REDACTED:password-field] 마커가 남음(사용자가 무엇이 가려졌는지 확인 가능)"
+    );
+    report(
+      c.subject.includes(FAKE_COMMIT_HASH_IN_SUBJECT),
+      `절대 규칙(배선 경로에서도 재확인): subject 안의 40자 hex 커밋 SHA 리터럴 "${FAKE_COMMIT_HASH_IN_SUBJECT}"은 마스킹되지 않고 원문 보존됨(실제 subject="${c.subject}")`
+    );
+    report(
+      c.coAuthors.length === 1 &&
+        c.coAuthors[0].includes("[REDACTED:email]") &&
+        !c.coAuthors[0].includes("carol.park@corp.example") &&
+        c.coAuthors[0].includes("Carol Park"),
+      `배선: coAuthors[0]의 동료 이메일이 마스킹되고 이름은 보존됨(실제: ${JSON.stringify(c.coAuthors)})`
+    );
+    report(
+      /^[0-9a-f]{40}$/.test(c.hash) && c.authorEmail === OWNER_EMAIL,
+      `무오탐: 구조화 필드 hash(40자 hex 그대로)·authorEmail(${OWNER_EMAIL} 원문)은 마스킹 대상에서 제외됨(실제: hash=${c.hash}, authorEmail=${c.authorEmail})`
+    );
+    report(
+      redactionSummary.totalHits >= 3 &&
+        redactionSummary.byPattern["aws-access-key"] === 1 &&
+        redactionSummary.byPattern["password-field"] === 1 &&
+        redactionSummary.byPattern["email"] === 1,
+      `배선: collectGitFacts()가 히트 수를 반환함(사용자 보고용, 실제 redactionSummary=${JSON.stringify(redactionSummary)})`
+    );
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+
+  // ---- (D) 회귀 방지: 표준 픽스처(시크릿이 없는 정상 레포)는 마스킹 히트가 0건이어야 한다 ----
+  {
+    const tmpBase2 = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-redact-noop-"));
+    try {
+      const dir = path.join(tmpBase2, "repo");
+      buildMultiAuthor(dir);
+      const { redactionSummary } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        maxCommits: 1000,
+      });
+      report(
+        redactionSummary.totalHits === 0,
+        `무오탐 회귀: 시크릿 없는 표준 픽스처(buildMultiAuthor, 커밋 SHA·저자 이메일 필드만 존재)는 마스킹 히트 0건(실제: ${redactionSummary.totalHits})`
+      );
+    } finally {
+      fs.rmSync(tmpBase2, { recursive: true, force: true });
+    }
   }
 }
 
@@ -422,19 +629,21 @@ function runSamplingUnitSmoke() {
 // ---------------------------------------------------------------------------
 // 임무 2(구현자 — churn 파생식의 수집기 경유 오라클, M-g 최종 보강): 위
 // runSamplingUnitSmoke는 scripts/lib/sampling.mjs의 computeSampling 정렬
-// 축만 직접 검증하고, M-g가 실제로 사는 collect-git-facts.mjs:193
-// `churn: diff.insertions + diff.deletions` **파생식** 자체는 코드 경로에
-// 들어오지 않는다(합성 population을 테스트 안에서 직접 만들어 넘기므로).
-// 이 함수는 fixtures/make-fixture.mjs의 buildChurnKeyDivergence 픽스처(커밋
-// 5개, 수 초 이내)를 통해 **collectGitFacts()를 실제로 호출**해 그 파생식을
-// 비-golden 경로에서 관측한다.
+// 축만 직접 검증하고, M-g가 실제로 사는 scripts/collect-git-facts.mjs의
+// `enriched` map 안 `nonVendoredChurn` **파생식**(vendored/binary/viaMerge
+// 항목을 뺀 insertions+deletions 합) 자체는 코드 경로에 들어오지 않는다
+// (합성 population을 테스트 안에서 직접 만들어 넘기므로). 이 함수는
+// fixtures/make-fixture.mjs의 buildChurnKeyDivergence 픽스처(커밋 5개,
+// 수 초 이내 — vendored 경로를 쓰지 않으므로 이 시나리오에서는
+// nonVendoredChurn === insertions+deletions)를 통해 **collectGitFacts()를
+// 실제로 호출**해 그 파생식을 비-golden 경로에서 관측한다.
 //
 // 기대 선택 집합은 buildChurnKeyDivergence의 declared에 하드코딩된 리터럴
 // (expectedCanonicalSelectedHashes/expectedInsertionsOnlySelectedHashes —
 // fixture 생성 시점의 수기 유도값, computeSampling을 재호출해 유도하지
 // 않음)을 그대로 대조한다.
 function runChurnDerivationOracleSmoke() {
-  console.log("[churn 파생식 오라클(임무 2)] scripts/collect-git-facts.mjs:193 — collectGitFacts() 실제 호출 경로에서 M-g 관측");
+  console.log("[churn 파생식 오라클(임무 2)] scripts/collect-git-facts.mjs의 nonVendoredChurn 파생식 — collectGitFacts() 실제 호출 경로에서 M-g 관측");
 
   const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-churn-derivation-"));
   try {
@@ -482,8 +691,9 @@ function runChurnDerivationOracleSmoke() {
 
     // ---- M-g를 잡는 핵심 절: 실제 선택 집합이 insertions 단독 키였다면
     // 나왔을 하드코딩 기대 집합(seed + recent×3)과 다르다. M-g가
-    // collect-git-facts.mjs:193에 적용되면 실제 선택 집합이 이 대안 집합과
-    // 정확히 같아져 이 단언이 FAIL로 뒤집힌다. ----
+    // (nonVendoredChurn을 insertions 단독으로 축소하는 변이가) collectGitFacts()에
+    // 적용되면 실제 선택 집합이 이 대안 집합과 정확히 같아져 이 단언이
+    // FAIL로 뒤집힌다. ----
     const expectedInsertionsOnlySet = new Set(declared.expectedInsertionsOnlySelectedHashes);
     const differsFromMutant = !setsEqual(actualSelectedHashes, expectedInsertionsOnlySet);
     if (!differsFromMutant) {
@@ -1365,6 +1575,274 @@ function runEvidenceInvariantSmoke() {
       const ok = violations.some((v) => v.code === "EVIDENCE_INVARIANT_AC6_I_VIOLATION");
       if (!ok) console.log(`    실제: ${JSON.stringify(violations)}`);
       report(ok, "M-e 재현: 실제 merge 원장의 커밋 레벨 합계에서 viaMerge 필터를 제거 → (i) FAIL 관측");
+    }
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T2(구현자 — 테스트 공백 메우기, A-13): 수집기가 만든 evidence.json을
+// evidence.schema.json으로 검증하는 테스트가 한 건도 없었다 — 구조 위반
+// 산출물이 4개 게이트를 전부 통과했다(콜드 리뷰 실측: 스키마 밖 필드 추가 +
+// required 필드 삭제를 동시에 한 evidence.json으로도 71/88/11 PASS + lint
+// exit 0). 여기서는 (a) 실제 수집기 출력 여러 형태(머지/리네임/삭제/다중
+// 저자/봇/300커밋 절단)가 evidence.schema.json에 전부 적합함을 확인하고,
+// (b) 그 검사 자체가 실제로 FAIL을 낼 수 있음을 같은 스모크 안에서
+// 증명한다 — required 필드(shortHash) 삭제와 additionalProperties:false
+// 위반(스키마 밖 필드 추가)을 각각 실제로 재현해 validateInstance가 잡는지
+// 관측한다(자기충족 검사 금지 — 절대 규칙).
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_SCHEMA = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, "schemas", "evidence.schema.json"), "utf8")
+);
+
+function runEvidenceSchemaCheckSmoke() {
+  console.log("[evidence.schema.json 구조 검증 스모크(A-13)] 실제 수집기 출력 → 실제 스키마로 구조 검증");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-evidence-schema-"));
+  try {
+    const dirs = {
+      merge: path.join(tmpBase, "merge"),
+      rename: path.join(tmpBase, "rename"),
+      del: path.join(tmpBase, "delete"),
+      multiAuthor: path.join(tmpBase, "multiAuthor"),
+      botCommits: path.join(tmpBase, "botCommits"),
+    };
+    buildMerge(dirs.merge);
+    buildRename(dirs.rename);
+    buildDelete(dirs.del);
+    buildMultiAuthor(dirs.multiAuthor);
+    buildBotCommits(dirs.botCommits);
+
+    const collect = (repoPath, opts = {}) =>
+      collectGitFacts({
+        repoPath,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        mergeIncluded: false,
+        maxCommits: 1000,
+        ...opts,
+      }).evidence;
+
+    // ---- (a) 실제 수집기 출력이 evidence.schema.json에 적합함(무오탐). ----
+    for (const [label, dir, opts] of [
+      ["merge(머지 포함)", dirs.merge, { mergeIncluded: true }],
+      ["rename", dirs.rename, {}],
+      ["delete", dirs.del, {}],
+      ["multiAuthor", dirs.multiAuthor, {}],
+      ["botCommits(절단 없음)", dirs.botCommits, {}],
+      // maxCommits로 실제 절단을 강제해 truncated.reason="budget_commits"
+      // 분기(if/then 스키마 조건부 required 포함)도 구조 검증한다.
+      ["botCommits(max-commits=1 절단)", dirs.botCommits, { maxCommits: 1 }],
+    ]) {
+      const evidence = collect(dir, opts);
+      const warnings = [];
+      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", warnings);
+      if (errors.length > 0) {
+        for (const e of errors) console.log(`    실제 오류(${label}): ${e}`);
+      }
+      for (const w of warnings) console.log(`    [WARN](${label}) ${w}`);
+      report(
+        errors.length === 0 && warnings.length === 0,
+        `실제 수집기 출력(${label})이 evidence.schema.json에 적합함(A-13), 미지원 키워드 경고 0건`
+      );
+    }
+
+    // ---- (b) 판별력 증명: required 필드(shortHash) 삭제 → 실제로 FAIL. ----
+    {
+      const evidence = structuredClone(collect(dirs.multiAuthor, {}));
+      delete evidence.commits[0].shortHash;
+      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
+      const ok = errors.some((e) => e.includes("shortHash"));
+      if (!ok) console.log(`    실제: ${JSON.stringify(errors)}`);
+      report(ok, "판별력 증명: commits[0].shortHash 삭제 → validateInstance가 required 위반을 잡음(A-13)");
+    }
+
+    // ---- (b) 판별력 증명: 스키마 밖 최상위 필드 추가 → 실제로 FAIL. ----
+    {
+      const evidence = structuredClone(collect(dirs.multiAuthor, {}));
+      evidence.strayFieldMutation = "unexpected";
+      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
+      const ok = errors.some((e) => e.includes("strayFieldMutation"));
+      if (!ok) console.log(`    실제: ${JSON.stringify(errors)}`);
+      report(ok, "판별력 증명: 스키마 밖 최상위 필드 추가 → validateInstance가 additionalProperties 위반을 잡음(A-13)");
+    }
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T2(구현자 — 테스트 공백 메우기, A-14): coAuthors 추출 · binary 판정 ·
+// git-facts.json 집계 전체 · vendored 제외 4종에 단언이 0건이었고, 그 용도로
+// 만들어진 픽스처(buildCoAuthorTrailer/buildBinaryFile/buildVendoredPaths)가
+// 어떤 tests에서도 import되지 않은 채 방치돼 있었다(콜드 리뷰 실측: 이
+// 4가지를 동시에 무력화하는 변이 — coAuthors 항상 []·binary 항상 false·
+// buildGitFacts 항상 {}·isVendoredPath 항상 false — 를 적용해도 기존
+// 스모크가 전부 무탐지였다). 아래는 그 픽스처들을 실제로 배선해 4종 각각에
+// 대응하는 단언을 추가한다. 각 단언의 판별력은 이 스모크를 작성하는 과정에서
+// 해당 프로덕션 코드 경로(parseCoAuthorTrailers/binary 판정/isVendoredPath)를
+// 실제로 무력화해 FAIL로 뒤집히는 것을 직접 실행 관측한 뒤 되돌렸다(관측
+// 결과는 이 작업의 notes에 기록했다 — 이 파일 자체에는 실제 프로덕션 코드를
+// 되돌리는 임시 변이를 남기지 않는다. 자기충족 회귀는 아니지만, 대신 아래
+// (c) 절에서 실제 evidence.json을 구조적으로 변이해 그 자리에서 FAIL을
+// 관측하는 절만은 스모크 안에 남긴다).
+// ---------------------------------------------------------------------------
+
+function runCoAuthorsBinaryVendoredGitFactsSmoke() {
+  console.log("[coAuthors·binary·vendored·git-facts 집계 스모크(A-14)] 배선되지 않은 채 방치된 4개 프로덕션 오라클을 실제로 연결");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-a14-"));
+  try {
+    // ---- (a) coAuthors 추출: 트레일러 있는 커밋은 비공허, 없는 커밋은
+    // 공허(빈 배열) — 양방향 모두 확인해야 "항상 []" 같은 퇴화를 잡는다. ----
+    {
+      const dir = path.join(tmpBase, "coAuthorTrailer");
+      const built = buildCoAuthorTrailer(dir);
+      const evidence = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        mergeIncluded: false,
+        maxCommits: 1000,
+      }).evidence;
+
+      const withTrailer = evidence.commits.find((c) => c.subject.startsWith("feat: pair-programmed change"));
+      const withoutTrailer = evidence.commits.find((c) => c.subject.startsWith("chore: solo change"));
+      if (!withTrailer || !withoutTrailer) {
+        console.log(`    실제 subjects: ${JSON.stringify(evidence.commits.map((c) => c.subject))}`);
+      }
+      // 원장의 coAuthors는 A-9 마스킹(collect-git-facts.mjs가 redactSecrets를
+      // subject/coAuthors 직렬화 지점에 배선)을 거치므로, 트레일러 원문의
+      // 이메일이 [REDACTED:email]로 치환된 형태가 기대값이다 — 추출 자체
+      // (git 트레일러 → coAuthors[])와 그 뒤에 걸리는 마스킹을 함께 확인한다.
+      const expectedRedactedTrailer = redactSecrets(built.declared.expectedCoAuthorsTrailer).text;
+      report(
+        !!withTrailer && withTrailer.coAuthors.length === 1 &&
+          withTrailer.coAuthors[0] === expectedRedactedTrailer,
+        "coAuthors: 트레일러가 있는 커밋의 coAuthors[]가 원문(마스킹 적용분 포함)과 완전 일치(A-14)"
+      );
+      report(
+        !!withoutTrailer && Array.isArray(withoutTrailer.coAuthors) && withoutTrailer.coAuthors.length === 0,
+        "coAuthors: 트레일러가 없는 커밋은 coAuthors===[](비공허·공허 양방향 확인, \"항상 []\" 퇴화를 구분함)"
+      );
+    }
+
+    // ---- (b) binary 판정: numstat이 '-'로 보고한 파일은 binary:true +
+    // insertions/deletions===0으로 정규화되고, 이 값이 커밋 레벨 합계에도
+    // 반영돼야 한다(0이 아니라 null/NaN이 새면 JSON 직렬화가 그 사실을
+    // 숨긴다 — insertions/deletions가 정확히 0인지까지 확인). ----
+    {
+      const dir = path.join(tmpBase, "binaryFile");
+      const built = buildBinaryFile(dir);
+      const evidence = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        mergeIncluded: false,
+        maxCommits: 1000,
+      }).evidence;
+
+      const commit = evidence.commits.find((c) => c.files.some((f) => f.path === built.declared.path));
+      const fileEntry = commit && commit.files.find((f) => f.path === built.declared.path);
+      if (!fileEntry) console.log(`    실제 commits: ${JSON.stringify(evidence.commits)}`);
+      report(
+        !!fileEntry && fileEntry.binary === true && fileEntry.insertions === 0 && fileEntry.deletions === 0,
+        "binary: numstat '-' 보고 파일이 files[].binary===true, insertions===0, deletions===0으로 정규화됨(A-14)"
+      );
+      report(
+        !!commit && commit.insertions === 0 && commit.deletions === 0,
+        "binary: 바이너리만 바뀐 커밋의 커밋 레벨 insertions/deletions도 0(binary 파일이 합계를 오염시키지 않음)"
+      );
+    }
+
+    // ---- (c) vendored 제외: git-facts.json 집계(pathModuleMap/
+    // extensionHistogram)에서는 vendored 경로가 빠지지만, evidence.json의
+    // commits[].files[] 원장에서는 빠지지 않는다(수집기 주석의 명시 계약 —
+    // "커밋 자체는 지우지 않는다"). 두 축을 모두 확인해야 "vendored를
+    // 원장에서도 지워버림"(원장 훼손) 같은 반대 방향 회귀도 잡는다. ----
+    {
+      const dir = path.join(tmpBase, "vendoredPaths");
+      const built = buildVendoredPaths(dir);
+      const { evidence, gitFacts } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: true,
+        ref: "HEAD",
+        mergeIncluded: false,
+        maxCommits: 1000,
+      });
+
+      const commit = evidence.commits[0];
+      const ledgerPaths = new Set(commit.files.map((f) => f.path));
+      const allDeclaredPresent = [...built.declared.vendoredPaths, built.declared.nonVendoredControlPath].every(
+        (p) => ledgerPaths.has(p)
+      );
+      if (!allDeclaredPresent) console.log(`    실제 ledgerPaths: ${JSON.stringify([...ledgerPaths])}`);
+      report(
+        allDeclaredPresent,
+        "vendored: evidence.json 원장(files[])에는 vendored 경로도 전량 등재됨(커밋 자체는 지우지 않는다는 계약, A-14)"
+      );
+
+      const vendoredTopDirs = ["node_modules", "dist", "vendor", "migrations"];
+      const noVendoredInPathModuleMap = vendoredTopDirs.every((d) => !(d in gitFacts.pathModuleMap));
+      const controlModulePresent = gitFacts.pathModuleMap.src === 1;
+      if (!noVendoredInPathModuleMap || !controlModulePresent) {
+        console.log(`    실제 pathModuleMap: ${JSON.stringify(gitFacts.pathModuleMap)}`);
+      }
+      report(
+        noVendoredInPathModuleMap && controlModulePresent,
+        "vendored: git-facts.json pathModuleMap에는 vendored 최상위 디렉터리가 없고 비-vendored 디렉터리(src)만 집계됨(A-14)"
+      );
+
+      const noVendoredExt = !(".lock" in gitFacts.extensionHistogram) && gitFacts.extensionHistogram[".js"] === 1;
+      if (!noVendoredExt) console.log(`    실제 extensionHistogram: ${JSON.stringify(gitFacts.extensionHistogram)}`);
+      report(
+        noVendoredExt,
+        "vendored: git-facts.json extensionHistogram에 vendored 파일(.lock 등)의 확장자가 섞이지 않음(비-vendored .js 1건만 집계, A-14)"
+      );
+    }
+
+    // ---- (d) git-facts.json 집계 전체: topChangedFiles·
+    // conventionalCommitTypeDistribution이 실제 커밋 내용을 반영함(botCommits
+    // 픽스처 — owner 2커밋 "chore:"/"feat:", bot 2커밋은 identity 필터로
+    // excluded되어 집계에서 빠져야 한다). ----
+    {
+      const dir = path.join(tmpBase, "botCommitsForGitFacts");
+      buildBotCommits(dir);
+      const { gitFacts } = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        allIdentities: false, // 봇 커밋을 실제로 제외시켜야 아래 분포가 owner 2건만 반영한다
+        ref: "HEAD",
+        mergeIncluded: false,
+        maxCommits: 1000,
+      });
+
+      // dist.chore는 owner의 "chore: init app" 1건만 반영해야 한다 — 만약
+      // 봇의 "chore(deps): bump ..." 커밋(exclusionReason=bot)이 실수로
+      // analyzed에 새면 정규식이 scope를 무시하고 앞의 "chore"만 보므로
+      // 같은 버킷에 합산돼 dist.chore가 2로 뒤집힌다(판별력 있는 축).
+      // dist.ci는 ghactions 봇 커밋("ci: ...")이 정상적으로 제외됐다면
+      // 아예 나타나지 않아야 한다.
+      const dist = gitFacts.conventionalCommitTypeDistribution;
+      const ok = dist.chore === 1 && dist.feat === 1 && dist.ci === undefined;
+      if (!ok) console.log(`    실제 conventionalCommitTypeDistribution: ${JSON.stringify(dist)}`);
+      report(
+        ok,
+        "git-facts 집계: conventionalCommitTypeDistribution이 excluded 커밋(봇 2건)을 빼고 owner 커밋(chore 1·feat 1)만 반영(A-14)"
+      );
+
+      const topPath = gitFacts.topChangedFiles[0] && gitFacts.topChangedFiles[0].path;
+      report(
+        topPath === "app.txt",
+        `git-facts 집계: topChangedFiles[0]이 실제로 가장 많이 바뀐 owner 파일(app.txt)을 가리킴(실제: ${topPath})`
+      );
     }
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
@@ -2326,6 +2804,240 @@ function runGoldenGate() {
   report(nonVacuous.length === 0, "골든: 300커밋 픽스처의 실제 원장에 머지 5건이 (iv) 비공허성을 만족함");
 }
 
+// ---------------------------------------------------------------------------
+// 콜드 리뷰 A-7 대응: contentHash 재계산·대조 + sourceRepoHead 스테일 경고가
+// 실제로 배선됐는지 실제 collectGitFacts() 산출물로 관측한다. "정본만
+// 선언되고 코드는 0곳" 상태였던 계약을 collect-git-facts.mjs(쓰기)·
+// verify-evidence.mjs(검증)·validate-plugin.mjs --schema-check(검증) 세
+// 지점 모두에서 실제로 잡는지 확인한다.
+// ---------------------------------------------------------------------------
+function runContentHashAndStalenessSmoke() {
+  console.log("[contentHash·스테일 경고 스모크] A-7 — 재계산·대조가 collect-git-facts/verify-evidence/schema-check 세 지점 모두에 배선됐는지 관측");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-contenthash-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    buildMultiAuthor(dir);
+
+    const collect = () =>
+      collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        ref: "HEAD",
+        maxCommits: 1000,
+      }).evidence;
+
+    const evidence = collect();
+
+    // ---- 결정성: generatedAt을 해시 대상에서 제외했으므로, 같은 레포·같은
+    // 옵션의 두 번째 실행도 동일한 contentHash를 낸다. ----
+    {
+      const evidence2 = collect();
+      report(
+        evidence.contentHash === evidence2.contentHash,
+        "A-7: 같은 레포·같은 옵션의 두 번째 실행도 동일한 contentHash를 냄(generatedAt 제외 결정성)"
+      );
+      report(
+        computeEvidenceContentHash(evidence) === evidence.contentHash,
+        "A-7: collect-git-facts.mjs가 기록한 contentHash가 scripts/lib/content-hash.mjs 재계산값과 일치(쓰기·검증 동일 구현 공유)"
+      );
+    }
+
+    // ---- 무오탐: 실제 수집기 출력은 재계산·대조를 통과한다. ----
+    {
+      const v = checkContentHashInvariant(evidence);
+      report(v.length === 0, "무오탐: 실제 수집기 출력의 contentHash가 재계산값과 일치(checkContentHashInvariant 위반 0건)");
+    }
+
+    // ---- FAIL 관측(순수 함수 단위): 본문 한 글자만 바꾸고 contentHash는
+    // 그대로 두면 즉시 FAIL. ----
+    {
+      const mutated = structuredClone(evidence);
+      mutated.coverage.total = mutated.coverage.total + 1; // 본문만 변조, contentHash는 그대로
+      const v = checkContentHashInvariant(mutated);
+      const ok = v.length === 1 && v[0].code === "EVIDENCE_CONTENT_HASH_MISMATCH";
+      if (!ok) console.log(`    실제: ${JSON.stringify(v)}`);
+      report(ok, "FAIL 관측: coverage.total만 변조하고 contentHash는 그대로 두면 EVIDENCE_CONTENT_HASH_MISMATCH(checkContentHashInvariant)");
+    }
+
+    // ---- FAIL 관측(checkEvidenceInvariants 집계 — --schema-check evidence
+    // 경로의 정본과 동일 함수). ----
+    {
+      const mutated = structuredClone(evidence);
+      mutated.contentHash = mutated.contentHash.slice(0, -1) + (mutated.contentHash.endsWith("0") ? "1" : "0");
+      const v = checkEvidenceInvariants(mutated);
+      const ok = v.some((x) => x.code === "EVIDENCE_CONTENT_HASH_MISMATCH");
+      if (!ok) console.log(`    실제: ${JSON.stringify(v)}`);
+      report(ok, "FAIL 관측: checkEvidenceInvariants(--schema-check evidence 경로가 실제로 호출하는 정본 집계)도 contentHash 1글자 변조를 잡음");
+    }
+
+    // ---- FAIL 관측(verify-evidence.mjs 오케스트레이션 — hasFailures에
+    // 포함돼 exit 1로 이어지는지). ----
+    {
+      const mutated = structuredClone(evidence);
+      mutated.commits[0].subject = mutated.commits[0].subject + " (A-7 변조 관측)";
+      const r = verifyEvidence({
+        repoPath: dir,
+        evidence: mutated,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: {},
+      });
+      const ok =
+        r.status === "FAIL" &&
+        r.ok === false &&
+        r.contentHashViolations.length === 1 &&
+        r.contentHashViolations[0].code === "EVIDENCE_CONTENT_HASH_MISMATCH" &&
+        r.summary.contentHashViolations === 1 &&
+        exitCodeForReport(r) === 1;
+      if (!ok) console.log(`    실제: status=${r.status} ok=${r.ok} contentHashViolations=${JSON.stringify(r.contentHashViolations)} exit=${exitCodeForReport(r)}`);
+      report(ok, "FAIL 관측: verify-evidence.mjs의 verifyEvidence()도 본문 변조(contentHash 불일치)를 FAIL로 집계(exit 1)");
+    }
+
+    // ---- sourceRepoHead 스테일 경고: 수집 직후에는 stale===false(무오탐). ----
+    {
+      const r = verifyEvidence({
+        repoPath: dir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: {},
+      });
+      const ok = r.sourceRepoHeadStaleness.checked === true && r.sourceRepoHeadStaleness.stale === false && r.status === "PASS";
+      if (!ok) console.log(`    실제: ${JSON.stringify(r.sourceRepoHeadStaleness)}, status=${r.status}`);
+      report(ok, "무오탐: 수집 직후 재검증하면 sourceRepoHeadStaleness.stale===false(레포에 새 커밋 없음), status=PASS");
+    }
+
+    // ---- sourceRepoHead 스테일 경고: 레포에 새 커밋을 추가한 뒤 옛
+    // evidence.json으로 재검증하면 stale===true이지만 FAIL은 아니다(정보성
+    // 경고 — B-1의 fail-open과 정반대 방향 회귀도 만들지 않는다: "경고
+    // 하나 늘었다고 exit 1로 만들지 않는다"). ----
+    {
+      crWriteFile(dir, "after-collection.txt", "new commit after evidence collection\n");
+      crGit(dir, ["add", "after-collection.txt"]);
+      crGit(dir, ["commit", "-q", "-m", "chore: commit after evidence collection"], {
+        GIT_AUTHOR_NAME: "owner", GIT_AUTHOR_EMAIL: OWNER_EMAIL, GIT_AUTHOR_DATE: "2030-01-01T00:00:00",
+        GIT_COMMITTER_NAME: "owner", GIT_COMMITTER_EMAIL: OWNER_EMAIL, GIT_COMMITTER_DATE: "2030-01-01T00:00:00",
+      });
+
+      const currentHead = runGit(dir, ["rev-parse", "HEAD"]).stdout.trim();
+      const r = verifyEvidence({
+        repoPath: dir,
+        evidence, // 아직 재수집 전 — sourceRepoHead가 옛 HEAD를 가리킨다
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: {},
+      });
+      const ok =
+        r.sourceRepoHeadStaleness.checked === true &&
+        r.sourceRepoHeadStaleness.stale === true &&
+        r.sourceRepoHeadStaleness.currentHead === currentHead &&
+        r.sourceRepoHeadStaleness.sourceRepoHead === evidence.sourceRepoHead &&
+        currentHead !== evidence.sourceRepoHead &&
+        r.status === "PASS"; // 스테일은 FAIL이 아니다 — status에 영향 없음(정보성 경고)
+      if (!ok) console.log(`    실제: ${JSON.stringify(r.sourceRepoHeadStaleness)}, status=${r.status}, currentHead=${currentHead}`);
+      report(
+        ok,
+        "경고 관측(FAIL 아님): 레포에 새 커밋을 추가한 뒤 옛 evidence.json으로 재검증하면 " +
+        "sourceRepoHeadStaleness.stale===true이지만 status는 여전히 PASS(정보성 경고, AC-22)"
+      );
+    }
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 콜드 리뷰 A-19 대응: 정본 samplingMethod 리터럴 드리프트 가드가 실제로
+// 드리프트를 잡는지, 그리고 이 레포의 현재 네 곳(spec.md·스키마·
+// sampling.mjs·골든 스크립트)이 지금 실제로 동기화돼 있는지를 관측한다.
+// 이전에는 이 대조(assertNoLiteralDrift)가 fixtures/golden/compute-
+// sampling-golden.mjs 안에만 있었고 그 스크립트를 호출하는 게이트가 없어
+// 정본(스키마)만 고쳐도 4개 게이트가 전부 녹색으로 남았다 — 이제는
+// scripts/validate-plugin.mjs의 기본 검사(npm run lint)가 매 실행 이
+// 함수를 호출한다(항진명제 없음, 위 npm run lint 실측이 그 증거다).
+// ---------------------------------------------------------------------------
+function runSamplingLiteralDriftSmoke() {
+  console.log("[samplingMethod 리터럴 드리프트 스모크] A-19 — spec.md·스키마·sampling.mjs·골든 스크립트 네 곳 동기화 + 드리프트 실제 탐지 관측");
+
+  // ---- 무오탐: 이 레포의 현재 네 곳은 실제로 동기화돼 있다(npm run lint가
+  // 통과한다는 사실과 동일한 검사를 여기서 직접 재확인한다). ----
+  {
+    const result = checkSamplingMethodLiteralDrift(REPO_ROOT);
+    if (!result.ok) {
+      console.log(`    missing=${JSON.stringify(result.missing)} mismatches=${JSON.stringify(result.mismatches)}`);
+    }
+    report(result.ok, "무오탐: 이 레포의 spec.md·스키마·sampling.mjs·골든 스크립트 리터럴 네 곳이 현재 완전히 동기화됨");
+  }
+
+  // ---- FAIL 관측: 스키마 description의 리터럴만 한 글자 바꾼 임시 사본을
+  // 만들어(실제 레포 파일은 건드리지 않는다), 골든 스크립트·spec.md는
+  // 원문 그대로 둔 채 대조하면 드리프트가 잡히는지 확인한다. sampling.mjs
+  // 상수는 실제 import(라이브 코드)라서 파일 단위로 몰래 바꿔치기할 수
+  // 없으므로, "정본(스키마)만 고치고 사본을 잊는" 콜드 리뷰 A-19의 정확한
+  // 실패 시나리오(스키마만 드리프트, 나머지 세 곳은 실제 값)를 그대로
+  // 재현한다. ----
+  {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sampling-drift-"));
+    try {
+      fs.mkdirSync(path.join(tmpRoot, "schemas"), { recursive: true });
+      fs.mkdirSync(path.join(tmpRoot, "fixtures", "golden"), { recursive: true });
+      fs.mkdirSync(path.join(tmpRoot, "docs", "harness", "devcareer-prep-plugin"), { recursive: true });
+
+      const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "evidence.schema.json"), "utf8"));
+      const desc = schema.$defs.coverage.properties.samplingMethod.description;
+      // 정본 리터럴의 마지막 글자 하나만 바꾼다(예: "bucket" → "buckeu") —
+      // 사람이 실수로 오타를 낸 것과 같은 형태의 드리프트.
+      schema.$defs.coverage.properties.samplingMethod.description = desc.replace(
+        "carry-to-next-bucket`", "carry-to-next-buckeu`"
+      );
+      report(
+        schema.$defs.coverage.properties.samplingMethod.description !== desc,
+        "사전 확인: 임시 스키마 사본의 samplingMethod description이 실제로 1글자 변조됨(재현 전제 성립)"
+      );
+      fs.writeFileSync(path.join(tmpRoot, "schemas", "evidence.schema.json"), JSON.stringify(schema, null, 2), "utf8");
+
+      // 골든 스크립트·spec.md는 실제 레포 파일을 그대로 복사한다(원본 값 유지).
+      fs.copyFileSync(
+        path.join(REPO_ROOT, "fixtures", "golden", "compute-sampling-golden.mjs"),
+        path.join(tmpRoot, "fixtures", "golden", "compute-sampling-golden.mjs")
+      );
+      fs.copyFileSync(
+        path.join(REPO_ROOT, "docs", "harness", "devcareer-prep-plugin", "spec.md"),
+        path.join(tmpRoot, "docs", "harness", "devcareer-prep-plugin", "spec.md")
+      );
+
+      const result = checkSamplingMethodLiteralDrift(tmpRoot);
+      const ok = result.ok === false && result.mismatches.includes("schemas/evidence.schema.json");
+      if (!ok) console.log(`    실제: ok=${result.ok} mismatches=${JSON.stringify(result.mismatches)} missing=${JSON.stringify(result.missing)}`);
+      report(
+        ok,
+        "FAIL 관측: 스키마 description의 정본 리터럴만 1글자 바꾸면(sampling.mjs·골든 스크립트·spec.md는 그대로) " +
+        "checkSamplingMethodLiteralDrift가 'schemas/evidence.schema.json'을 드리프트로 지목함"
+      );
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  }
+
+  // ---- FAIL 관측(missing): 네 파일 중 하나가 아예 없으면(예: 리터럴이
+  // 통째로 삭제되거나 파일이 옮겨짐) "조용히 건너뛰지" 않고 missing으로
+  // 보고한다. ----
+  {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sampling-missing-"));
+    try {
+      // schemas/, fixtures/golden/, docs/ 어느 것도 만들지 않는다 — 완전히 빈 루트.
+      const result = checkSamplingMethodLiteralDrift(tmpRoot);
+      const ok =
+        result.ok === false &&
+        result.missing.includes("schemas/evidence.schema.json") &&
+        result.missing.includes("fixtures/golden/compute-sampling-golden.mjs") &&
+        result.missing.includes("docs/harness/devcareer-prep-plugin/spec.md");
+      if (!ok) console.log(`    실제: ${JSON.stringify(result)}`);
+      report(ok, "FAIL 관측(missing): 스키마·골든 스크립트·spec.md 세 파일이 모두 없으면(빈 루트) 조용히 통과하지 않고 missing으로 보고");
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  }
+}
+
 async function runDefaultSmoke() {
   console.log("[기본 스모크] 정상 레포(레포 루트)에서 validate-plugin이 exit 0을 내는지 확인");
   const result = await runValidation({ root: REPO_ROOT, explicitRoot: false });
@@ -2413,22 +3125,20 @@ async function runSectionAsync(label, fn) {
   }
 }
 
-async function main() {
-  const negative = process.argv.includes("--negative");
-  const golden = process.argv.includes("--golden");
-
-  // --golden은 나머지 모드와 배타적으로 분리한다 — 픽스처 생성이 최초
-  // 1회 ~1분 걸려 기본/negative 스모크와 섞으면 그 두 모드가 항상
-  // 느려진다(임무 지침 D: "스모크 기본 모드가 과도하게 느려지면 --golden
-  // 같은 별도 플래그로 분리"). package.json의 `test` 스크립트가 기본
-  // 스모크 실행 뒤 이 플래그로 다시 호출해 npm test 경로에서는 항상
-  // 함께 돈다.
-  if (golden) {
-    runSection("골든 게이트", runGoldenGate);
-    console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
-    process.exit(failed === 0 ? 0 : 1);
-  }
-
+// A-36 대응: 아래 19개 runSection 호출("공통 섹션")은 이전에는 기본 모드와
+// --negative 모드 양쪽에서 매번 다시 돌았다 — 동일 픽스처를 다시 만들고
+// 동일 172개 단언을 문자열 단위로 그대로 반복해(실측: 두 실행의 PASS 라벨
+// 교집합 172건) `npm test`의 실행 시간을 불필요하게 늘리고, 실패 시 같은
+// 오류가 두 번 출력됐다. 이제 공통 섹션은 **기본 모드(플래그 없음)에서만**
+// 돈다 — package.json의 `test` 스크립트가 플래그 없이 한 번 호출하므로
+// `npm test` 경로에서 공통 섹션은 여전히 정확히 1회 실행되고 그 172개
+// 단언은 하나도 사라지지 않는다(negative 전용 19개 단언은 negative 모드에서,
+// 골든 11개 단언은 golden 모드에서 각각 그대로 실행된다 — 세 모드를 각각
+// 단독으로 돌려도 그 모드 고유의 검사는 전부 유지된다). "python run-smoke.mjs
+// --negative"를 단독으로 돌려 negative 픽스처 하나만 빠르게 확인하려는
+// 개발자 워크플로도 이 변경으로 실제로 빨라진다(공통 섹션의 git 서브프로세스
+// 수백 개를 더 이상 다시 스폰하지 않는다).
+function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
@@ -2445,12 +3155,40 @@ async function main() {
   runSection("M: diff.renames 고정 회귀", runDiffRenamesFixedSmoke);
   runSection("M: --ref all의 refs/stash 유입 회귀", runRefAllExcludesStashSmoke);
   runSection("M: churn 버킷 vendored/lockfile 오염 회귀", runChurnVendoredExclusionSmoke);
+  runSection("contentHash·스테일 경고 스모크(A-7)", runContentHashAndStalenessSmoke);
+  runSection("samplingMethod 리터럴 드리프트 스모크(A-19)", runSamplingLiteralDriftSmoke);
+  runSection("프로덕션 git 호출지 단일화 스모크(A-21)", runProductionGitCallSiteSmoke);
+  runSection("redact.mjs 마스킹 스모크(A-9/A-10)", runRedactSmoke);
+  runSection("evidence.schema.json 구조 검증 스모크(A-13)", runEvidenceSchemaCheckSmoke);
+  runSection("coAuthors·binary·vendored·git-facts 집계 스모크(A-14)", runCoAuthorsBinaryVendoredGitFactsSmoke);
+}
+
+async function main() {
+  const negative = process.argv.includes("--negative");
+  const golden = process.argv.includes("--golden");
+
+  // --golden은 나머지 모드와 배타적으로 분리한다 — 픽스처 생성이 최초
+  // 1회 ~1분 걸려 기본/negative 스모크와 섞으면 그 두 모드가 항상
+  // 느려진다(임무 지침 D: "스모크 기본 모드가 과도하게 느려지면 --golden
+  // 같은 별도 플래그로 분리"). package.json의 `test` 스크립트가 기본
+  // 스모크 실행 뒤 이 플래그로 다시 호출해 npm test 경로에서는 항상
+  // 함께 돈다.
+  if (golden) {
+    runSection("골든 게이트", runGoldenGate);
+    console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
+    process.exit(failed === 0 ? 0 : 1);
+  }
 
   if (negative) {
+    // A-36: 공통 섹션은 기본 모드가 이미 실행하므로 여기서는 재실행하지
+    // 않는다 — negative 스위트 고유의 단언만 돈다.
     await runSectionAsync("negative 스위트", runNegativeSuite);
-  } else {
-    await runSectionAsync("기본 스모크", runDefaultSmoke);
+    console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
+    process.exit(failed === 0 ? 0 : 1);
   }
+
+  runCommonSections();
+  await runSectionAsync("기본 스모크", runDefaultSmoke);
 
   console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
   process.exit(failed === 0 ? 0 : 1);

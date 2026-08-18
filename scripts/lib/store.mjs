@@ -27,17 +27,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { runGit } from "./git.mjs";
 
 /** §9: 디렉터리 이름 상수(정본). 저장 루트 값이 아니라 이름 하나다. */
 export const STATE_DIR_NAME = ".devcareer";
 
-/** §7: 모든 git 호출에 강제하는 고정 프리픽스 인자 배열. */
-const GIT_FIXED_PREFIX_ARGS = [
-  "--no-pager",
-  "-c", "core.quotepath=false",
-  "-c", "i18n.logOutputEncoding=UTF-8",
-];
+// 콜드 리뷰 A-21 대응: §7 고정 프리픽스와 (exit code, stderr) 3분류가
+// 예전에는 이 파일에 별도로(GIT_FIXED_PREFIX_ARGS 재정의 + execFileSync
+// 직접 호출) 존재해, git.mjs가 §7 정본으로 diff.renames 등을 추가해도
+// 이 사본은 따라가지 않았다(실측: git.mjs만 고쳐도 4개 게이트 전부
+// 녹색). scripts/lib/git.mjs의 runGit()을 그대로 import해서 쓰면 프리픽스·
+// 3분류 둘 다 자동으로 단일 정본을 공유한다(circular import 없음 —
+// git.mjs는 node:child_process 하나만 의존한다).
+//
+// 아울러 execFileSync는 non-zero exit에서 예외를 던지므로 비-git 디렉터리를
+// `--repo`로 주면 "fatal: not a git repository" 영어 원문이 그대로 노출되고
+// 그 위에 "[오류] 수집 실패: Command failed: git -C ..."가 다시 덧씌워져
+// 같은 메시지가 두 번 노출됐다 — runGit + classifyGitOutcome 경로로 바꾸면
+// 이 파일이 실패 사유(outcome)를 스스로 분류해 명확한 한국어 메시지로
+// 감쌀 수 있다.
 
 /**
  * §6 step 1 — 입력 정본화. 사용자가 넘긴 문자열이 아니라
@@ -50,12 +58,14 @@ const GIT_FIXED_PREFIX_ARGS = [
  *   정규화 전)
  */
 export function getRepoToplevel(repoPathInput) {
-  const out = execFileSync(
-    "git",
-    ["-C", repoPathInput, ...GIT_FIXED_PREFIX_ARGS, "rev-parse", "--show-toplevel"],
-    { encoding: "utf8" }
-  );
-  return out.trim();
+  const r = runGit(repoPathInput, ["rev-parse", "--show-toplevel"]);
+  if (r.outcome !== "ok") {
+    throw new Error(
+      `git 레포 최상위 경로를 확인할 수 없습니다(경로=${repoPathInput}, outcome=${r.outcome}): ` +
+      `${(r.stderr ?? "").trim() || "(stderr 없음)"}`
+    );
+  }
+  return r.stdout.trim();
 }
 
 /**

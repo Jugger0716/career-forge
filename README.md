@@ -6,12 +6,18 @@ Git 커밋 히스토리를 **결정적 스크립트**로 수집해 만든 "증�
 사실 원천으로 삼고, 그 위에 경력 기술서 → 기술 지식맵 → 학습 갭 리포트를 단방향 계층으로 쌓는
 Claude Code 플러그인이다. 모든 인용의 실재성은 LLM이 아니라 스크립트가 검증한다.
 
-> **현재 상태: 구현 진행 중 (Phase 0-A — 레포 기반 확정).**
-> 이 README가 기술하는 명령·검증 하네스는 12단계 구현 계획의 목표 상태다.
-> 지금 이 시점에는 `.claude-plugin/plugin.json` · `.claude-plugin/marketplace.json` ·
-> `package.json` · `LICENSE` · `.gitattributes` · `.gitignore` · 이 README만 존재하며,
-> 스키마·수집 스크립트·검증 스크립트·스킬은 아직 구현되지 않았다. 아래 "명령" 절의
-> 상태 표시를 반드시 확인할 것.
+> **현재 상태: 구현 진행 중 (Phase 0 — 결정적 하네스 완료, 스킬 계층 착수 전).**
+> **된 것**: L0 수집기(`scripts/collect-git-facts.mjs`)·인용 검증기
+> (`scripts/verify-evidence.mjs`)·Layer 1 기계 검증(`scripts/validate-plugin.mjs`)과
+> 7개 JSON Schema(`schemas/`)가 모두 구현·배선돼 있고, `npm run lint`와 `npm test`가
+> 로컬에서 그대로 통과한다(아래 "빠른 시작"의 명령을 그대로 복사해 실행하면 재현된다).
+> **안 된 것**: 사용자가 `/devcareer-prep:career-from-git` 같은 슬래시 명령으로 부르는
+> *skills/* 계층(LLM이 위 스크립트를 호출해 실제로 경력 기술서·지식맵·갭 리포트를
+> 만드는 부분)과 그 결과를 마크다운으로 렌더링하는 *scripts/render-markdown.mjs*는
+> 아직 이 레포에 없다(아래 표에서 이탤릭으로 표시한 경로는 아직 존재하지 않는
+> 계획된 경로다). 즉 지금은 **CLI 도구 3개 + 검증 하네스는 있고, 그걸 사용자
+> 대화형으로 감싸는 스킬은 없는** 상태다. 아래 "지금 무엇이 되고 무엇이 안 되는가"에
+> 파일 단위로 정리했다.
 
 ## 설치
 
@@ -51,10 +57,101 @@ claude --plugin-dir /path/to/career-forge
 (`~/.devcareer/<repo-key>/`)이며, 분석 대상 레포 내부에 저장하려면 명시적 동의가 필요하고
 이 경우 해당 레포의 `.gitignore`에 `.devcareer/` 추가를 제안한다.
 
-## 명령
+## 지금 무엇이 되고 무엇이 안 되는가
+
+| 영역 | 상태 | 비고 |
+|---|---|---|
+| `schemas/*.json` (evidence·career·knowledge-map·gap-report·plan·state·config, 7개) | **구현됨** | 자작 검증기(`scripts/lib/schema-validate.mjs`)가 required/type/additionalProperties/enum/if-then 등을 강제한다. |
+| `scripts/collect-git-facts.mjs` (L0 결정적 수집기) | **구현됨** | git 히스토리에서 `evidence.json`·`git-facts.json`을 만든다. LLM 호출 0회. |
+| `scripts/verify-evidence.mjs` (인용 무결성 검증기) | **구현됨** | L1+ 산출물의 모든 인용을 원장·git과 대조해 검증한다. LLM 호출 0회. |
+| `scripts/validate-plugin.mjs` (Layer 1 기계 검증 하네스) | **구현됨** | `npm run lint`가 호출한다 — plugin.json 필드, 스키마 파싱, 문서 내 상대경로 실재성, 명명·라이선스 일관성, 워킹 트리 CR 가드. |
+| `tests/run-smoke.mjs` (스모크·negative·골든 테스트) | **구현됨** | `npm test`가 기본 → `--negative` → `--golden` 순서로 호출한다. |
+| *scripts/render-markdown.mjs* (JSON → 사용자 대면 `.md` 렌더러) | **미구현** | 아키텍처가 전제하는 "정본은 JSON, 마크다운은 렌더 뷰"의 렌더 단계 자체가 아직 없다. |
+| *skills/career-from-git/*, *skills/skill-gap/*, *skills/prep-plan/* (슬래시 명령) | **미구현** | 위 세 스크립트를 호출해 `career.json`/`knowledge-map.json`/`gap-report.json`을 실제로 만드는 LLM 오케스트레이션 계층. 디렉터리 자체가 이 레포에 없다. |
+| *references/sources.json*, *examples/* | **미구현** | 스킬 계층과 함께 만들어질 예정. |
+
+요약하면: **"git 히스토리를 결정적으로 수집하고, 그 수집 결과를 인용하는 산출물의
+진위를 스크립트로 검증한다"는 이 프로젝트의 핵심 계약은 이미 코드로 존재하고 테스트로
+고정돼 있다.** 아직 없는 것은 그 계약 위에서 실제로 산문(경력 기술서 등)을 생성하는
+대화형 스킬이다 — 지금은 아래 "빠른 시작"처럼 세 스크립트를 CLI로 직접 호출해야 한다.
+
+## 빠른 시작 — CLI를 직접 호출하기
+
+아래 3단계는 이 저장소 자체(`career-forge`)를 대상으로 그대로 실행해서 검증한 명령이다
+(플레이스홀더 없음 — `<repo>`만 분석 대상 레포의 로컬 경로로 바꾸면 된다).
+
+**1) L0 수집 — `evidence.json` 만들기**
+
+```bash
+node scripts/collect-git-facts.mjs \
+  --repo <repo> \
+  --identity "$(git -C <repo> log -1 --format=%ae)" \
+  --max-commits 50 \
+  --out ./out
+```
+
+전체 CLI 플래그(`node scripts/collect-git-facts.mjs`를 인자 없이 실행하면 그대로 출력된다):
+
+```
+node scripts/collect-git-facts.mjs --repo <path> [--ref HEAD|all]
+  [--identity <email>]... [--all-identities] [--merge-included]
+  [--since <date>] [--until <date>] [--max-commits <n>]
+  [--no-bots-exclude] [--no-vendored-exclude] [--out <dir>]
+  [--storage home|repo] [--repo-opt-in]
+```
+
+- `--identity`는 반복 지정 가능하고 최소 1개 필요하다(또는 탐색·테스트 전용
+  `--all-identities` — §5 "저자 정체성은 추측하지 않는다" 게이트를 대신하지 않으므로
+  프로덕션 경로에서는 쓰지 않는다). 실제 값은 `git -C <repo> shortlog -sne`로 먼저
+  확인한다.
+- `--since`/`--until`은 `YYYY-MM-DD` 형식만 받는다(git 상대 날짜 표기는 지원하지 않는다
+  — 조용한 파싱 실패를 막기 위한 설계).
+- `--max-commits`(기본 1000)를 넘으면 결정적 샘플링으로 절단하고 `truncated`/`coverage`에
+  그 사실을 명시한다(아래 "한계 고지" 참조).
+- `--out`을 생략하면 `scripts/lib/store.mjs`가 `~/.devcareer/<repo-key>/`(또는
+  `--storage repo --repo-opt-in` 지정 시 `<repo>/.devcareer/`)를 저장 루트로 해석한다.
+
+**2) L1+ 산출물의 인용을 검증하기**
+
+아직 스킬 계층이 없으므로 `career.json` 등은 직접(또는 다른 도구로) 만들어야 한다.
+`nodes[].evidence[]`에 1단계 원장의 `commits[].id`(예: `commit:<40자 hex>`)만 인용하고
+해시를 직접 쓰지 않으면 아래 명령으로 검증된다:
+
+```bash
+node scripts/verify-evidence.mjs \
+  --repo <repo> \
+  --evidence ./out/evidence.json \
+  --identity "$(git -C <repo> log -1 --format=%ae)" \
+  --artifact career=./out/career.json
+```
+
+```
+node scripts/verify-evidence.mjs --repo <path> --evidence <evidence.json>
+  [--config <config.json>] [--identity <email>]...
+  (--artifact <layer>=<path>)... | --out-dir <dir> [--out <path>]
+```
+
+`--artifact <layer>=<path>`(layer는 `career`|`knowledge-map`|`gap-report`|`plan`)를 반복
+지정하거나, `<dir>`에서 4종 파일명을 자동 탐색하는 `--out-dir <dir>`을 쓴다. 종료 코드는
+`0`=PASS, `1`=FAIL(근거 없는 인용 발견), `2`=INCONCLUSIVE(도구·레포 오류로 일부를
+검증하지 못함 — "성공"이 아니므로 0을 반환하지 않는다).
+
+**3) 산출물 하나를 스키마로 직접 검증하기(선택)**
+
+```bash
+node scripts/validate-plugin.mjs --schema-check ./out/career.json
+```
+
+파일명(확장자 제외)으로 `schemas/<layer>.schema.json`을 정해 required/type/
+additionalProperties 등을 강제한다. 레포 전체를 검사하려면 인자 없이
+`node scripts/validate-plugin.mjs`(=`npm run lint`)를 실행한다.
+
+## 명령 (슬래시 명령 — 미구현)
 
 정본 슬래시 명령 접두사는 `.claude-plugin/plugin.json`의 `name`(`devcareer-prep`)에서
-자동 파생되므로 항상 `/devcareer-prep:`이다.
+자동 파생되므로 항상 `/devcareer-prep:`이다. 아래 네 명령은 모두 **아직 구현되지 않았다**
+(*skills/* 디렉터리 자체가 이 레포에 없다) — 지금 바로 쓸 수 있는 것은 위 "빠른 시작"의
+CLI 3종이다.
 
 | 명령 | 범위 | 상태 |
 |---|---|---|
@@ -62,6 +159,16 @@ claude --plugin-dir /path/to/career-forge
 | `/devcareer-prep:skill-gap` | P0 (MVP, 자가진단 입력만) | 계획됨 — 미구현 |
 | `/devcareer-prep:prep-plan` | Phase 3 | 계획됨 — 미구현 |
 | `/devcareer-prep:grade` | P2 (MVP 제외) | 범위 밖 |
+
+## 개발
+
+```bash
+npm run lint   # scripts/validate-plugin.mjs — Layer 1 기계 검증(레포 루트 전체)
+npm test       # tests/run-smoke.mjs 기본 → --negative → --golden 순서로 3회 실행
+```
+
+의존성은 0이다(`package.json`의 `dependencies`/`devDependencies`가 비어 있다) — Node
+내장 모듈(`node:fs`/`node:child_process`/`node:crypto` 등)만 쓴다.
 
 ## 한계 고지 — 이 플러그인이 보증하지 않는 것
 
@@ -73,16 +180,23 @@ claude --plugin-dir /path/to/career-forge
 - **'근거 없는 주장' 탐지는 100%가 아니다.** 가짜 커밋 해시·타 저자 커밋 인용·마스킹 우회 같은
   기계적으로 결정 가능한 오염은 100% 탐지를 목표로 하지만, LLM이 판정하는 "이 서술이 정말
   근거 없는 과장인가"는 반복 실행 기준 80% 이상 탐지율만 보증한다.
-- **시크릿/PII 마스킹은 알려진 패턴 기반이며 완전하지 않다.** AWS 키·private key 블록·JWT·
-  이메일 등 알려진 패턴을 마스킹하지만, 이 목록에 없는 형태의 민감정보까지 잡아내지는 못한다.
+- **시크릿/PII 마스킹은 커밋 제목(`subject`)·co-author 트레일러(`coAuthors`)에 적용되며,
+  알려진 패턴 기반이라 완전하지 않다.** 원장(`evidence.json`)을 쓰는 시점에 AWS 키·
+  private key 블록·JWT·`password=`류 필드·이메일 패턴을 `[REDACTED:<name>]`로 치환하지만,
+  이 목록에 없는 형태의 민감정보까지 잡아내지는 못한다. 커밋 해시(`hash`/`shortHash`,
+  제목 안에 인용된 40자 hex 문자열 포함)는 마스킹 대상에서 제외된다 — 이 값이 이 도구
+  전체의 인용 앵커이기 때문이다. **코드 원문(diff) 인용 경로는 P0에 아직 존재하지 않으므로
+  이 마스킹의 적용 범위 밖이다** — `config.json`의 `snippetQuoting`은 그 경로를 위한
+  자리표시자 플래그이며, 구현되면 같은 마스킹 모듈(`scripts/lib/redact.mjs`)을 재사용할
+  계획이다.
 - **코드 원문 인용은 기본 비활성이다.** 옵트인하지 않으면 경로·해시·요약만 인용하며 diff 원문은
   전송되지 않는다.
 - **채점(`/devcareer-prep:grade`), 시스템 설계 문제 생성, 면접 꼬리질문, 여러 레포 통합 분석,
   음성 모의면접, 이력서 PDF 생성, Claude 외 LLM 지원은 MVP 범위 밖이다.**
 - **저자 정체성은 추측하지 않는다.** 첫 실행 시 `git shortlog -sne` 결과에서 사용자가 직접
   자기 identity를 선택해야 하며, 이 플러그인이 임의로 "이 커밋은 당신 것"이라고 판단하지 않는다.
-- 위 "명령" 절에 표시했듯, 이 README가 기술하는 기능 대부분은 **아직 구현되지 않았다** (Phase 0-A
-  시점 — 레포 기반과 명명·라이선스 정본만 확정된 상태).
+- **대화형 슬래시 명령은 아직 없다.** 위 "명령" 절에 표시했듯 `/devcareer-prep:*` 네 명령
+  모두 미구현이며, 지금은 "빠른 시작"의 CLI 3종을 직접 호출해야 한다.
 
 ## 라이선스
 

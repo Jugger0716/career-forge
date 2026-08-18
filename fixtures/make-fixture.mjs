@@ -3,10 +3,14 @@
 //
 // 구현 4단계(Phase 0-D): 결정적 골든 픽스처 레포 생성기. 의존성 0.
 //
-// 이 파일은 "L0 수집기(collect-git-facts.mjs)를 위한 입력 레포"만 만든다 —
-// 수집기 자체는 아직 존재하지 않는다(다음 Run 몫). 따라서 이 파일이 만드는
-// 것은 실제 git 레포(임시 디렉터리)와, 그 레포에 대해 "무엇이 참인지"를
-// 선언하는 declared 메타데이터뿐이다. 리네임·삭제 커밋의 path/oldPath 기대값은
+// 이 파일은 "L0 수집기(collect-git-facts.mjs)를 위한 입력 레포"만 만든다.
+// 수집기 자체는 이 레포에 이미 구현돼 있지만, 이 파일은 의도적으로 그
+// 수집기를 import·호출하지 않는다 — 수집기 구현이 버그를 가지면 같은
+// 버그로 스스로를 검증하는 자기순환이 되기 때문이다(독립 오라클 설계).
+// 이 파일이 만드는 것은 실제 git 레포(임시 디렉터리)와, 그 레포에 대해
+// "무엇이 참인지"를 선언하는 declared 메타데이터뿐이다. 실제로 수집기를
+// 호출해 이 레포들을 검증하는 코드는 tests/run-smoke.mjs에 있다.
+// 리네임·삭제 커밋의 path/oldPath 기대값은
 // 골든 JSON이 아니라 이 파일의 declared 리터럴이 정본이다(이월 게이트 B-4) —
 // 수집기·검증기가 scripts/lib/git.mjs를 공유하는 한 그 둘의 출력 비교만으로는
 // `-z` 파싱 버그를 원리적으로 잡을 수 없기 때문이다.
@@ -207,6 +211,7 @@ const BASE = {
   coAuthorTrailer: 1_710_000_000,
   vendoredPaths: 1_711_000_000,
   secrets: 1_712_000_000,
+  secretsInMetadata: 1_712_500_000,
   binaryFile: 1_713_000_000,
   large300: 1_720_000_000,
   toolErrorNonGit: 1_730_000_000,
@@ -592,6 +597,47 @@ export function buildSecrets(dir) {
       path: p,
       secretMarkers: ["aws-access-key", "aws-secret-key", "private-key-block", "password-field", "email", "jwt"],
       note: "전부 예시/가짜 값(AWS 공식 예시 키 포함) — AC-11 마스킹 미적용 시 산출물에 그대로 노출되는지 확인하는 용도.",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 시나리오 (12b) 커밋 제목·Co-authored-by 트레일러에 시크릿/PII가 있는
+// 커밋 — A-9/A-10 마스킹 배선 확인용. (12)의 buildSecrets는 파일 *내용*에만
+// 시크릿을 넣어 diff 인용(옵트인, 아직 미구현) 경로용이고, 이 시나리오는
+// evidence.json이 무조건 담는 `subject`/`coAuthors` 필드 자체에 시크릿을
+// 넣어 collect-git-facts.mjs의 원장 직렬화 지점에서 실제로 마스킹되는지
+// 확인한다. 제목에는 40자 hex 커밋 해시 형태의 문자열도 함께 넣어 —
+// aws-secret-key 오탐(A-10) 회귀도 같은 커밋에서 동시에 관측한다.
+// ---------------------------------------------------------------------------
+
+export const FAKE_COMMIT_HASH_IN_SUBJECT = "f69b245fb72735915423b9068e629868b7dd7a99";
+
+export function buildSecretsInCommitMetadata(dir) {
+  initRepo(dir);
+  const base = BASE.secretsInMetadata;
+
+  writeFile(dir, "notes.txt", "seed\n");
+  gitAdd(dir, "notes.txt");
+  commit(dir, {
+    message:
+      `fix: rotate leaked key AKIAIOSFODNN7EXAMPLE and password=Sup3rSecret! ` +
+      `(see also commit ${FAKE_COMMIT_HASH_IN_SUBJECT})\n\n` +
+      "Co-authored-by: Carol Park <carol.park@corp.example>",
+    epoch: base + 3600,
+  });
+
+  return {
+    declared: {
+      commitCount: 1,
+      note:
+        "subject에 aws-access-key·password-field 패턴 + 40자 hex(진짜 시크릿 아님, " +
+        "커밋 해시 오탐 회귀 확인용) 혼재. coAuthors[0]에 동료 이메일 1개. " +
+        "마스킹 배선 시 subject·coAuthors의 시크릿/이메일만 [REDACTED:*]로 치환되고, " +
+        `commits[].hash/shortHash/authorEmail과 subject 안의 "${FAKE_COMMIT_HASH_IN_SUBJECT}" ` +
+        "리터럴은 그대로 남아야 한다(A-10 무오탐 단언).",
+      fakeCommitHashInSubject: FAKE_COMMIT_HASH_IN_SUBJECT,
+      secretMarkers: ["aws-access-key", "password-field", "email"],
     },
   };
 }
@@ -1025,9 +1071,10 @@ export function buildOptInSnippet(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// 시나리오 (18) churn 파생식 판별 픽스처 — collect-git-facts.mjs:193의
-// `churn: diff.insertions + diff.deletions` 파생식(M-g의 변이 지점)을
-// **실제로 collectGitFacts()를 호출하는** 비-golden 경로에서 관측하기 위한
+// 시나리오 (18) churn 파생식 판별 픽스처 — scripts/collect-git-facts.mjs의
+// `enriched` map 안 `nonVendoredChurn` 파생식(vendored/binary/viaMerge를
+// 뺀 insertions+deletions 합, M-g의 변이 지점)을 **실제로 collectGitFacts()를
+// 호출하는** 비-golden 경로에서 관측하기 위한
 // 소형 전용 오라클. large300(~85초)과 별개로 커밋 5개뿐이라 수 초 이내에
 // 끝난다.
 //
@@ -1113,8 +1160,8 @@ export function buildChurnKeyDivergence(dir) {
       "churnCount=1건만 churn 버킷에 뽑힌다. 정본 churn 키(insertions+deletions desc)로는 " +
       `churnCommit(ins=1,del=${bigLines},churn=${1 + bigLines}) > seed(ins=${bigLines},del=0,churn=${bigLines})이므로 ` +
       "churnCommit이 선택되고 seed는 완전히 누락된다. insertions 단독 키였다면 " +
-      "seed(ins=100) > churnCommit(ins=1)이라 반대로 선택된다(M-g 대조 — collect-git-facts.mjs:193 " +
-      "`churn: diff.insertions + diff.deletions` 파생식 오라클).",
+      "seed(ins=100) > churnCommit(ins=1)이라 반대로 선택된다(M-g 대조 — " +
+      "scripts/collect-git-facts.mjs의 `nonVendoredChurn` 파생식 오라클).",
   };
 
   verifyChurnKeyDivergenceComposition(dir, declared);
@@ -1226,6 +1273,7 @@ const SCENARIOS = [
   ["coAuthorTrailer", buildCoAuthorTrailer],
   ["vendoredPaths", buildVendoredPaths],
   ["secrets", buildSecrets],
+  ["secretsInMetadata", buildSecretsInCommitMetadata],
   ["binaryFile", buildBinaryFile],
   ["large300", buildLarge300],
   ["toolErrorNonGit", buildToolErrorNonGit],

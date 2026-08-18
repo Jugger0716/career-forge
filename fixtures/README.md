@@ -3,10 +3,14 @@
 대상 스펙: `docs/harness/devcareer-prep-plugin/spec.md` "구현 단계 4. Phase 0-D".
 이월 게이트: `docs/harness/devcareer-prep-plugin/plan_critic_findings.md` 게이트 B(B-1~B-6).
 
-`scripts/collect-git-facts.mjs`(L0 수집기)와 `scripts/lib/git.mjs`는 **아직
-존재하지 않는다**(다음 구현 단계 몫). 이 디렉터리는 그 수집기가 입력으로 삼을
-"실제 git 레포"만 결정적으로 만든다 — evidence.json 생성 자체는 여기서
-하지 않는다.
+`scripts/collect-git-facts.mjs`(L0 수집기)와 `scripts/lib/git.mjs`는 이 레포에
+이미 구현돼 있다. 이 디렉터리는 그 수집기가 입력으로 삼을 **"실제 git 레포"만
+결정적으로 만든다** — evidence.json 생성 자체는 여기서 하지 않는다. 이는
+누락이 아니라 설계 의도다: 이 파일이 만드는 레포와 `declared` 기대값은
+수집기 구현과 **독립적인 오라클**이어야 하므로, 이 파일 자체는 의도적으로
+`collect-git-facts.mjs`를 import하지 않는다(수집기 쪽이 버그를 가지면 같은
+버그로 스스로를 검증하는 자기순환이 되기 때문 — 아래 "B-4" 절 참조). 실제로
+수집기를 호출해 이 픽스처들을 검증하는 코드는 `tests/run-smoke.mjs`에 있다.
 
 ## 사용법
 
@@ -46,6 +50,7 @@ node fixtures/make-fixture.mjs --out <dir> --emit-golden  # + case-17 산출물 
 | 15-b | 도구 오류: `.git/objects` 손상(loose object 0바이트 절단) | `buildToolErrorCorrupted` | 3분류 "도구·레포 오류" 분기 |
 | 16 | 옵트인 스니펫 인용(존재 시점 sha + 삭제 이후 sha) | `buildOptInSnippet` | `git cat-file -e` 성공/128 두 분기 |
 | 17 | 머지 해시를 `basis:commit`으로 인용한 산출물 주입 | `buildCase17MergeHashInjection`(→ `fixtures/golden/case-17-merge-hash-claim.json`) | AC-7(머지 해시 정량 주장 FAIL), B-5 |
+| 18 | churn 파생식 판별(정본 churn 키 vs insertions 단독 키의 선택 집합 반전) | `buildChurnKeyDivergence` | 콜드 리뷰 M-g — `collect-git-facts.mjs`의 `nonVendoredChurn` 파생식을 비-golden 경로에서 관측(`tests/run-smoke.mjs`의 `runChurnDerivationOracleSmoke`) |
 
 ## 결정성 설계
 
