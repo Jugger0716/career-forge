@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-18T00:00:00Z",
+  "sourceRepoHead": "0000000000000000000000000000000000000000",
+  "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 2,
+    "period": { "since": "2026-01-01", "until": "2026-08-18" },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": ["dev@example.com"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "nodes": [
+    {
+      "id": "km:001",
+      "basis": "inference",
+      "evidence": [{ "ledgerId": "commit:0000000000000000000000000000000000000000" }],
+      "verification": { "status": "verified", "attempts": 0, "reasonCode": null },
+      "parentRefs": ["career:001"],
+      "origin": "generated",
+      "locked": false,
+      "topic": "Kafka Consumer Group",
+      "text": "컨슈머 그룹 리밸런싱과 파티션 할당 전략을 이해해야 이 커밋들의 변경 의도를 설명할 수 있다."
+    },
+    {
+      "id": "km:002",
+      "basis": "insufficient",
+      "evidence": [],
+      "verification": { "status": "not-attempted", "attempts": 0, "reasonCode": null },
+      "parentRefs": ["career:001"],
+      "origin": "user",
+      "locked": true,
+      "topic": "JPA N+1",
+      "text": "I added this node myself because the generated map missed it entirely."
+    }
+  ]
+}

@@ -203,7 +203,7 @@ const NEGATIVE_CASES = [
   // 게이트 A-2 / 심사 C-4: verification 필드의 조건부 제약이 실제로 FAIL을
   // 내는지. status가 refuted인데 attempts=0 · reasonCode=null인 자기모순
   // 노드다(다른 절과 겹치지 않도록 basis=commit + evidence 비공허로 격리).
-  { n: 21, dir: "21-career-verification-refuted-contradiction", mode: "schema", file: "career.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "verification", label: "C-4: verification.status=refuted인데 attempts=0·reasonCode=null" },
+  { n: 21, dir: "21-career-verification-refuted-contradiction", mode: "schema", file: "career.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "const 불일치(기대 2)", label: "C-4: verification.status=refuted인데 attempts=0·reasonCode=null" },
   // T3(spec.md §6): excluded 커밋의 PII 3필드 축소를 어긴 원장. 실제
   // 픽스처 레포에서 수집한 참인 원장을 기반으로 excluded 항목 하나에만
   // authorEmail·subject·coAuthors를 되살려 넣고 contentHash를 재계산했으므로,
@@ -264,9 +264,14 @@ function runSchemaValidatorSmoke() {
   // (1) AC-6: tests/fixtures-valid/career.json이 schemas/career.schema.json에
   // 적합함을 확인한다. positive 픽스처를 실제 정본 스키마로 구조 검증하는
   // 유일한 경로 — 이전에는 이 대응 관계를 확인하는 코드가 어디에도 없었다.
-  {
-    const schemaPath = path.join(REPO_ROOT, "schemas", "career.schema.json");
-    const instPath = path.join(TESTS_DIR, "fixtures-valid", "career.json");
+  //
+  // 계층별로 반복한다 — 예전에는 career 한 쌍만 확인했고, 그 결과
+  // knowledge-map·gap-report 스키마에 넣은 제약은 positive 방향으로도
+  // 관측되지 않았다(인스턴스가 레포에 아예 없었다). positive 픽스처가
+  // 스키마와 갈려도 게이트가 침묵하는 상태를 여기서 닫는다.
+  for (const layer of ["career", "knowledge-map", "gap-report"]) {
+    const schemaPath = path.join(REPO_ROOT, "schemas", `${layer}.schema.json`);
+    const instPath = path.join(TESTS_DIR, "fixtures-valid", `${layer}.json`);
     const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
     const instance = JSON.parse(fs.readFileSync(instPath, "utf8"));
     const warnings = [];
@@ -277,7 +282,7 @@ function runSchemaValidatorSmoke() {
     for (const w of warnings) console.log(`    [WARN] ${w}`);
     report(
       errors.length === 0 && warnings.length === 0,
-      "tests/fixtures-valid/career.json이 schemas/career.schema.json에 적합함(AC-6), 미지원 키워드 경고 0건"
+      `tests/fixtures-valid/${layer}.json이 schemas/${layer}.schema.json에 적합함(AC-6), 미지원 키워드 경고 0건`
     );
   }
 
@@ -333,25 +338,35 @@ function runSchemaValidatorSmoke() {
   // 아닌 인스턴스)을 함께 두지 않으면 조건이 상시 참이어도 이 검사가
   // 통과하므로 두 방향을 모두 본다.
   {
+    // `else` 분기도 함께 관측한다 — 스키마에 `else`를 쓰지 않으면
+    // `resolved.else === undefined` 경로만 밟게 되어, `else` 평가가 통째로
+    // 빠져 있어도 이 오라클이 통과한다(M-7이 지적한 "이름만 있고 평가되지
+    // 않는 키워드"와 관측 가능성 면에서 같은 상태가 된다).
     const schema = {
       type: "object",
       properties: { kind: { type: "string" }, code: { type: ["string", "null"] } },
       if: { properties: { kind: { const: "refuted" } } },
       then: { properties: { code: { type: "string", minLength: 1 } } },
+      else: { properties: { code: { type: "null" } } },
     };
     const violating = validateInstance(schema, { kind: "refuted", code: null });
     const conforming = validateInstance(schema, { kind: "refuted", code: "NO_SUPPORT" });
-    const notTriggered = validateInstance(schema, { kind: "verified", code: null });
+    const elseViolating = validateInstance(schema, { kind: "verified", code: "SHOULD_BE_NULL" });
+    const elseConforming = validateInstance(schema, { kind: "verified", code: null });
     const ok =
       violating.some((e) => e.includes("type 불일치")) &&
       conforming.length === 0 &&
-      notTriggered.length === 0;
+      elseViolating.some((e) => e.includes("type 불일치")) &&
+      elseConforming.length === 0;
     if (!ok) {
       console.log(
-        `    violating=${JSON.stringify(violating)} conforming=${JSON.stringify(conforming)} notTriggered=${JSON.stringify(notTriggered)}`
+        `    violating=${JSON.stringify(violating)} conforming=${JSON.stringify(conforming)} elseViolating=${JSON.stringify(elseViolating)} elseConforming=${JSON.stringify(elseConforming)}`
       );
     }
-    report(ok, "validateInstance: 최상위 if/then을 실제로 평가함(위반 FAIL / 준수 PASS / 전건 거짓 PASS)");
+    report(
+      ok,
+      "validateInstance: 최상위 if/then/else를 실제로 평가함(then 위반 FAIL / then 준수 PASS / else 위반 FAIL / else 준수 PASS)"
+    );
   }
 
   // (5) anyOf 가 실제로 평가되는지. 같은 이력이며, T3(제외 커밋 PII 축소)
@@ -377,6 +392,110 @@ function runSchemaValidatorSmoke() {
     }
     report(ok, "validateInstance: anyOf를 실제로 평가함(어느 분기도 못 맞추면 FAIL, 각 분기는 PASS)");
   }
+}
+
+// ---------------------------------------------------------------------------
+// 슬라이스 B 게이트 A — 스키마 절 단위 오라클.
+//
+// 왜 필요한가: 게이트 A는 세 L1+ 스키마와 evidence 스키마에 조건절·제약을
+// 여러 개 넣었는데, 파일 기반 negative 픽스처는 그중 극히 일부만 밟는다.
+// 적대 검증에서 실측된 결과가 이것이다 — 새로 넣은 제약 약 35개 중 위반을
+// 넣었을 때 실제로 4게이트를 빨갛게 만드는 것은 3개뿐이었고, 나머지를 전부
+// 지워도 스모크/negative/골든이 모두 녹색이었다. "FAIL이 안 나면 그 검사는
+// 없는 것"이라는 이 레포의 절대 규칙에 비추면 그 32개는 존재하지 않는 제약과
+// 구별되지 않았다.
+//
+// 픽스처 디렉터리를 절마다 하나씩 만드는 대신, 기준 인스턴스에 절별 변이를
+// 주입해 validateInstance를 직접 부른다 — 디스크 I/O가 없고 절과 기대 메시지가
+// 한 줄로 붙어 있어 어느 절이 관측되는지가 코드에서 바로 읽힌다.
+//
+// 자기충족 방어 두 가지를 함께 둔다:
+//   (1) 기준 인스턴스 자체가 위반 0건임을 먼저 단언한다 — 기준이 이미 FAIL이면
+//       모든 변이 단언이 "원래부터 빨개서" 통과한다.
+//   (2) 기대 메시지 조각을 절마다 다르게 잡는다 — 아무 오류나 나면 통과하는
+//       판정은 이 파일이 messageIncludes를 도입한 이유와 정확히 같은 실패다.
+// ---------------------------------------------------------------------------
+function runSchemaClauseOracleSmoke() {
+  console.log("[스키마 절 단위 오라클] 게이트 A가 넣은 조건절·제약이 각각 실제로 FAIL을 내는지(절대 규칙: 관측되지 않는 제약은 없는 것이다)");
+
+  const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"));
+  const schemaOf = (layer) => loadJson(`schemas/${layer}.schema.json`);
+
+  // evidence 기준 인스턴스는 손으로 쓰지 않고 실제 수집 결과를 쓴다 —
+  // 프로덕션이 실제로 만드는 형태여야 절 검사에 의미가 있다.
+  let evidenceBase;
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-clause-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    buildMultiAuthor(dir);
+    evidenceBase = collectGitFacts({
+      repoPath: dir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      maxCommits: 1000,
+    }).evidence;
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+
+  const bases = {
+    career: loadJson("tests/fixtures-valid/career.json"),
+    "knowledge-map": loadJson("tests/fixtures-valid/knowledge-map.json"),
+    "gap-report": loadJson("tests/fixtures-valid/gap-report.json"),
+    evidence: evidenceBase,
+  };
+
+  // (1) 대조군 — 기준 인스턴스가 위반 0건이어야 아래 변이 단언이 공허하지 않다.
+  for (const [layer, inst] of Object.entries(bases)) {
+    const schema = schemaOf(layer);
+    const errors = validateInstance(schema, inst, schema, "$");
+    if (errors.length > 0) for (const e of errors) console.log(`    실제 오류: ${e}`);
+    report(errors.length === 0, `대조군: ${layer} 기준 인스턴스가 위반 0건(이게 깨지면 아래 절 단언이 전부 공허해진다)`);
+  }
+
+  const firstExcluded = (ev) => ev.commits.find((c) => c.excluded === true);
+  const firstIncluded = (ev) => ev.commits.find((c) => c.excluded !== true);
+
+  // 세 L1+ 계층에 공통으로 적용되는 절들. 계층마다 노드 형태가 달라도
+  // verification 계약은 동일하므로 같은 표를 세 번 돌린다 — 한 계층의
+  // 관측이 다른 계층을 대신하지 못한다(스키마가 세 파일로 복제돼 있다).
+  const NODE_CASES = [
+    { label: "nodes가 빈 배열", mutate: (i) => { i.nodes = []; }, expect: "minItems(1)" },
+    { label: "verification 필드 누락", mutate: (i) => { delete i.nodes[0].verification; }, expect: "required 필드 'verification' 없음" },
+    { label: "verification에 미지의 키", mutate: (i) => { i.nodes[0].verification.extra = 1; }, expect: "additionalProperties 위반" },
+    { label: "status가 enum 밖", mutate: (i) => { i.nodes[0].verification.status = "bogus"; }, expect: "enum 불일치" },
+    { label: "attempts가 상한 초과", mutate: (i) => { i.nodes[0].verification.attempts = 3; }, expect: "maximum(2)" },
+    { label: "attempts가 음수", mutate: (i) => { i.nodes[0].verification.attempts = -1; }, expect: "minimum(0)" },
+    { label: "reasonCode가 코드 형식이 아님(소문자)", mutate: (i) => { i.nodes[0].verification.reasonCode = "no_support"; }, expect: "pattern 불일치" },
+    { label: "not-attempted인데 attempts>0", mutate: (i) => { i.nodes[0].verification = { status: "not-attempted", attempts: 1, reasonCode: null }; }, expect: "const 불일치(기대 0)" },
+    { label: "not-attempted인데 reasonCode 있음", mutate: (i) => { i.nodes[0].verification = { status: "not-attempted", attempts: 0, reasonCode: "NO_SUPPORT" }; }, expect: "type 불일치(기대 null)" },
+    { label: "refuted인데 attempts≠2", mutate: (i) => { i.nodes[0].verification = { status: "refuted", attempts: 0, reasonCode: "NO_SUPPORT" }; }, expect: "const 불일치(기대 2)" },
+    { label: "refuted인데 reasonCode가 null", mutate: (i) => { i.nodes[0].verification = { status: "refuted", attempts: 2, reasonCode: null }; }, expect: "type 불일치(기대 string)" },
+    { label: "verified인데 reasonCode 있음", mutate: (i) => { i.nodes[0].verification = { status: "verified", attempts: 0, reasonCode: "NO_SUPPORT" }; }, expect: "type 불일치(기대 null)" },
+  ];
+
+  const EVIDENCE_CASES = [
+    { label: "excluded 커밋에 authorEmail 유출", mutate: (i) => { firstExcluded(i).authorEmail = "alice@example.test"; }, expect: "authorEmail: type 불일치(기대 null)" },
+    { label: "excluded 커밋에 subject 유출", mutate: (i) => { firstExcluded(i).subject = "feat: alice adds b"; }, expect: "subject: type 불일치(기대 null)" },
+    { label: "excluded 커밋에 coAuthors 유출", mutate: (i) => { firstExcluded(i).coAuthors = ["Co-authored-by: Carol <c@x.test>"]; }, expect: "coAuthors: maxItems(0)" },
+    { label: "대칭 절: 비-excluded 커밋의 authorEmail이 null", mutate: (i) => { firstIncluded(i).authorEmail = null; }, expect: "authorEmail: type 불일치(기대 string)" },
+    { label: "대칭 절: 비-excluded 커밋의 subject가 null", mutate: (i) => { firstIncluded(i).subject = null; }, expect: "subject: type 불일치(기대 string)" },
+  ];
+
+  const run = (layer, cases) => {
+    const schema = schemaOf(layer);
+    for (const c of cases) {
+      const inst = structuredClone(bases[layer]);
+      c.mutate(inst);
+      const errors = validateInstance(schema, inst, schema, "$");
+      const ok = errors.some((e) => e.includes(c.expect));
+      if (!ok) console.log(`    실제 오류: ${JSON.stringify(errors)}`);
+      report(ok, `${layer}: ${c.label} → '${c.expect}' 발화`);
+    }
+  };
+
+  for (const layer of ["career", "knowledge-map", "gap-report"]) run(layer, NODE_CASES);
+  run("evidence", EVIDENCE_CASES);
 }
 
 // AC-15: "같은 레포를 표기만 다른 절대경로(백슬래시/슬래시 혼용·드라이브
@@ -654,8 +773,8 @@ function runRedactSmoke() {
       report(
         excluded.every(
           (c) => typeof c.hash === "string" && Array.isArray(c.files) && typeof c.exclusionReason === "string"
-        ),
-        "T3 무오탐: 관측 가능성이 실제로 요구하는 필드(hash·files[]·exclusionReason)는 excluded 커밋에도 그대로 남음 — AC-7 (a)축·AC-9·(e)축 집합 동치가 여기 걸려 있다"
+        ) && excluded.some((c) => c.files.length >= 1),
+        `T3 무오탐: 관측 가능성이 실제로 요구하는 필드(hash·files[]·exclusionReason)는 excluded 커밋에도 그대로 남음 — files[]는 비어 있지 않은 것까지 확인한다(Array.isArray만 보면 files를 통째로 비우는 구현도 통과한다). AC-7 (a)축·AC-9·머지 집합 동치 검사가 여기 걸려 있다(실제 files 길이=${JSON.stringify(excluded.map((c) => c.files.length))})`
       );
       report(
         included.length >= 1 && included.every((c) => c.authorEmail === OWNER_EMAIL && typeof c.subject === "string"),
@@ -663,6 +782,62 @@ function runRedactSmoke() {
       );
     } finally {
       fs.rmSync(tmpBase3, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (F) T3의 coAuthors 축소는 (E)로 관측되지 않는다. buildMultiAuthor의
+  // 세 커밋 중 Co-authored-by 트레일러를 가진 것이 0건이라 `coAuthors.length
+  // === 0`이 축소 여부와 무관하게 항상 참이기 때문이다 — 즉 (E)만 두면
+  // 수집기의 coAuthors 삼항을 통째로 되돌려도 4게이트가 전부 녹색이다(적대
+  // 검증에서 실측된 변이 생존). 트레일러가 실제로 있는 커밋이 excluded가
+  // 되는 조합을 따로 만들어 관측한다.
+  //
+  // buildCoAuthorTrailer의 커밋은 전부 OWNER 작성이므로, 선택 identity를
+  // 다른 사람으로 주면 세 커밋 모두 author-not-selected로 excluded가 된다.
+  // 같은 픽스처를 OWNER로도 수집해 대조군을 만든다 — 대조군이 없으면
+  // "coAuthors를 항상 비우는 구현"도 통과한다.
+  {
+    const tmpBase4 = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-t3-coauthor-"));
+    try {
+      const dir = path.join(tmpBase4, "repo");
+      buildCoAuthorTrailer(dir);
+
+      const control = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [OWNER_EMAIL],
+        ref: "HEAD",
+        maxCommits: 1000,
+      }).evidence;
+      const controlWithTrailer = control.commits.filter((c) => c.coAuthors.length >= 1);
+      // 트레일러의 이메일은 redact.mjs가 마스킹하는 것이 정상이다(A-9) —
+      // 픽스처가 선언한 원문과 바이트 비교하면 마스킹 계약과 충돌한다.
+      // 여기서 볼 것은 "축소되지 않고 기록됐다"이므로 이름 보존 + 마스킹
+      // 마커 존재로 확인한다.
+      report(
+        controlWithTrailer.length === 1 &&
+          controlWithTrailer[0].excluded === false &&
+          controlWithTrailer[0].coAuthors[0].includes("Alice Kim") &&
+          controlWithTrailer[0].coAuthors[0].includes("[REDACTED:email]"),
+        `T3 coAuthors 대조군: 선택된 저자의 커밋에서는 트레일러가 (마스킹된 형태로) 그대로 기록됨(실제: ${JSON.stringify(control.commits.map((c) => c.coAuthors))}) — 이 단언이 없으면 coAuthors를 항상 비우는 구현도 통과한다`
+      );
+
+      const reduced = collectGitFacts({
+        repoPath: dir,
+        selectedIdentities: [ALICE_EMAIL],
+        ref: "HEAD",
+        maxCommits: 1000,
+      }).evidence;
+      const reducedExcluded = reduced.commits.filter((c) => c.excluded === true);
+      report(
+        reducedExcluded.length === control.commits.length && reducedExcluded.length >= 1,
+        `T3 coAuthors 비공허성: 같은 픽스처를 다른 identity로 수집하면 트레일러 보유 커밋을 포함해 전 커밋이 excluded가 됨(실제 ${reducedExcluded.length}/${reduced.commits.length}건)`
+      );
+      report(
+        reducedExcluded.every((c) => c.coAuthors.length === 0),
+        `T3 coAuthors 축소: excluded가 된 트레일러 보유 커밋의 coAuthors가 빈 배열(실제: ${JSON.stringify(reduced.commits.map((c) => c.coAuthors))}) — 같은 픽스처의 대조군에서는 트레일러가 1건 기록됐으므로 이 단언은 공허하지 않다`
+      );
+    } finally {
+      fs.rmSync(tmpBase4, { recursive: true, force: true });
     }
   }
 }
@@ -3496,6 +3671,7 @@ async function runSectionAsync(label, fn) {
 // 수백 개를 더 이상 다시 스폰하지 않는다).
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
+  runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
