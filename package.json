@@ -1,0 +1,21 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Git 커밋 히스토리 증거 원장 기반 경력 기술서·지식맵·갭 리포트 생성 Claude Code 플러그인 (devcareer-prep). 의존성 0.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jugger0716/career-forge.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "lint": "node scripts/validate-plugin.mjs",
+    "test": "node tests/run-smoke.mjs && node tests/run-smoke.mjs --negative && node tests/run-smoke.mjs --golden"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

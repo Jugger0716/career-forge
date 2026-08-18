@@ -1,0 +1,20 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "Git 커밋 히스토리를 결정적 스크립트로 수집한 증거 원장(evidence ledger)을 유일한 사실 원천으로 삼아 경력 기술서·기술 지식맵·학습 갭 리포트를 생성하는 Claude Code 플러그인. 모든 인용의 실재성은 LLM이 아니라 스크립트가 검증한다.",
+  "author": {
+    "name": "Jugger"
+  },
+  "repository": "https://github.com/Jugger0716/career-forge",
+  "license": "MIT",
+  "keywords": [
+    "career",
+    "git-history",
+    "evidence-ledger",
+    "fact-checking",
+    "skill-gap",
+    "developer-career",
+    "interview-prep",
+    "job-search"
+  ]
+}

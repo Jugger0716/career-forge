@@ -11,3 +11,12 @@ Thumbs.db
 # Node (if tooling is added later)
 node_modules/
 npm-debug.log*
+
+# DevCareer Prep 산출물 저장 디렉터리 (상태 디렉터리 상수: `.devcareer/`)
+# 기본 저장 위치는 사용자 홈(`~/.devcareer/<repo-key>/`)이지만, 대상 레포 내부
+# 저장(`.devcareer/`)에 명시 동의한 경우를 대비해 이 레포 자신도 방어적으로 무시한다.
+# 개인 경력 데이터·실제 커밋 해시·PII가 담기므로 public 레포에 커밋 대상이 아니다.
+.devcareer/
+
+# Claude Code 개인 설정 (권한 allow 목록 등) — 사용자별 파일이므로 공유하지 않는다.
+.claude/settings.local.json
