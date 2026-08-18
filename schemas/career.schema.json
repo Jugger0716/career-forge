@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devcareer-prep.local/schemas/career.schema.json",
+  "title": "DevCareer Prep Career Statement",
+  "description": "L1 경력 기술서(career.json). L0 evidence.json의 commits[].id만 인용하며 커밋 해시를 직접 쓰지 않는다. 정본은 이 JSON이며 사용자 대면 .md는 scripts/render-markdown.mjs의 렌더 산출물이다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "generatedAt", "sourceRepoHead", "contentHash",
+    "coverage", "truncated", "nodes"
+  ],
+  "properties": {
+    "schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "sourceRepoHead": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "생성 시점 대상 레포 HEAD. AC-22 스테일 판정의 정본 값(레지스트리가 아니라 이 파일의 값)."
+    },
+    "contentHash": {
+      "type": "string",
+      "minLength": 1,
+      "description": "이 파일 본문(이 필드 자신은 제외)의 해시. 사용자 수동 편집 감지(AC-16)에 쓰인다."
+    },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "truncated": { "$ref": "#/$defs/truncated" },
+    "nodes": {
+      "type": "array",
+      "description": "경력 사실 주장 노드 목록.",
+      "items": { "$ref": "#/$defs/careerNode" }
+    }
+  },
+  "$defs": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "0.1.0",
+      "description": "이 산출물 형식의 버전."
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["analyzed", "total", "traversed", "period", "exclusions", "samplingMethod"],
+      "description": "AC-10: 산출물 헤더에 커버리지 메타데이터(분석/전체 커밋 수, 기간, 제외 규칙, 샘플링 방식, 범위 선택 결과) 필수 기재. evidence.json의 값을 그대로 복사한다.",
+      "properties": {
+        "analyzed": { "type": "integer", "minimum": 0, "description": "이 산출물에 반영된 커밋 수(excluded !== true 기준)." },
+        "total": { "type": "integer", "minimum": 0, "description": "샘플링 모집단 크기(excluded !== true 커밋 수)." },
+        "traversed": { "type": "integer", "minimum": 0, "description": "순회한 전 커밋 수(excluded:true 포함). analyzed/total과 동일 값이 될 수 없다." },
+        "period": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["since", "until"],
+          "properties": {
+            "since": { "type": ["string", "null"], "format": "date" },
+            "until": { "type": ["string", "null"], "format": "date" }
+          }
+        },
+        "exclusions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bots", "vendoredPaths", "mergeIncluded", "selectedIdentities"],
+          "properties": {
+            "bots": { "type": "boolean" },
+            "vendoredPaths": { "type": "boolean" },
+            "mergeIncluded": { "type": "boolean" },
+            "selectedIdentities": {
+              "type": "array",
+              "items": { "type": "string", "format": "email" },
+              "description": "§5 저자 정체성 게이트에서 다중 선택된 identity 이메일 목록."
+            }
+          }
+        },
+        "samplingMethod": {
+          "type": "string",
+          "x-verbatim": true,
+          "minLength": 1,
+          "description": "절단 없으면 `none:full-scan`. 절단 시 evidence.json과 동일한 구현 5단계 정본 리터럴을 그대로 복사한다(재서술 금지)."
+        }
+      }
+    },
+    "truncated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "dropped_commits"],
+      "properties": {
+        "reason": { "type": "string", "enum": ["none", "budget_commits"] },
+        "dropped_commits": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        { "if": { "properties": { "reason": { "const": "none" } } }, "then": { "properties": { "dropped_commits": { "const": 0 } } } },
+        { "if": { "properties": { "reason": { "const": "budget_commits" } } }, "then": { "properties": { "dropped_commits": { "minimum": 1 } } } }
+      ]
+    },
+    "evidenceCitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ledgerId"],
+      "description": "evidence.json commits[].id 인용. 해시를 직접 쓰지 않는다.",
+      "properties": {
+        "ledgerId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "evidence.json의 commits[].id. verify-evidence.mjs가 이 ID로 원장을 조회해 실존성·경로를 검사한다."
+        },
+        "path": {
+          "type": "string",
+          "description": "정량 주장이 특정 파일 변경을 근거로 들 때의 경로(선택). AC-7 (c)축이 이 (ledgerId, path) 쌍을 diff 집합과 대조한다."
+        }
+      }
+    },
+    "basis": {
+      "type": "string",
+      "enum": ["commit", "inference", "external", "insufficient"],
+      "description": "근거 등급. 정량 주장(기간·커밋 수·파일·라인)만 commit을 강제하고, 역할·기여 서술은 inference로 분리한다."
+    },
+    "careerNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "basis", "evidence", "origin", "locked", "text"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "description": "이 노드의 고유 ID. L2(지식맵) 노드가 parentRefs로 이 ID를 인용한다."
+        },
+        "basis": { "$ref": "#/$defs/basis" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceCitation" },
+          "description": "AC-12: evidence가 빈 배열이면 basis는 반드시 insufficient여야 한다(아래 if/then)."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["generated", "user"],
+          "description": "이 노드가 LLM 생성분인지 사용자 수동 추가분인지."
+        },
+        "locked": {
+          "type": "boolean",
+          "description": "true면 재생성 시 이 노드를 건드리지 않는다(사용자 편집 보존, AC-16)."
+        },
+        "text": {
+          "type": "string",
+          "x-freeText": true,
+          "description": "경력 사실 서술 본문(한국어로). 공백 구분 토큰 4개 이상인 서술형 값은 AC-19 언어 린트 대상이다."
+        },
+        "period": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "string", "format": "date" },
+            "end": { "type": ["string", "null"], "format": "date" }
+          },
+          "description": "이 경력 항목이 걸친 기간(선택). 정량 주장이므로 basis:commit이면 evidence 인용이 필수다."
+        },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "x-termField": true, "minLength": 1 },
+          "description": "관련 기술 용어·고유명사 목록(예: Kafka Consumer Group). 언어 린트 제외 대상."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "evidence": { "maxItems": 0 } } },
+          "then": { "properties": { "basis": { "const": "insufficient" } } }
+        }
+      ]
+    }
+  }
+}
