@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "license가 LICENSE_TEXT_PATTERNS 목록 밖의 알 수 없는 SPDX 값인 픽스처(케이스 10) — FAIL이 아니라 명시적 SKIP 경고로 보고되고 exit 0을 유지함을 검증한다(negative가 아니라 오탐-없음 확인용).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "Proprietary"
+}

@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {
+      "id": "career:001",
+      "basis": "insufficient",
+      "evidence": [],
+      "origin": "generated",
+      "locked": false,
+      "text": "This project implements a distributed caching layer for the backend service."
+    }
+  ]
+}

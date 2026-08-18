@@ -1,0 +1,8 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "필수 필드 'license'가 의도적으로 빠진 negative 픽스처(케이스 1).",
+  "author": {
+    "name": "Jugger"
+  }
+}

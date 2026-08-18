@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2024-01-01T00:00:00.000Z",
+  "sourceRepoHead": "cf02c957f870b855921425bbfb183fc3e72c929d",
+  "contentHash": "deadbeefcafe",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 1,
+    "period": { "since": null, "until": null },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": true,
+      "selectedIdentities": ["owner@example.test"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "commits": [
+    {
+      "id": "commit:f41fb1a9c1db027834630125c3bbed601f2c7e3f",
+      "hash": "f41fb1a9c1db027834630125c3bbed601f2c7e3f",
+      "shortHash": "f41fb1a9c1db",
+      "authorEmail": "owner@example.test",
+      "authorDate": "2024-01-01T00:00:00.000Z",
+      "parents": [],
+      "isMerge": true,
+      "coAuthors": [],
+      "subject": "chore: AC-6 (iii) 위반 픽스처 — isMerge:true인데 parents.length는 0이다(%P 누락 시뮬레이션)",
+      "insertions": 0,
+      "deletions": 0,
+      "files": [],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ]
+}

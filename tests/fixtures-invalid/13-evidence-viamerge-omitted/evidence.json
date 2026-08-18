@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2024-01-01T00:00:00.000Z",
+  "sourceRepoHead": "7e4173a874a2d84868a46191efb7c6d22baeed35",
+  "contentHash": "deadbeefcafe",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 1,
+    "period": { "since": null, "until": null },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": true,
+      "selectedIdentities": ["owner@example.test"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "commits": [
+    {
+      "id": "commit:74b56df074ed03615f569e12aef271cd8626cc36",
+      "hash": "74b56df074ed03615f569e12aef271cd8626cc36",
+      "shortHash": "74b56df074ed",
+      "authorEmail": "owner@example.test",
+      "authorDate": "2024-01-01T00:00:00.000Z",
+      "parents": [
+        "f1ecbc32ffca6d66f535ff3488ef600f31764c98",
+        "9a5f58c849056e56e170b917c00d351ad44449ce"
+      ],
+      "isMerge": true,
+      "coAuthors": [],
+      "subject": "Merge branch 'side' into main — viaMerge:true 부여가 누락된 files[] 항목을 담은 (ii) 위반 픽스처(임무 M-a 사고 실험)",
+      "insertions": 5,
+      "deletions": 0,
+      "files": [
+        {
+          "path": "x.txt",
+          "oldPath": null,
+          "changeType": "A",
+          "insertions": 5,
+          "deletions": 0,
+          "binary": false,
+          "viaMerge": false
+        }
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ]
+}

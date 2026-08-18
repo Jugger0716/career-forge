@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-13T00:00:00Z",
+  "sourceRepoHead": "0000000000000000000000000000000000000000",
+  "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 2,
+    "period": { "since": "2026-01-01", "until": "2026-08-13" },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": ["dev@example.com"]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "nodes": [
+    {
+      "id": "career:001",
+      "basis": "insufficient",
+      "evidence": [],
+      "origin": "generated",
+      "locked": false,
+      "text": "이 프로젝트에서 Kafka Consumer Group과 JPA N+1 문제를 다뤘습니다.",
+      "skills": ["Kafka Consumer Group", "JPA N+1", "Spring WebFlux", "AWS Elastic Container Service"]
+    }
+  ]
+}

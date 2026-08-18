@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "정상 plugin.json(license: MIT) — README 배지가 이와 다른 라이선스를 표시하는 negative 픽스처(케이스 6).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2024-01-01T00:00:00.000Z",
+  "sourceRepoHead": "4df7eb35d15b11af8cbd583bf6039bc7882f1f25",
+  "contentHash": "deadbeefcafe",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 1,
+    "period": { "since": null, "until": null },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": ["owner@example.test"]
+    },
+    "samplingMethod": "budget_commits:manually-sliced-not-the-canonical-literal"
+  },
+  "truncated": { "reason": "none", "dropped_commits": 0 },
+  "commits": [
+    {
+      "id": "commit:12f222c7984c632cdda5a4bb516a0b0e8b3713a4",
+      "hash": "12f222c7984c632cdda5a4bb516a0b0e8b3713a4",
+      "shortHash": "12f222c7984c",
+      "authorEmail": "owner@example.test",
+      "authorDate": "2024-01-01T00:00:00.000Z",
+      "parents": ["a03d0f75f24a9f5fd6c6a67ced64c800eac7d235"],
+      "isMerge": false,
+      "coAuthors": [],
+      "subject": "chore: T-2 위반 픽스처 — reason:none인데 samplingMethod가 none:full-scan이 아니다",
+      "insertions": 2,
+      "deletions": 1,
+      "files": [
+        {
+          "path": "a.txt",
+          "oldPath": null,
+          "changeType": "M",
+          "insertions": 2,
+          "deletions": 1,
+          "binary": false,
+          "viaMerge": false
+        }
+      ],
+      "excluded": false,
+      "exclusionReason": null
+    }
+  ]
+}
