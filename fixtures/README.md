@@ -31,19 +31,20 @@ node fixtures/make-fixture.mjs --out <dir> --emit-golden  # + case-17 산출물 
 
 | # | 시나리오(스펙 표현) | 함수 | 오라클 대상 AC |
 |---|---|---|---|
-| 0 | 빈 레포 / unborn branch | `buildEmptyRepo` | AC-6(0커밋 정상 종료) |
-| 1 | 1커밋(초기 커밋) | `buildSingleCommit` | AC-5, AC-6 |
+| 0 | 빈 레포 / unborn branch | `buildEmptyRepo` | AC-6(0커밋 정상 종료) — `tests/run-smoke.mjs`의 `runFixtureCoverageHonestySmoke`(절 a) |
+| 1 | 1커밋(초기 커밋) | `buildSingleCommit` | AC-5, AC-6(빈 트리 diff base·shallow-boundary 무오탐) — `runFixtureCoverageHonestySmoke`(절 b) |
 | 2 | 다중 저자 | `buildMultiAuthor` | AC-7 (a)축, AC-9 |
 | 3 | 봇 커밋(dependabot + github-actions) | `buildBotCommits` | AC-9 |
-| 4 | 한글 파일명·한글 커밋 메시지(+ 한글 하위 디렉터리) | `buildKorean` | AC-17 |
-| 5 | 공백 포함 경로 | `buildSpacePath` | AC-17 |
+| 4 | 한글 파일명·한글 커밋 메시지(+ 한글 하위 디렉터리) | `buildKorean` | AC-17 — `runFixtureCoverageHonestySmoke`(절 c) |
+| 5 | 공백 포함 경로 | `buildSpacePath` | AC-17 — `runFixtureCoverageHonestySmoke`(절 d) |
 | 6 | merge 커밋(단독) | `buildMerge` | AC-6 (iv), AC-7, (17)의 소스 |
 | 7 | 리네임 | `buildRename` | AC-7, AC-17(B-4 — `path`/`oldPath` 하드코딩) |
 | 8 | 파일 삭제 커밋 | `buildDelete` | AC-7, AC-17(B-4 — 삭제 경로 하드코딩) |
-| 9 | 빈 커밋 메시지 | `buildEmptyMessage` | AC-6(subject 처리) |
+| 9 | 빈 커밋 메시지 | `buildEmptyMessage` | AC-6(subject 처리·conventional-commit 분류) — `runFixtureCoverageHonestySmoke`(절 e) |
 | 10 | Co-authored-by 트레일러(+ 트레일러 없는 대조 커밋) | `buildCoAuthorTrailer` | AC-6(`coAuthors[]` 비공허성) |
 | 11 | node_modules/dist/vendor/*.lock/migrations | `buildVendoredPaths` | §5 기본 제외 규칙 |
-| 12 | 가짜 API 키·private key 블록 등(전부 가짜 값) | `buildSecrets` | AC-11(마스킹) |
+| 12 | 가짜 API 키·private key 블록 등(전부 가짜 값, 파일 *내용*에 심음) | `buildSecrets` | **자동 단언 없음 — 수동 검토용.** 이 시나리오가 겨냥하는 "코드 원문(diff) 인용" 경로 자체가 P0에 아직 구현되지 않았다(`schemas/config.schema.json`의 `snippetQuoting`/`includeDiff` description 참조 — "구현 7단계 이후" 자리표시자). 그 경로가 구현되면 `scripts/lib/redact.mjs`를 재사용해 마스킹할 계획이며, 그때 이 픽스처를 오라클로 배선한다. 커밋 *메타데이터*(subject·co-author)의 시크릿 마스킹은 이미 구현·배선돼 있으며 그쪽은 아래 12b가 검증한다. |
+| 12b | 커밋 제목·Co-authored-by 트레일러 안의 시크릿/PII(+ 40자 hex 커밋 해시 오탐 회귀) | `buildSecretsInCommitMetadata` | AC-11(마스킹, 원장 필수 필드 경로) — `tests/run-smoke.mjs`의 `runRedactSmoke`(절 C) |
 | 13 | 바이너리 파일 | `buildBinaryFile` | AC-6(`binary: true`) |
 | 14 | 300커밋 대량 레포(봇 20 + 타 저자 30 + 소유자 250[정규 240 + 머지 유닛 5×2]) | `buildLarge300` | AC-21(전량) |
 | 15-a | 도구 오류: 비-git 디렉터리 | `buildToolErrorNonGit` | 3분류 "도구·레포 오류" 분기 |
