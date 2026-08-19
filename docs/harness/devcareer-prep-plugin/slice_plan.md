@@ -22,8 +22,31 @@
 | 1 | `scripts/collect-git-facts.mjs` | 비공개 `writeJsonAtomic`을 공유 위치로 추출 | 구현 7단계 (d) — state/config 쓰기가 temp→rename 규약을 복사하지 않게 |
 | 2 | `scripts/validate-plugin.mjs` | `--secret-scan <artifact>` 모드 추가(`ARTIFACT_SECRET_LEAK`) | 구현 7단계 (e) — AC-8 마스킹 우회 카테고리가 채점될 REJECT 사유를 만드는 유일한 지점 |
 | 3 | `scripts/verify-evidence.mjs` | `basis: external`의 allow-list 대조 축 추가 | 구현 8단계 (a) — 스키마가 이미 "스크립트가 런타임에 검사한다"고 선언한 계약의 소유 파일 |
+| 4 | `schemas/career.json`·`gap-report.json`·`plan.json`·`knowledge-map.json` | ① 앞 셋에 `externalUrl` 프로퍼티 + `basis:external → required` 조건절 추가 ② 네 파일 모두 「`evidence`가 비면 `basis`는 `insufficient`」 조건절을 `["insufficient","external"]`로 완화 | 예외 3번을 구현하다 **검사 대상이 생성 불가**임이 실측으로 드러났다 — 아래 근거 참조 |
 
-**이 셋 외의 슬라이스 A 파일 수정은 여전히 금지다.**
+**이 넷 외의 슬라이스 A 파일 수정은 여전히 금지다.**
+
+> **예외 4번의 근거 (2026-08-19 추가).** 예외 3번(allow-list 대조 축)을 구현하고 나서
+> `basis: "external"`인 노드를 만들어 보려 했더니 **어느 계층에서도 만들 수 없었다.**
+> (a) `career`·`gap-report`·`plan`은 `basis` enum에 `external`을 두고도 `externalUrl`을 담을
+> 프로퍼티가 없고 `additionalProperties: false`가 추가를 막는다(심사 C-4가 「강등 상태를 담을
+> 필드가 정본 JSON에 없다」로 지적한 것과 같은 형태다). (b) 네 계층 모두 「`evidence`가 비면
+> `basis`는 `insufficient`」 조건절에 `external` 예외가 없어, **URL 출처만 있고 커밋 근거는 없는
+> 노드**를 표현할 방법이 없었다 — 없는 커밋을 달거나 `insufficient`로 강등되는 두 선택지뿐이다.
+> 그 상태로 두면 예외 3번이 만든 (f)축은 **영원히 대상 0건인 검사**가 되고, 구현 8단계에서
+> KnowledgeMapper가 `external` 노드를 만들려는 순간 막힌다. 사용자 확인을 받아 예외를 추가했다.
+>
+> **완화가 AC-12의 이빨을 깎지 않는지**를 함께 관측했다: `evidence: []` + `basis: "inference"`는
+> 여전히 `enum 불일치`로 FAIL하고(세 계층 각각), `basis: "external"`이면서 `externalUrl`이 없으면
+> `required 필드 'externalUrl' 없음`으로 FAIL한다. 허용 방향도 관측한다 — 커밋 근거 없이 URL
+> 출처만 있는 노드가 스키마를 통과하는 것을 세 계층에서 확인한다(금지 방향만 보면 완화를 되돌려도
+> 아무도 모른다).
+>
+> **남은 잔여 위험(닫지 않았다).** (f)축은 URL이 allow-list **소속인지만** 확인한다. URL이 실제로
+> 존재하는지, 그 서술을 뒷받침하는지는 검사하지 않는다(네트워크 접근은 AC-1 「의존성 0」과 오프라인
+> 전제에 걸린다). 따라서 LLM이 allow-list 안의 아무 URL이나 붙여 `insufficient` 강등을 회피하는
+> 경로가 남아 있으며, 그것을 막는 것은 2단 팩트체크(`verification`, 구현 8단계 (d))뿐이다 — 즉
+> **기계가 아니라 LLM 판정에 의존하는 구간**이다. 스키마 description에도 같은 문장을 적어 뒀다.
 
 > **이미 발생한 슬라이스 A 수정(기록).** 슬라이스 B 착수 전 게이트 작업에서 `schemas/`(evidence·
 > career·knowledge-map·gap-report), `scripts/lib/schema-validate.mjs`, `scripts/lib/lang-lint.mjs`,

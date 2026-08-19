@@ -156,9 +156,18 @@
           "type": "string",
           "format": "uri",
           "description": "실행으로 자가 검증할 수 없는 개념 문제/주제의 출처 링크. verificationStatus가 sourced일 때 필수이며, 링크가 없으면 unverified로 남긴다."
+        },
+        "externalUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "basis:\"external\"일 때 필수. references/sources.json allow-list 내 URL이어야 한다(allow-list 대조는 scripts/verify-evidence.mjs의 (f)축 checkExternalSources가 런타임에 검사하며 이 스키마는 형식만 검사한다). 그 검사는 allow-list 소속 여부만 확인하며 URL이 실제로 존재하는지·그 서술을 뒷받침하는지는 확인하지 않는다 — 후자는 2단 팩트체크(verification)의 몫이다(구현 8단계 (d))."
         }
       },
       "allOf": [
+        {
+          "if": { "properties": { "basis": { "const": "external" } } },
+          "then": { "required": ["externalUrl"] }
+        },
         {
           "if": { "properties": { "evidence": { "maxItems": 0 } } },
           "then": { "properties": { "basis": { "const": "insufficient" } } }
