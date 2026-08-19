@@ -55,7 +55,17 @@ import { runValidation, runLangCheck, runSchemaCheck, runSecretScan } from "../s
 import { scanForSecrets, collectEmailFormatPaths, isSingleEmail } from "../scripts/lib/secret-scan.mjs";
 import { walk, listFilesByExt } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
-import { computeRepoKeyForPath, getRepoToplevel } from "../scripts/lib/store.mjs";
+import {
+  computeRepoKeyForPath,
+  getRepoToplevel,
+  writeJsonAtomic,
+  toStorageRelative,
+  fromStorageRelative,
+  readState,
+  writeState,
+  readConfig,
+  writeConfig,
+} from "../scripts/lib/store.mjs";
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
 import {
@@ -953,6 +963,120 @@ function runExternalSourceOracleSmoke() {
     report(goodOk, "배선 대조군: allow-list 안 URL은 통과하고 checked=1로 집계된다(공허하지 않음)");
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// store.mjs IO 계약 오라클 — 게이트 B-1·B-2 / 심사 M-5 / 구현 7단계 (c)(d)
+//
+// 이 계약이 존재하는 이유는 두 가지이고, 둘 다 "없으면 조용히 깨지는" 종류다:
+//   (1) `writeJsonAtomic`이 두 곳에 복사되면 AC-16의 원자성 계약이 갈린다.
+//       추출이 실제로 일어났는지(= collect-git-facts.mjs가 사본을 갖고 있지
+//       않은지)를 소스 스캔으로 관측한다 — 함수 동작만 보면 사본이 남아
+//       있어도 전부 통과한다.
+//   (2) 각 스킬이 제각기 path.relative를 부르면 Windows에서 백슬래시가
+//       산출물에 섞인다. 이건 Windows에서만 나타나는 결함이라 리눅스 CI만
+//       도는 프로젝트였다면 영영 안 보였을 것이다 — 이 레포는 Windows가
+//       주 개발 환경이므로 여기서 고정한다.
+// ---------------------------------------------------------------------------
+function runStoreIoContractSmoke() {
+  console.log("[store IO 계약 오라클] writeJsonAtomic 단일 구현 · 상대경로 POSIX 고정 · 부재/손상 무예외");
+
+  // (1) 추출이 실제로 일어났는가 — 소스 스캔.
+  {
+    const collector = fs.readFileSync(path.join(REPO_ROOT, "scripts", "collect-git-facts.mjs"), "utf8");
+    const hasOwnDefinition = /^function writeJsonAtomic\(/m.test(collector);
+    const importsShared = /import \{[^}]*\bwriteJsonAtomic\b[^}]*\} from "\.\/lib\/store\.mjs";/.test(collector);
+    report(!hasOwnDefinition, "collect-git-facts.mjs에 writeJsonAtomic 자체 정의가 남아 있지 않음(사본 금지)");
+    report(importsShared, "collect-git-facts.mjs가 store.mjs의 writeJsonAtomic을 import해 쓴다");
+  }
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-storeio-"));
+  try {
+    // (2) 원자적 쓰기 — 최종 파일만 남고 temp 잔여물이 없어야 한다.
+    {
+      const dir = path.join(tmpRoot, "atomic");
+      const p = writeJsonAtomic(dir, "state.json", { a: 1 });
+      const entries = fs.readdirSync(dir);
+      report(fs.existsSync(p) && entries.length === 1 && entries[0] === "state.json",
+        `writeJsonAtomic이 최종 파일만 남긴다(temp 잔여물 0건, 실제: ${JSON.stringify(entries)})`);
+      report(fs.readFileSync(p, "utf8").endsWith("}\n"), "writeJsonAtomic 출력이 개행으로 끝난다(기존 산출물 규약 유지)");
+    }
+
+    // (3) 상대경로는 **항상** POSIX 구분자다. 이 단언이 이 계약의 존재 이유다 —
+    //     path.relative를 그대로 쓰면 Windows에서 백슬래시가 나온다.
+    {
+      const root = path.join(tmpRoot, "root");
+      const target = path.join(root, "sub", "career.json");
+      const rel = toStorageRelative(root, target);
+      report(rel === "sub/career.json", `toStorageRelative가 POSIX 구분자를 쓴다(실제: ${JSON.stringify(rel)})`);
+      report(!rel.includes("\\"), "toStorageRelative 결과에 백슬래시가 없다(Windows 혼입 방지)");
+      const back = fromStorageRelative(root, rel);
+      report(path.resolve(back) === path.resolve(target), "fromStorageRelative가 원래 절대경로로 되돌린다(왕복 동치)");
+    }
+
+    // (4) 루트 밖 탈출은 막는다 — 조용히 기록하면 다른 기계에서 해석 불가능한
+    //     경로가 state.json에 남는다.
+    {
+      const root = path.join(tmpRoot, "root");
+      let threwOut = false;
+      try { toStorageRelative(root, path.join(tmpRoot, "outside.json")); } catch { threwOut = true; }
+      report(threwOut, "toStorageRelative가 저장 루트 밖 경로를 거부한다");
+
+      let threwBack = false;
+      try { fromStorageRelative(root, "../outside.json"); } catch { threwBack = true; }
+      report(threwBack, "fromStorageRelative가 '..' 탈출을 거부한다");
+    }
+
+    // (5) 부재·손상은 **예외를 던지지 않는다**. 구현 8단계가 "state.json
+    //     부재·스키마 부적합이면 예외 중단 없이 재수집 안내 후 정상 종료"를
+    //     요구하므로, 던지면 그 요구를 만족시킬 수 없다.
+    {
+      const root = path.join(tmpRoot, "io");
+      fs.mkdirSync(root, { recursive: true });
+
+      // 「예외를 던지지 않는다」를 **겨냥 단언**으로 관측한다. 반환값만 보면
+      // 던지는 구현에서는 이 섹션이 통째로 중단되고, 그러면 나머지 단언이
+      // 아예 실행되지 않아 무엇이 깨졌는지가 흐려진다(실측: 던지게 만드는
+      // 변이에서 섹션 abort 1건만 남았다). try/catch로 감싸 계약 위반을
+      // 그 자리에서 이름 붙인다.
+      let missing = null, missingThrew = null;
+      try { missing = readState(root); } catch (e) { missingThrew = e; }
+      report(missingThrew === null, `readState: 파일이 없어도 던지지 않는다(실제: ${missingThrew ? missingThrew.message : "던지지 않음"})`);
+      report(missingThrew === null && missing.found === false && missing.error === null,
+        "readState: 파일 부재는 found=false·error=null");
+
+      fs.writeFileSync(path.join(root, "state.json"), "{ broken", "utf8");
+      let broken = null, brokenThrew = null;
+      try { broken = readState(root); } catch (e) { brokenThrew = e; }
+      report(brokenThrew === null, `readState: 손상된 JSON에도 던지지 않는다(실제: ${brokenThrew ? brokenThrew.message : "던지지 않음"})`);
+      report(brokenThrew === null && broken.found === true && broken.value === null && typeof broken.error === "string",
+        "readState: 손상된 JSON은 found=true·value=null·error 문자열");
+
+      const state = {
+        schemaVersion: "0.1.0",
+        updatedAt: "2026-08-19T00:00:00Z",
+        artifacts: { evidence: null, career: null, knowledgeMap: null, gapReport: null, plan: null },
+      };
+      writeState(root, state);
+      const round = readState(root);
+      report(round.found === true && round.error === null && JSON.stringify(round.value) === JSON.stringify(state),
+        "writeState → readState 왕복이 값을 보존한다");
+
+      // 쓴 state가 실제 스키마를 만족하는지까지 본다 — 계약이 스키마와
+      // 어긋나면 이 IO 계층을 쓰는 스킬이 곧바로 부적합 산출물을 만든다.
+      const stateSchema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "state.schema.json"), "utf8"));
+      const errs = validateInstance(stateSchema, round.value, stateSchema, "$");
+      if (errs.length > 0) console.log(`    실제 오류: ${JSON.stringify(errs)}`);
+      report(errs.length === 0, "writeState가 쓴 state.json이 state.schema.json을 만족한다");
+
+      const cfgMissing = readConfig(root);
+      report(cfgMissing.found === false, "readConfig: 파일 부재는 found=false(예외 아님)");
+      writeConfig(root, { schemaVersion: "0.1.0" });
+      report(readConfig(root).value.schemaVersion === "0.1.0", "writeConfig → readConfig 왕복이 값을 보존한다");
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 }
 
@@ -4152,6 +4276,7 @@ function runCommonSections() {
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
+  runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);

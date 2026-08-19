@@ -426,8 +426,18 @@ AC-10("모든 산출물 헤더에 커버리지 메타데이터 … 기재율 100
 
 ## □ 게이트 B — 라이브러리 계약 (구현 7단계 착수 시)
 
-- [ ] B-1. `store.mjs`에 state/config IO + 상대경로 변환 API 확정 — **M-5**
-- [ ] B-2. `writeJsonAtomic`을 공유 위치로 추출하고, 그 예외를 `slice_plan.md`에 기록 — **M-5**
+- [x] B-1. `store.mjs`에 state/config IO + 상대경로 변환 API 확정 — **M-5**
+      **닫힘(2026-08-19)** — `readState`/`writeState`/`readConfig`/`writeConfig` +
+      `toStorageRelative`/`fromStorageRelative` + `STATE_FILE_NAME`/`CONFIG_FILE_NAME`.
+      상대경로는 **항상 POSIX 구분자**를 쓰고 루트 밖 탈출을 거부한다. 읽기는 부재·손상 모두
+      **예외를 던지지 않고** `{found, value, error}`로 보고한다 — 구현 8단계의 "state.json
+      부재·스키마 부적합이면 예외 중단 없이 재수집 안내 후 정상 종료" 요구를 만족시키려면
+      던져서는 안 된다.
+- [x] B-2. `writeJsonAtomic`을 공유 위치로 추출하고, 그 예외를 `slice_plan.md`에 기록 — **M-5**
+      **닫힘(2026-08-19)** — `collect-git-facts.mjs`의 비공개 함수를 `store.mjs`로 옮기고
+      수집기는 import해 쓴다. 예외는 `slice_plan.md` 표의 1번으로 이미 기록돼 있었다.
+      **추출이 실제로 일어났는지를 소스 스캔으로 관측한다** — 함수 동작만 보면 사본이 남아
+      있어도 전부 통과하기 때문이다(수집기에 사본을 되살리는 변이로 그 단언이 FAIL함을 실측).
 - [ ] B-3. 노드 `id` 병합 키 규칙 확정 + AC-16에 재실행 안정성 관측 기준 추가 — **M-3**
 - [ ] B-4. `.bak`을 AC-16에 넣거나 두 문서에서 동시에 삭제 — **M-4**
 - [ ] B-5. 산출물 쓰기 직전 자기 스키마 검증을 구현 7·8단계 본문에 명문화 — **M-6**

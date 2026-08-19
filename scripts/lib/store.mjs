@@ -262,3 +262,124 @@ export function computeRepoKeyForPath(repoPathInput, { homeRoot }) {
   const resolved = resolveRepoKey(normalizedPath, { homeRoot });
   return { ...resolved, normalizedPath };
 }
+
+// ---------------------------------------------------------------------------
+// 원자적 쓰기 + state/config IO 계약
+//   구현 7단계 (c)(d) / 슬라이스 B 스펙 심사 M-5 / 착수 전 게이트 B-1·B-2
+//
+// **왜 여기로 옮겼는가.** `writeJsonAtomic`은 `collect-git-facts.mjs`의 비공개
+// 함수였다. state/config를 쓰는 주체가 생기면 그쪽이 temp→rename 규약을
+// 복사하게 되고, 그 순간 AC-16의 원자성 계약이 두 곳에 존재하게 된다 —
+// 한쪽만 고쳐지는 형태의 드리프트가 이 레포에서 이미 여러 번 나왔다
+// (§7 git 프리픽스가 두 곳에 구현돼 있던 콜드 리뷰 A-21이 같은 사례다).
+//
+// **왜 상대경로 변환이 계약에 포함되는가.** 각 스킬이 제각기 `path.relative`를
+// 부르면 Windows에서 백슬래시가 산출물에 섞인다. `state.json`의 경로 인덱스는
+// 산출물이자 다른 도구의 입력이므로, 구분자가 플랫폼에 따라 달라지면 같은
+// 레포의 state.json이 기계마다 달라진다. 변환을 여기 한 곳으로 모아 항상
+// POSIX 구분자를 쓴다.
+// ---------------------------------------------------------------------------
+
+/**
+ * temp → rename으로 JSON을 원자적으로 쓴다(AC-16).
+ *
+ * 부분 쓰기 상태가 디스크에 보이지 않게 하는 것이 목적이다. 같은 디렉터리
+ * 안에서 rename하므로(다른 볼륨으로 건너가지 않는다) 대부분의 파일시스템에서
+ * 원자적이다.
+ *
+ * @param {string} dir 대상 디렉터리(없으면 생성)
+ * @param {string} filename 파일 이름
+ * @param {*} obj JSON 직렬화할 값
+ * @returns {string} 최종 경로
+ */
+export function writeJsonAtomic(dir, filename, obj) {
+  fs.mkdirSync(dir, { recursive: true });
+  const finalPath = path.join(dir, filename);
+  const tmpPath = path.join(dir, `.${filename}.tmp-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(tmpPath, JSON.stringify(obj, null, 2) + "\n", "utf8");
+  fs.renameSync(tmpPath, finalPath);
+  return finalPath;
+}
+
+export const STATE_FILE_NAME = "state.json";
+export const CONFIG_FILE_NAME = "config.json";
+
+/**
+ * 저장 루트 기준 상대경로로 바꾼다. **항상 POSIX 구분자(`/`)를 쓴다.**
+ *
+ * 루트 밖을 가리키면 `..`가 섞인 경로가 되는데, 그것은 산출물에 기록될 값이
+ * 아니므로 여기서 막는다 — 조용히 기록하면 다른 기계에서 해석 불가능한
+ * 경로가 state.json에 남는다.
+ *
+ * @param {string} root 저장 루트(절대경로)
+ * @param {string} target 절대 또는 상대 경로
+ * @returns {string} POSIX 구분자 상대경로
+ */
+export function toStorageRelative(root, target) {
+  const rel = path.relative(path.resolve(root), path.resolve(root, target));
+  const posix = rel.split(path.sep).join("/");
+  if (posix === "" || posix.startsWith("../") || posix === "..") {
+    throw new Error(`저장 루트 밖의 경로는 상대경로로 기록할 수 없습니다: root=${root} target=${target}`);
+  }
+  return posix;
+}
+
+/**
+ * 저장 루트 기준 상대경로를 절대경로로 되돌린다(플랫폼 native 구분자).
+ *
+ * 입력은 항상 POSIX 구분자라고 가정한다 — toStorageRelative가 그렇게만
+ * 기록하기 때문이다. 역시 루트 밖 탈출을 막는다.
+ */
+export function fromStorageRelative(root, relPosix) {
+  const resolvedRoot = path.resolve(root);
+  const abs = path.resolve(resolvedRoot, String(relPosix).split("/").join(path.sep));
+  const rel = path.relative(resolvedRoot, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`저장 루트 밖으로 탈출하는 상대경로입니다: root=${root} rel=${relPosix}`);
+  }
+  return abs;
+}
+
+/**
+ * JSON 파일 하나를 **예외를 던지지 않고** 읽는다.
+ *
+ * 구현 8단계가 "state.json 부재·스키마 부적합이면 예외 중단 없이 재수집 안내
+ * 후 정상 종료"를 요구하므로, 부재와 파싱 실패를 호출자가 구별해 처리할 수
+ * 있어야 한다. 던지면 그 요구를 만족시킬 수 없다.
+ *
+ * @returns {{found: boolean, value: *, error: string|null}}
+ */
+function readJsonSafe(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch (e) {
+    if (e && e.code === "ENOENT") return { found: false, value: null, error: null };
+    return { found: true, value: null, error: `읽기 실패: ${e.message}` };
+  }
+  try {
+    return { found: true, value: JSON.parse(text), error: null };
+  } catch (e) {
+    return { found: true, value: null, error: `JSON 파싱 실패: ${e.message}` };
+  }
+}
+
+/** 저장 루트의 state.json을 읽는다(부재·손상 모두 예외 없이 보고한다). */
+export function readState(root) {
+  return readJsonSafe(path.join(path.resolve(root), STATE_FILE_NAME));
+}
+
+/** 저장 루트의 config.json을 읽는다(부재·손상 모두 예외 없이 보고한다). */
+export function readConfig(root) {
+  return readJsonSafe(path.join(path.resolve(root), CONFIG_FILE_NAME));
+}
+
+/** state.json을 원자적으로 쓴다. */
+export function writeState(root, state) {
+  return writeJsonAtomic(path.resolve(root), STATE_FILE_NAME, state);
+}
+
+/** config.json을 원자적으로 쓴다. */
+export function writeConfig(root, config) {
+  return writeJsonAtomic(path.resolve(root), CONFIG_FILE_NAME, config);
+}

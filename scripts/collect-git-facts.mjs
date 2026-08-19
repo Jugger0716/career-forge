@@ -55,7 +55,7 @@ import {
   CANONICAL_SAMPLING_METHOD_LITERAL,
   NO_TRUNCATION_SAMPLING_METHOD_LITERAL,
 } from "./lib/sampling.mjs";
-import { getRepoToplevel, resolveStorageRoot } from "./lib/store.mjs";
+import { getRepoToplevel, resolveStorageRoot, writeJsonAtomic } from "./lib/store.mjs";
 import { computeEvidenceContentHash } from "./lib/content-hash.mjs";
 import { redactSecrets } from "./lib/redact.mjs";
 
@@ -546,14 +546,11 @@ function buildGitFacts(finalCommits, { vendoredPathsEnabled, customVendoredPathP
 // 원자적 쓰기(temp → rename, AC-16) + 저장 루트 해석
 // ---------------------------------------------------------------------------
 
-function writeJsonAtomic(dir, filename, obj) {
-  fs.mkdirSync(dir, { recursive: true });
-  const finalPath = path.join(dir, filename);
-  const tmpPath = path.join(dir, `.${filename}.tmp-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(tmpPath, JSON.stringify(obj, null, 2) + "\n", "utf8");
-  fs.renameSync(tmpPath, finalPath);
-  return finalPath;
-}
+// writeJsonAtomic은 이 파일의 비공개 함수였으나 scripts/lib/store.mjs로
+// 끌어올렸다(구현 7단계 (d) — slice_plan.md의 슬라이스 A 파일 수정 예외 1번).
+// state/config를 쓰는 주체가 생기면서 temp→rename 규약이 두 곳에 복사될
+// 참이었기 때문이다. 사본을 여기 다시 만들지 마라 — 원자성 계약의 정본은
+// store.mjs 하나이며, 이 파일은 그것을 import해 쓴다.
 
 /**
  * evidence.json·git-facts.json을 저장 루트에 원자적으로 쓴다.
