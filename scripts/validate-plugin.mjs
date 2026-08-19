@@ -25,6 +25,15 @@
 //                                                      (확장자 제외)으로
 //                                                      schemas/<layer>.
 //                                                      schema.json을 정함
+//   node scripts/validate-plugin.mjs --secret-scan <path>  AC-8·AC-11 마스킹
+//                                                      우회 탐지. 산출물 JSON
+//                                                      하나의 모든 문자열에
+//                                                      scripts/lib/redact.mjs의
+//                                                      패턴을 적용해 위반 시
+//                                                      ARTIFACT_SECRET_LEAK으로
+//                                                      exit 1. 스키마 결정
+//                                                      규칙은 --schema-check와
+//                                                      동일
 //
 // 검사 항목(AC-2·AC-3·AC-4·AC-18):
 //   1. plugin.json 필수 필드
@@ -68,6 +77,7 @@ import { lintFreeText } from "./lib/lang-lint.mjs";
 import { STATE_DIR_NAME } from "./lib/store.mjs";
 import { checkEvidenceInvariants } from "./lib/invariants.mjs";
 import { checkSamplingMethodLiteralDrift } from "./lib/sampling-literal-drift.mjs";
+import { scanForSecrets } from "./lib/secret-scan.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -841,6 +851,78 @@ export async function runSchemaCheck({ instancePath }) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+/**
+ * AC-8 「마스킹 우회 시크릿」 / AC-11의 프로덕션 집행 지점. `<path>`가
+ * 가리키는 산출물 JSON 하나의 **모든 문자열 값**에 scripts/lib/redact.mjs의
+ * 패턴을 적용해, 시크릿이 남아 있으면 `ARTIFACT_SECRET_LEAK`으로 FAIL 한다.
+ *
+ * 이 검사 지점이 오염 스위트(구현 9단계)보다 **먼저** 존재해야 한다는 것이
+ * 슬라이스 A에서 배운 "하네스를 먼저" 순서다 — 검사기가 없으면 스위트가
+ * 자기 채점기를 자기가 만들게 되고, 프로덕션 경로에는 아무 방어도 추가되지
+ * 않았는데 게이트만 100% 녹색이 된다(심사 C-2).
+ *
+ * 스키마가 필요한 이유는 면제 판정 하나뿐이다 — `format: "email"`로 선언된
+ * 경로에서 값 전체가 단일 이메일일 때 `email` 패턴 히트를 면제한다. 따라서
+ * 대응 스키마를 못 찾으면 **건너뛰지 않고 FAIL 한다**: 면제 정보 없이
+ * 스캔하면 정상 산출물이 빨갛게 되고, 반대로 조용히 통과시키면 파일명만
+ * 바꿔 검사를 우회할 수 있다. 둘 다 게이트를 무력화한다.
+ *
+ * @param {object} opts
+ * @param {string} opts.artifactPath 검사할 산출물 JSON 경로. 파일명(확장자
+ *   제외)이 곧 스키마 레이어 이름이다(`schemas/<basename>.schema.json`) —
+ *   runSchemaCheck와 동일 규칙.
+ */
+export async function runSecretScan({ artifactPath }) {
+  const errors = [];
+  const warnings = [];
+  const resolvedArtifact = path.resolve(artifactPath);
+
+  if (!fileExists(resolvedArtifact)) {
+    errors.push({
+      code: "SECRET_SCAN_ARTIFACT_NOT_FOUND",
+      message: `파일을 찾을 수 없습니다: ${artifactPath}`,
+      file: artifactPath,
+    });
+    return { ok: false, errors, warnings };
+  }
+
+  const layer = path.basename(resolvedArtifact, ".json");
+  const schemaPath = path.join(REPO_ROOT, "schemas", `${layer}.schema.json`);
+  if (!fileExists(schemaPath)) {
+    errors.push({
+      code: "SECRET_SCAN_SCHEMA_NOT_FOUND",
+      message: `대응 스키마를 찾을 수 없습니다: schemas/${layer}.schema.json (파일명으로 레이어를 판단합니다). 스키마 없이 스캔하면 format:email 필드가 전부 오탐되므로 건너뛰지 않고 FAIL 합니다.`,
+      file: artifactPath,
+    });
+    return { ok: false, errors, warnings };
+  }
+
+  let instance;
+  try {
+    instance = readJson(resolvedArtifact);
+  } catch (e) {
+    errors.push({
+      code: "SECRET_SCAN_ARTIFACT_PARSE_ERROR",
+      message: `${path.basename(resolvedArtifact)} 파싱 실패: ${e.message}`,
+      file: artifactPath,
+    });
+    return { ok: false, errors, warnings };
+  }
+
+  const schema = readJson(schemaPath);
+  for (const v of scanForSecrets(schema, instance)) {
+    // 메시지에 담기는 excerpt는 scanForSecrets가 이미 마스킹한 텍스트다 —
+    // 원문을 담으면 이 오류 메시지가 시크릿의 두 번째 유출 경로가 된다.
+    errors.push({
+      code: "ARTIFACT_SECRET_LEAK",
+      message: `필드 '${v.path}'에 시크릿 패턴 [${v.patterns.join(", ")}] 발견: "${v.excerpt}"`,
+      file: artifactPath,
+    });
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -863,6 +945,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const langCheckIdx = argv.indexOf("--lang-check");
   const schemaCheckIdx = argv.indexOf("--schema-check");
+  const secretScanIdx = argv.indexOf("--secret-scan");
 
   if (langCheckIdx !== -1) {
     const outDir = argv[langCheckIdx + 1];
@@ -883,6 +966,17 @@ async function main() {
     }
     const result = await runSchemaCheck({ instancePath });
     printResult(result, `schema-check(${instancePath})`);
+    process.exit(result.ok ? 0 : 1);
+  }
+
+  if (secretScanIdx !== -1) {
+    const artifactPath = argv[secretScanIdx + 1];
+    if (!artifactPath) {
+      console.error("사용법: node scripts/validate-plugin.mjs --secret-scan <path>");
+      process.exit(2);
+    }
+    const result = await runSecretScan({ artifactPath });
+    printResult(result, `secret-scan(${artifactPath})`);
     process.exit(result.ok ? 0 : 1);
   }
 
