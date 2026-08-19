@@ -49,7 +49,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runValidation, runLangCheck, runSchemaCheck, runSecretScan } from "../scripts/validate-plugin.mjs";
 import { scanForSecrets, collectEmailFormatPaths, isSingleEmail } from "../scripts/lib/secret-scan.mjs";
@@ -69,6 +69,7 @@ import {
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
 import {
+  KNOWN_LAYERS,
   verifyCitation,
   verifySnippetCitation,
   verifyMergeFileSetEquivalence,
@@ -1668,6 +1669,245 @@ function declaredFileChangeMismatches(entry, declared) {
     mismatches.push(`oldPath: 실제=${JSON.stringify(entryOldPath)} 기대(declared)=${JSON.stringify(declaredOldPath)}`);
   }
   return mismatches;
+}
+
+// ---------------------------------------------------------------------------
+// 인용 커버리지 절 단위 오라클 — 게이트 C-5 / 심사 C-3 수정안 ③ /
+// 콜드 리뷰 A-32·A-34 (슬라이스 A 파일 수정 예외 5번)
+//
+// **왜 절 단위인가.** 이 레포에서 이미 두 번 관측된 실패 형태가 있다:
+// 영역당 한 번만 변이를 돌리면 "그 영역에 검사가 있다"까지만 확인되고
+// **그 절이 실제로 FAIL을 내는지**는 확인되지 않는다. 그래서 아래는
+// C-5가 넣은 조건 두 개(`artifactLayerCount > 0`, `allCitations.length === 0`)
+// 를 **각각 따로** 겨냥한 단언을 둔다 — 한 조건만 지우는 변이가 다른
+// 단언을 깨지 않아야 관측이 성립한다.
+//
+// **허용 방향도 본다.** C-5는 제약을 좁히는 변경이므로 금지 방향(빈손 →
+// INCONCLUSIVE)만 보면 조건을 통째로 넓혀도(모든 0건을 INCONCLUSIVE로)
+// 아무 단언이 깨지지 않는다. (C5-2)·(C5-3)이 그 방향을 잡는다.
+// ---------------------------------------------------------------------------
+
+function runCitationCoverageOracleSmoke() {
+  console.log("[인용 커버리지 오라클] C-5: 인용 0건 = PASS fail-open 제거 · A-32 입력 오류 · A-34 계층 enum 드리프트");
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-c5-"));
+  try {
+    // 실제 커밋 1건짜리 최소 레포 — (C5-2)의 허용 방향이 "인용이 실제로
+    // 검증돼 PASS"임을 보이려면 진짜 커밋이 있어야 한다. 픽스처가 진입
+    // 조건을 만족하지 않으면 그 단언은 공허하게 참이 된다.
+    const repoDir = path.join(tmpBase, "repo");
+    crInitRepo(repoDir);
+    crWriteFile(repoDir, "a.txt", "hello\n");
+    crGit(repoDir, ["add", "."]);
+    crGit(repoDir, ["commit", "-q", "-m", "feat: 첫 커밋"]);
+    const evidence = collectGitFacts({
+      repoPath: repoDir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      mergeIncluded: false,
+      maxCommits: 1000,
+    }).evidence;
+    const ownerEntry = evidence.commits.find((c) => c.excluded !== true);
+
+    // 인용이 0건인 산출물 — 노드는 있지만(nodes.minItems:1을 만족한다)
+    // 전부 evidence:[] + basis:insufficient라 인용 축이 볼 것이 없다.
+    // 이것이 C-3이 말한 "빈손"의 nodes.minItems 이후 판이다.
+    const emptyCitationCareer = {
+      nodes: [{ id: "car:1", basis: "insufficient", evidence: [] }],
+    };
+    const citingCareer = {
+      nodes: [{ id: "car:1", basis: "commit", evidence: [{ ledgerId: ownerEntry.id, path: "a.txt" }] }],
+    };
+
+    // ---- (C5-1) 금지 방향: 산출물 1계층 + 인용 0건 → INCONCLUSIVE ----
+    {
+      const r = verifyEvidence({
+        repoPath: repoDir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career: emptyCitationCareer },
+      });
+      const codes = (r.inconclusiveReasons ?? []).map((x) => x.code);
+      const ok =
+        r.status === "INCONCLUSIVE" &&
+        r.ok === false &&
+        codes.includes("NO_CITATIONS_TO_VERIFY") &&
+        r.summary.totalCitations === 0 &&
+        r.summary.artifactLayers === 1 &&
+        exitCodeForReport(r) === 2;
+      if (!ok) console.log(`    실제: status=${r.status} codes=${JSON.stringify(codes)} summary=${JSON.stringify(r.summary)}`);
+      report(ok, "(C5-1) 산출물 1계층 + 인용 0건 → INCONCLUSIVE(NO_CITATIONS_TO_VERIFY, exit 2) — 예전에는 [PASS] exit 0이었다");
+    }
+
+    // ---- (C5-2) 허용 방향: 산출물 1계층 + 인용 1건(정상) → PASS ----
+    //      이 단언이 없으면 "인용 0건"이 아니라 "산출물이 있으면 무조건
+    //      INCONCLUSIVE"로 넓혀도 (C5-1)이 그대로 통과한다.
+    {
+      const r = verifyEvidence({
+        repoPath: repoDir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career: citingCareer },
+      });
+      const ok =
+        r.status === "PASS" &&
+        r.ok === true &&
+        r.summary.passCitations === 1 &&
+        (r.inconclusiveReasons ?? []).length === 0 &&
+        exitCodeForReport(r) === 0;
+      if (!ok) console.log(`    실제: status=${r.status} summary=${JSON.stringify(r.summary)} reasons=${JSON.stringify(r.inconclusiveReasons)}`);
+      report(ok, "(C5-2) 허용 방향: 산출물 1계층 + 검증된 인용 1건 → PASS(exit 0) — 정상 산출물이 새 조건에 걸리지 않는다");
+    }
+
+    // ---- (C5-3) 경계: artifactsByLayer가 비면 인용 0건이어도 PASS ----
+    //      (e)축·contentHash만 요구한 호출의 PASS는 공허하지 않다.
+    //      `artifactLayerCount > 0` 조건을 지우는 변이가 여기서만 FAIL한다.
+    {
+      const r = verifyEvidence({
+        repoPath: repoDir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: {},
+      });
+      const ok =
+        r.status === "PASS" &&
+        r.summary.totalCitations === 0 &&
+        r.summary.artifactLayers === 0 &&
+        (r.inconclusiveReasons ?? []).length === 0;
+      if (!ok) console.log(`    실제: status=${r.status} summary=${JSON.stringify(r.summary)} reasons=${JSON.stringify(r.inconclusiveReasons)}`);
+      report(ok, "(C5-3) 경계: artifactsByLayer:{} + 인용 0건 → PASS 유지(evidence 전용 호출을 INCONCLUSIVE로 만들지 않는다)");
+    }
+
+    // ---- (C5-4) 사유 구별: 도구 오류와 0건은 같은 exit 2지만 다른 코드다 ----
+    //      비-git 디렉터리를 --repo로 주면 인용은 존재하되 전부 TOOL_ERROR가
+    //      되므로 NO_CITATIONS_TO_VERIFY는 발화하지 않아야 한다. 두 사유가
+    //      한 코드로 뭉개지면 호출자가 엉뚱한 곳을 고친다.
+    {
+      const nonGit = path.join(tmpBase, "nonGit");
+      fs.mkdirSync(nonGit, { recursive: true });
+      const r = verifyEvidence({
+        repoPath: nonGit,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { career: citingCareer },
+      });
+      const codes = (r.inconclusiveReasons ?? []).map((x) => x.code);
+      const ok =
+        r.status === "INCONCLUSIVE" &&
+        codes.includes("CITATION_TOOL_ERRORS") &&
+        !codes.includes("NO_CITATIONS_TO_VERIFY") &&
+        r.summary.totalCitations > 0;
+      if (!ok) console.log(`    실제: status=${r.status} codes=${JSON.stringify(codes)} total=${r.summary.totalCitations}`);
+      report(ok, "(C5-4) 사유 구별: 도구 오류 실행은 CITATION_TOOL_ERRORS만 내고 NO_CITATIONS_TO_VERIFY는 내지 않는다");
+    }
+
+    // ---- (C5-6) 경계 2: 인용 0건이어도 (f)축이 집행됐으면 PASS ----
+    //      L2·L3의 basis enum에는 commit이 없으므로 external 노드만 있는
+    //      knowledge-map은 인용이 0건인 것이 정상이다. 초판은 이 경우를
+    //      INCONCLUSIVE로 뒤집었고 게이트 C-2의 대조군이 그것을 잡았다.
+    //      이 단언은 그 좁힘(`externalSourcesChecked === 0` 조건)을
+    //      직접 겨냥한다 — 조건을 지우면 여기서만 FAIL한다.
+    {
+      const externalOnly = {
+        nodes: [{ id: "km:001", basis: "external", externalUrl: "https://developer.mozilla.org/en-US/docs/Web/HTTP", evidence: [] }],
+      };
+      const r = verifyEvidence({
+        repoPath: repoDir,
+        evidence,
+        selectedIdentities: [OWNER_EMAIL],
+        artifactsByLayer: { "knowledge-map": externalOnly },
+      });
+      const ok =
+        r.status === "PASS" &&
+        r.summary.totalCitations === 0 &&
+        r.summary.externalSourcesChecked === 1 &&
+        (r.inconclusiveReasons ?? []).length === 0;
+      if (!ok) console.log(`    실제: status=${r.status} summary=${JSON.stringify(r.summary)} reasons=${JSON.stringify(r.inconclusiveReasons)}`);
+      report(ok, "(C5-6) 경계: 인용 0건이지만 (f)축이 external 1건을 대조 → PASS 유지(집행된 축이 있는 산출물을 미집행으로 보고하지 않는다)");
+    }
+
+    // ---- (A32) 입력 파일 오류 → [INPUT_ERROR] + exit 2, 스택 없음 ----
+    //      여기만 서브프로세스를 쓴다 — process.exit과 stderr 형태가 판정
+    //      대상이라 함수 직접 호출로는 관측할 수 없다.
+    {
+      const evidencePath = path.join(tmpBase, "evidence.json");
+      fs.writeFileSync(evidencePath, JSON.stringify(evidence), "utf8");
+      const broken = path.join(tmpBase, "broken.json");
+      fs.writeFileSync(broken, "{ not json", "utf8");
+      const missing = path.join(tmpBase, "does-not-exist.json");
+      const careerPath = path.join(tmpBase, "career.json");
+      const verifier = path.join(REPO_ROOT, "scripts", "verify-evidence.mjs");
+
+      const runCli = (args) => {
+        const res = spawnSync(process.execPath, [verifier, ...args], { encoding: "utf8" });
+        return { status: res.status, stderr: res.stderr ?? "", stdout: res.stdout ?? "" };
+      };
+
+      const rMissing = runCli(["--repo", repoDir, "--evidence", missing, "--identity", OWNER_EMAIL, "--artifact", `career=${careerPath}`]);
+      const okMissing =
+        rMissing.status === 2 &&
+        rMissing.stderr.includes("[INPUT_ERROR]") &&
+        rMissing.stderr.includes(missing) &&
+        !rMissing.stderr.includes("at Object.readFileSync");
+      if (!okMissing) console.log(`    실제(부재): exit=${rMissing.status} stderr=${rMissing.stderr.slice(0, 300)}`);
+      report(okMissing, "(A32-1) 없는 입력 파일 → [INPUT_ERROR] + exit 2(파일명 포함, raw 스택 없음)");
+
+      const rBroken = runCli(["--repo", repoDir, "--evidence", broken, "--identity", OWNER_EMAIL, "--artifact", `career=${broken}`]);
+      const okBroken =
+        rBroken.status === 2 &&
+        rBroken.stderr.includes("[INPUT_ERROR]") &&
+        rBroken.stderr.includes("JSON 파싱 실패") &&
+        rBroken.stderr.includes(broken);
+      if (!okBroken) console.log(`    실제(깨짐): exit=${rBroken.status} stderr=${rBroken.stderr.slice(0, 300)}`);
+      report(okBroken, "(A32-2) 깨진 JSON → [INPUT_ERROR] JSON 파싱 실패 + exit 2(어느 파일인지 이름이 나온다)");
+
+      // exit 1(확정된 위반)과 exit 2(입력 오류)가 구별되는지 — A-32가
+      // 지적한 것은 "둘이 같은 코드라 호출자가 구별 못 한다"였다.
+      fs.writeFileSync(careerPath, JSON.stringify({
+        nodes: [{ id: "car:1", basis: "commit", evidence: [{ ledgerId: `commit:${"d".repeat(40)}`, path: "a.txt" }] }],
+      }), "utf8");
+      const rFail = runCli(["--repo", repoDir, "--evidence", evidencePath, "--identity", OWNER_EMAIL, "--artifact", `career=${careerPath}`]);
+      const okSplit = rFail.status === 1 && !rFail.stderr.includes("[INPUT_ERROR]");
+      if (!okSplit) console.log(`    실제(위반): exit=${rFail.status} stderr=${rFail.stderr.slice(0, 300)}`);
+      report(okSplit, "(A32-3) 확정된 인용 위반은 여전히 exit 1 — 입력 오류(2)와 종료 코드가 구별된다");
+
+      // C-5의 CLI 경로 관측 — 빈손 산출물이 exit 2로 나오는지.
+      const emptyPath = path.join(tmpBase, "career-empty.json");
+      fs.writeFileSync(emptyPath, JSON.stringify(emptyCitationCareer), "utf8");
+      const rEmpty = runCli(["--repo", repoDir, "--evidence", evidencePath, "--identity", OWNER_EMAIL, "--artifact", `career=${emptyPath}`]);
+      const okEmpty =
+        rEmpty.status === 2 &&
+        rEmpty.stderr.includes("NO_CITATIONS_TO_VERIFY") &&
+        !rEmpty.stdout.includes("[PASS]");
+      if (!okEmpty) console.log(`    실제(빈손 CLI): exit=${rEmpty.status} stdout=${rEmpty.stdout.slice(0, 300)} stderr=${rEmpty.stderr.slice(0, 300)}`);
+      report(okEmpty, "(C5-5) CLI 경로: 빈손 산출물 → [PASS] 미출력 + NO_CITATIONS_TO_VERIFY + exit 2");
+    }
+
+    // ---- (A34) 계층 enum 사본 드리프트를 소스 스캔으로 관측 ----
+    //      validate-plugin.mjs는 이번 예외 범위 밖이라 고치지 않는다.
+    //      대신 두 리터럴이 갈리는 순간 이 단언이 FAIL한다.
+    {
+      const src = fs.readFileSync(path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "utf8");
+      const m = src.match(/const layers = (\[[^\]]*\]);/);
+      let copy = null;
+      if (m) {
+        try {
+          copy = JSON.parse(m[1].replace(/'/g, '"'));
+        } catch {
+          copy = null;
+        }
+      }
+      const ok = Array.isArray(copy) && JSON.stringify(copy) === JSON.stringify(KNOWN_LAYERS);
+      if (!ok) console.log(`    실제: validate-plugin 사본=${JSON.stringify(copy)} verify-evidence 정본=${JSON.stringify(KNOWN_LAYERS)}`);
+      report(ok, "(A34) validate-plugin.mjs의 계층 enum 하드코딩 사본이 verify-evidence.mjs의 KNOWN_LAYERS와 동일(드리프트 가드)");
+    }
+  } finally {
+    try {
+      fs.rmSync(tmpBase, { recursive: true, force: true });
+    } catch {
+      /* 정리 실패는 검사 결과에 영향을 주지 않는다 */
+    }
+  }
 }
 
 function runVerifyEvidenceSmoke() {
@@ -4275,6 +4515,7 @@ function runCommonSections() {
   runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
+  runSection("인용 커버리지 오라클(게이트 C-5·A-32·A-34)", runCitationCoverageOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
