@@ -96,7 +96,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   getCommitAuthorAndParents,
@@ -117,6 +117,10 @@ const LAYER_PARENT = {
 };
 
 const KNOWN_LAYERS = ["career", "knowledge-map", "gap-report", "plan"];
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
+const DEFAULT_SOURCES_PATH = path.join(REPO_ROOT, "references", "sources.json");
 
 // ---------------------------------------------------------------------------
 // 검증 캐시(콜드 리뷰 M 대응) — 동일 (repoPath, sha)에 대한 git 오라클
@@ -594,7 +598,144 @@ function checkSourceRepoHeadStale(repoPath, evidence) {
   return { checked: true, stale: sourceRepoHead !== currentHead, currentHead, sourceRepoHead };
 }
 
-export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifactsByLayer, cache = createVerificationCache() }) {
+// ---------------------------------------------------------------------------
+// (f)축 — basis:"external" 노드의 출처 allow-list 대조
+//   구현 8단계 (a) / 슬라이스 B 스펙 심사 M-1 / 착수 전 게이트 C-2
+//
+// **왜 이 축이 필요한가.** knowledge-map.schema.json의 `externalUrl`
+// description은 "allow-list 대조는 스크립트가 런타임에 검사하며 이 스키마는
+// 형식만 검사한다"고 **선언**하고 있었는데, 그 검사를 수행하는 코드가 레포
+// 전체에 0곳이었다. 선언과 집행이 분리된 이 형태는 `redact.mjs`가 어디서도
+// import되지 않는 죽은 코드였던 것(콜드 리뷰 A-9)과 같은 구조다 — 문서는
+// 방어를 약속하는데 그 방어가 실재하지 않는다.
+//
+// 대조 규칙의 정본 서술은 `references/sources.json`의 `matchRule`에 있다.
+// 아래 구현이 그 문장과 갈리면 코드가 아니라 그 문장을 먼저 고쳐라.
+// ---------------------------------------------------------------------------
+
+/**
+ * allow-list 파일을 읽어 항목별 { origin, pathname } 목록으로 정규화한다.
+ *
+ * 반환의 `ok`가 false여도 **그 자체로는 위반이 아니다** — external 노드가
+ * 0건이면 대조할 것이 없으므로 checkExternalSources가 이 실패를 무시한다.
+ * external 노드가 1건이라도 있으면 그때 비로소 FAIL이 된다(fail-closed:
+ * "검증할 수 없음"을 "통과"로 바꾸지 않는다).
+ */
+export function loadSourceAllowlist(sourcesPath = DEFAULT_SOURCES_PATH) {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(sourcesPath, "utf8"));
+  } catch (e) {
+    return { ok: false, code: "EXTERNAL_ALLOWLIST_UNREADABLE", message: `allow-list를 읽을 수 없습니다(${sourcesPath}): ${e.message}`, entries: [] };
+  }
+  if (!Array.isArray(raw?.sources)) {
+    return { ok: false, code: "EXTERNAL_ALLOWLIST_MALFORMED", message: `allow-list의 sources가 배열이 아닙니다(${sourcesPath}).`, entries: [] };
+  }
+  const entries = [];
+  for (const s of raw.sources) {
+    let u;
+    try {
+      u = new URL(s?.url);
+    } catch {
+      return { ok: false, code: "EXTERNAL_ALLOWLIST_MALFORMED", message: `allow-list 항목의 url이 URL로 파싱되지 않습니다: ${JSON.stringify(s?.url)}`, entries: [] };
+    }
+    if (u.protocol !== "https:") {
+      return { ok: false, code: "EXTERNAL_ALLOWLIST_MALFORMED", message: `allow-list 항목이 https가 아닙니다: ${s.url}`, entries: [] };
+    }
+    entries.push({ origin: u.origin, pathname: u.pathname, url: s.url, label: s.label ?? null });
+  }
+  return { ok: true, code: null, message: "", entries };
+}
+
+/**
+ * 후보 URL이 allow-list 항목 중 하나에 부합하는가.
+ *
+ * 규칙(references/sources.json의 matchRule과 동일해야 한다):
+ *   (1) new URL()로 파싱될 것, (2) 프로토콜이 https:, (3) origin이 항목의
+ *   origin과 **정확히 일치**, (4) pathname이 항목의 pathname으로 시작.
+ *
+ * 단순 문자열 prefix 대조를 쓰지 않는 이유는 호스트 연장 우회 때문이다 —
+ * `https://developer.mozilla.org.evil.com/x`는 문자열로는
+ * `https://developer.mozilla.org`로 시작하지만 origin이 다르다. origin 정확
+ * 일치는 그 우회를 구조적으로 막는다(대소문자·기본 포트 정규화도 URL이
+ * 처리한다).
+ *
+ * @returns {{allowed: boolean, code: string|null, message: string, matched: string|null}}
+ */
+export function matchesAllowlist(candidateUrl, entries) {
+  let u;
+  try {
+    u = new URL(candidateUrl);
+  } catch {
+    return { allowed: false, code: "EXTERNAL_URL_MALFORMED", message: `externalUrl이 URL로 파싱되지 않습니다: ${JSON.stringify(candidateUrl)}`, matched: null };
+  }
+  if (u.protocol !== "https:") {
+    return { allowed: false, code: "EXTERNAL_URL_MALFORMED", message: `externalUrl이 https가 아닙니다(${u.protocol} — 다운그레이드된 출처는 근거로 기록하지 않습니다): ${candidateUrl}`, matched: null };
+  }
+  for (const e of entries) {
+    if (u.origin === e.origin && u.pathname.startsWith(e.pathname)) {
+      return { allowed: true, code: null, message: "", matched: e.url };
+    }
+  }
+  return {
+    allowed: false,
+    code: "EXTERNAL_URL_NOT_IN_ALLOWLIST",
+    message: `externalUrl이 references/sources.json allow-list에 없습니다: ${candidateUrl}`,
+    matched: null,
+  };
+}
+
+/**
+ * 모든 계층의 basis:"external" 노드에 대해 allow-list 대조를 수행한다.
+ *
+ * 반환: { violations, checked } — `checked`는 실제로 대조한 external 노드 수다.
+ * 이 수치를 리포트에 내보내는 이유는 (e)축과 같다: external 노드가 0건이면
+ * 위반도 0건인데, 그것이 "검사가 통과했다"인지 "검사할 것이 없었다"인지를
+ * 숫자 없이는 구별할 수 없다.
+ */
+export function checkExternalSources(artifactsByLayer, allowlist) {
+  const violations = [];
+  let checked = 0;
+
+  for (const [layer, instance] of Object.entries(artifactsByLayer)) {
+    for (const node of instance?.nodes ?? []) {
+      if (node?.basis !== "external") continue;
+      checked += 1;
+
+      // allow-list 자체를 못 읽었는데 대조 대상이 존재한다 — 여기서 비로소
+      // 위반이 된다(external 노드가 0건이면 이 분기에 도달하지 않으므로
+      // allow-list 부재가 무해한 경우와 구별된다).
+      if (!allowlist.ok) {
+        violations.push({ layer, nodeId: node.id, externalUrl: node.externalUrl ?? null, code: allowlist.code, message: allowlist.message });
+        continue;
+      }
+
+      // externalUrl 자체가 없는 경우. knowledge-map 스키마는 조건절로
+      // required를 걸지만, career/gap-report/plan 노드에는 externalUrl
+      // 프로퍼티가 아예 없고 additionalProperties:false라 담을 자리조차
+      // 없다 — 그 계층에서 basis:"external"을 선언하면 여기서 잡힌다.
+      if (typeof node.externalUrl !== "string" || node.externalUrl === "") {
+        violations.push({
+          layer,
+          nodeId: node.id,
+          externalUrl: null,
+          code: "EXTERNAL_URL_MISSING",
+          message: `basis:"external"인데 externalUrl이 없습니다(이 계층 스키마에 externalUrl 프로퍼티가 존재하는지 확인하십시오).`,
+        });
+        continue;
+      }
+
+      const m = matchesAllowlist(node.externalUrl, allowlist.entries);
+      if (!m.allowed) {
+        violations.push({ layer, nodeId: node.id, externalUrl: node.externalUrl, code: m.code, message: m.message });
+      }
+    }
+  }
+
+  return { violations, checked };
+}
+
+export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifactsByLayer, sourcesPath = DEFAULT_SOURCES_PATH, cache = createVerificationCache() }) {
   const allCitations = [];
   for (const [layer, instance] of Object.entries(artifactsByLayer)) {
     const { citations } = verifyArtifactInstance({ layer, instance, evidence, repoPath, selectedIdentities, cache });
@@ -627,6 +768,13 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   const contentHashViolations = checkContentHashInvariant(evidence);
   const sourceRepoHeadStaleness = checkSourceRepoHeadStale(repoPath, evidence);
 
+  // (f)축 — allow-list 대조. allow-list 로드 실패는 external 노드가 1건이라도
+  // 있을 때에만 위반이 된다(checkExternalSources 안에서 판단한다) — 여기서
+  // 미리 실패시키면 external을 전혀 쓰지 않는 산출물까지 막힌다.
+  const allowlist = loadSourceAllowlist(sourcesPath);
+  const { violations: externalSourceViolations, checked: externalSourcesChecked } =
+    checkExternalSources(artifactsByLayer, allowlist);
+
   // 콜드 리뷰 C4(Critical) 대응 — fail-open 제거. 이전에는 `ok`가
   // violations/layerRefViolations/mergeFileSetViolations 셋만 봤으므로
   // 인용 100%가 TOOL_ERROR(예: --repo 오타, git이 PATH에 없는 셸)여도
@@ -646,7 +794,7 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   //                  정상적으로 완결됨).
   const hasFailures =
     violations.length > 0 || layerRefViolations.length > 0 || mergeFileSetViolations.length > 0 ||
-    contentHashViolations.length > 0;
+    contentHashViolations.length > 0 || externalSourceViolations.length > 0;
   const hasUnverified = allToolErrors.length > 0;
   const status = hasFailures ? "FAIL" : hasUnverified ? "INCONCLUSIVE" : "PASS";
   const ok = status === "PASS";
@@ -673,6 +821,10 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
       mergeFileSetToolErrors: mergeFileSetToolErrors.length,
       // 콜드 리뷰 A-7 대응.
       contentHashViolations: contentHashViolations.length,
+      // (f)축. checked를 함께 내보내는 이유는 (e)축과 같다 — 위반 0건이
+      // "통과"인지 "검사 대상이 0건이었음"인지를 숫자 없이는 구별할 수 없다.
+      externalSourcesChecked,
+      externalSourceViolations: externalSourceViolations.length,
     },
     violations,
     toolErrors: allToolErrors,
@@ -680,6 +832,7 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
     layerRefUnverifiable,
     mergeFileSetViolations,
     contentHashViolations,
+    externalSourceViolations,
     sourceRepoHeadStaleness,
   };
 }
@@ -717,6 +870,7 @@ function parseArgs(argv) {
     artifactSpecs: [], // {layer, path}
     outDir: null,
     outPath: null,
+    sourcesPath: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -755,6 +909,9 @@ function parseArgs(argv) {
       case "--out":
         opts.outPath = argv[++i];
         break;
+      case "--sources":
+        opts.sourcesPath = argv[++i];
+        break;
       default:
         console.error(`[경고] 알 수 없는 인자 무시: ${a}`);
     }
@@ -766,7 +923,7 @@ function printUsage() {
   console.error(
     "사용법: node scripts/verify-evidence.mjs --repo <path> --evidence <evidence.json> " +
     "[--config <config.json>] [--identity <email>]... " +
-    "(--artifact <layer>=<path>)... | --out-dir <dir> [--out <path>]"
+    "(--artifact <layer>=<path>)... | --out-dir <dir> [--out <path>] [--sources <sources.json>]"
   );
 }
 
@@ -803,9 +960,15 @@ function printReport(report) {
     `[verify-evidence] mergeFileSet: checked=${report.summary.mergeFileSetChecked} violations=${report.summary.mergeFileSetViolations} ` +
     `toolError=${report.summary.mergeFileSetToolErrors}`
   );
+  console.log(
+    `[verify-evidence] externalSources: checked=${report.summary.externalSourcesChecked} violations=${report.summary.externalSourceViolations}`
+  );
   // 콜드 리뷰 A-7 대응.
   for (const v of report.contentHashViolations ?? []) {
     console.error(`[FAIL] ${v.code}: ${v.message}`);
+  }
+  for (const v of report.externalSourceViolations ?? []) {
+    console.error(`[FAIL] ${v.code} (${v.layer}#${v.nodeId}): ${v.message}`);
   }
   const staleness = report.sourceRepoHeadStaleness;
   if (staleness?.checked && staleness.stale) {
@@ -898,7 +1061,13 @@ function main() {
   // status:"INCONCLUSIVE"→exit 2 분기로 닫힌다).
   let report;
   try {
-    report = verifyEvidence({ repoPath: opts.repo, evidence, selectedIdentities, artifactsByLayer });
+    report = verifyEvidence({
+      repoPath: opts.repo,
+      evidence,
+      selectedIdentities,
+      artifactsByLayer,
+      sourcesPath: opts.sourcesPath ?? DEFAULT_SOURCES_PATH,
+    });
   } catch (e) {
     console.error(`[오류] 검증 실패(미처리 예외 — 버그로 취급): ${e.message}`);
     process.exit(1);

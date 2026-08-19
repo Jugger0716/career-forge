@@ -67,6 +67,8 @@ import {
   createVerificationCache,
   verificationCacheKey,
   exitCodeForReport,
+  loadSourceAllowlist,
+  checkExternalSources,
 } from "../scripts/verify-evidence.mjs";
 import {
   catFileExists,
@@ -782,6 +784,150 @@ function runSecretScanOracleSmoke() {
       console.log(`    scanner: ${JSON.stringify(scannerVerdicts)}`);
     }
     report(agree, `이메일 판정 드리프트 없음: schema-validate.mjs와 secret-scan.mjs가 경계값 ${samples.length}종에서 동일 판정`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// (f)축 allow-list 절 단위 오라클 — 게이트 C-2 / 심사 M-1 / 구현 8단계 (a)
+//
+// knowledge-map.schema.json의 externalUrl description은 "allow-list 대조는
+// 스크립트가 런타임에 검사한다"고 **선언**해 놓고 그 코드가 레포에 0곳이었다.
+// 이 오라클은 그 집행이 실재하며, 특히 **문자열 prefix 대조였다면 통과했을
+// 호스트 연장 우회**를 막는지를 관측한다.
+//
+// checkExternalSources는 nodes[].basis/id/externalUrl만 읽으므로 인스턴스를
+// 손으로 최소 형태로 만든다(스키마 유효성은 이 함수의 관심사가 아니다).
+// 다만 그것만 두면 "함수는 맞는데 verifyEvidence에 배선되지 않은" 회귀를
+// 못 잡으므로, 마지막에 실제 verifyEvidence 경로로 한 번 더 관측한다.
+// ---------------------------------------------------------------------------
+function runExternalSourceOracleSmoke() {
+  console.log("[allow-list 절 단위 오라클] verify-evidence (f)축 — 호스트 연장 우회 · 다운그레이드 · 경로 prefix · fail-closed");
+
+  const SOURCES = path.join(REPO_ROOT, "references", "sources.json");
+  const real = loadSourceAllowlist(SOURCES);
+
+  // 정본 allow-list 파일 자체가 유효해야 아래 단언들이 의미를 갖는다.
+  report(real.ok && real.entries.length >= 1, `선결: references/sources.json이 로드됨(ok=${real.ok}, 항목 ${real.entries.length}개)`);
+
+  const nodeOf = (basis, externalUrl) => ({
+    nodes: [{ id: "km:001", basis, ...(externalUrl === undefined ? {} : { externalUrl }) }],
+  });
+  const run = (inst, allowlist = real) => checkExternalSources({ "knowledge-map": inst }, allowlist);
+
+  const CASES = [
+    { label: "allow-list 안의 URL", url: "https://developer.mozilla.org/en-US/docs/Web/HTTP", expect: null },
+    { label: "경로 prefix 안쪽(nodejs.org/docs/)", url: "https://nodejs.org/docs/latest/api/fs.html", expect: null },
+    // origin 정규화 — 대소문자와 기본 포트가 달라도 같은 origin이다. 문자열
+    // 대조였다면 여기서 오탐이 났을 것이다.
+    { label: "origin 정규화(대소문자·기본 포트)", url: "https://Developer.Mozilla.ORG:443/en-US/docs/", expect: null },
+    // 이 케이스가 이 축의 핵심이다. 문자열 prefix 대조라면
+    // "https://developer.mozilla.org"로 시작하므로 **통과했을** 값이다.
+    { label: "호스트 연장 우회(.evil.com)", url: "https://developer.mozilla.org.evil.com/en-US/docs/", expect: "EXTERNAL_URL_NOT_IN_ALLOWLIST" },
+    { label: "allow-list 밖 도메인", url: "https://random-blog.example.com/post/1", expect: "EXTERNAL_URL_NOT_IN_ALLOWLIST" },
+    { label: "같은 호스트지만 경로 prefix 밖(nodejs.org/blog/)", url: "https://nodejs.org/blog/release/v24", expect: "EXTERNAL_URL_NOT_IN_ALLOWLIST" },
+    { label: "http 다운그레이드", url: "http://developer.mozilla.org/en-US/docs/", expect: "EXTERNAL_URL_MALFORMED" },
+    { label: "URL이 아닌 문자열", url: "MDN 어딘가에서 봤음", expect: "EXTERNAL_URL_MALFORMED" },
+    { label: "file: 스킴", url: "file:///etc/passwd", expect: "EXTERNAL_URL_MALFORMED" },
+  ];
+
+  for (const c of CASES) {
+    const { violations, checked } = run(nodeOf("external", c.url));
+    const gotCode = violations[0]?.code ?? null;
+    const ok = checked === 1 && gotCode === c.expect;
+    if (!ok) console.log(`    실제: checked=${checked} violations=${JSON.stringify(violations)}`);
+    report(ok, `(f)축 ${c.label} → ${c.expect ?? "위반 없음"}`);
+  }
+
+  // basis:"external"인데 externalUrl 자체가 없는 경우. career/gap-report/plan
+  // 노드에는 externalUrl 프로퍼티가 아예 없고 additionalProperties:false라
+  // 담을 자리조차 없으므로, 그 계층에서 external을 선언하면 여기서 잡힌다.
+  {
+    const { violations, checked } = run(nodeOf("external", undefined));
+    const ok = checked === 1 && violations[0]?.code === "EXTERNAL_URL_MISSING";
+    if (!ok) console.log(`    실제: checked=${checked} violations=${JSON.stringify(violations)}`);
+    report(ok, "(f)축 basis:external인데 externalUrl 없음 → EXTERNAL_URL_MISSING");
+  }
+
+  // 검사 대상 한정: basis가 external이 아닌 노드는 URL이 무엇이든 보지 않는다.
+  // checked===0으로 그것을 관측한다 — 이 카운터가 없으면 "위반 0건"이
+  // "통과"인지 "검사 안 함"인지 구별되지 않는다.
+  {
+    const inst = { nodes: [{ id: "km:001", basis: "inference", externalUrl: "https://random-blog.example.com/x" }] };
+    const { violations, checked } = run(inst);
+    report(checked === 0 && violations.length === 0, "(f)축 basis가 external이 아닌 노드는 대조 대상이 아님(checked=0)");
+  }
+
+  // fail-closed 양방향. allow-list를 못 읽었을 때:
+  //   - external 노드가 0건이면 무해해야 한다(external을 안 쓰는 산출물까지
+  //     막으면 게이트를 끄게 만든다).
+  //   - external 노드가 1건이라도 있으면 위반이어야 한다("검증할 수 없음"을
+  //     "통과"로 바꾸지 않는다).
+  {
+    const broken = loadSourceAllowlist(path.join(REPO_ROOT, "references", "__does-not-exist__.json"));
+    report(!broken.ok && broken.code === "EXTERNAL_ALLOWLIST_UNREADABLE", "allow-list 부재 → loadSourceAllowlist가 ok=false");
+
+    const noExternal = checkExternalSources({ "knowledge-map": nodeOf("inference", undefined) }, broken);
+    report(
+      noExternal.violations.length === 0,
+      "fail-closed (a): allow-list를 못 읽어도 external 노드가 0건이면 위반 아님"
+    );
+
+    const withExternal = checkExternalSources(
+      { "knowledge-map": nodeOf("external", "https://developer.mozilla.org/en-US/docs/") },
+      broken
+    );
+    report(
+      withExternal.violations.length === 1 && withExternal.violations[0].code === "EXTERNAL_ALLOWLIST_UNREADABLE",
+      "fail-closed (b): allow-list를 못 읽었는데 external 노드가 있으면 위반(허용 목록에 있을 URL이어도)"
+    );
+  }
+
+  // --- 배선 관측 — verifyEvidence 경로에서도 실제로 FAIL이 되는가 ----------
+  // 위 단언들은 checkExternalSources를 직접 부른다. 그것만으로는 이 축이
+  // verifyEvidence의 hasFailures 산식과 리포트에 실제로 연결됐는지 알 수
+  // 없다(구현 6단계의 fail-open 사고가 정확히 그 형태였다 — 검사는 있는데
+  // status 산식이 그것을 보지 않았다).
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-allowlist-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    buildMultiAuthor(dir);
+    const evidence = collectGitFacts({
+      repoPath: dir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      maxCommits: 1000,
+    }).evidence;
+
+    const mk = (url) => ({ nodes: [{ id: "km:001", basis: "external", externalUrl: url, evidence: [] }] });
+
+    const bad = verifyEvidence({
+      repoPath: dir,
+      evidence,
+      selectedIdentities: [OWNER_EMAIL],
+      artifactsByLayer: { "knowledge-map": mk("https://random-blog.example.com/x") },
+      sourcesPath: SOURCES,
+    });
+    const badOk =
+      bad.ok === false &&
+      bad.status === "FAIL" &&
+      bad.summary.externalSourceViolations === 1 &&
+      bad.summary.externalSourcesChecked === 1 &&
+      exitCodeForReport(bad) === 1;
+    if (!badOk) console.log(`    실제: ok=${bad.ok} status=${bad.status} summary=${JSON.stringify(bad.summary)}`);
+    report(badOk, "배선: allow-list 밖 URL이 verifyEvidence를 status=FAIL·exit 1로 만든다");
+
+    const good = verifyEvidence({
+      repoPath: dir,
+      evidence,
+      selectedIdentities: [OWNER_EMAIL],
+      artifactsByLayer: { "knowledge-map": mk("https://developer.mozilla.org/en-US/docs/Web/HTTP") },
+      sourcesPath: SOURCES,
+    });
+    const goodOk = good.ok === true && good.summary.externalSourcesChecked === 1 && good.summary.externalSourceViolations === 0;
+    if (!goodOk) console.log(`    실제: ok=${good.ok} status=${good.status} summary=${JSON.stringify(good.summary)}`);
+    report(goodOk, "배선 대조군: allow-list 안 URL은 통과하고 checked=1로 집계된다(공허하지 않음)");
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
   }
 }
 
@@ -3979,6 +4125,7 @@ function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
+  runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
