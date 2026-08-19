@@ -444,12 +444,55 @@ AC-10("모든 산출물 헤더에 커버리지 메타데이터 … 기재율 100
       FAIL하는 것을 실측했다. 그 과정에서 내가 만든 단언 2건이 공허했음이 드러나 고쳤다
       (픽스처가 변이 지점이 있는 분기에 진입하지 않았다 — 상세는 그 오라클의 주석).
       4게이트: lint 0 / 스모크 277 / `--negative` 27 / `--golden` 11.
-- [ ] C-2. allow-list 집행 코드의 소유 파일을 구현 8단계 파일 목록에 추가 — **M-1**
+- [x] C-2. allow-list 집행 코드의 소유 파일을 구현 8단계 파일 목록에 추가 — **M-1**
+      **닫힘(2026-08-19)** — `references/sources.json`(신규, 정본 allow-list) +
+      `scripts/verify-evidence.mjs`의 **(f)축** `checkExternalSources`. 대조 규칙은 문자열
+      prefix가 아니라 **origin 정확 일치 + pathname prefix + https 강제**다 — 문자열 prefix면
+      `https://developer.mozilla.org.evil.com/`이 통과한다. 코드 `EXTERNAL_URL_NOT_IN_ALLOWLIST`
+      / `EXTERNAL_URL_MISSING` / `EXTERNAL_URL_MALFORMED` / `EXTERNAL_ALLOWLIST_UNREADABLE`.
+      allow-list를 못 읽어도 external 노드가 0건이면 무해하고 1건이라도 있으면 위반이다
+      (fail-closed 양방향 관측). 관측 17건 + 변이 8종(A~H)에서 대응 단언만 FAIL 실측.
+      4게이트: lint 0 / 스모크 294 / `--negative` 27 / `--golden` 11.
+
+      **다만 이 축의 검사 대상은 아직 만들어질 수 없다 — 스키마 결정이 남아 있다.** 상세는
+      아래 「게이트 C-2 후속 — external basis의 표현 불가 문제」 절.
 - [ ] C-3. `--contamination`의 실행 모델(스킬 실행 주체 / 채점 주체 / 3회의 대상)을 스펙에
       명문화 — **C-1**
 - [ ] C-4. 40건의 기반 픽스처·원장 지정 — **m-4**
 - [ ] C-5. `verify-evidence`의 `citations.total === 0` → `INCONCLUSIVE` 변경을 T3 반영과 함께
       처리 — **C-3**(콜드 리뷰 B-1과 동일 지점)
+
+## 게이트 C-2 후속 — `basis: "external"`이 지금 스펙으로는 표현될 수 없다
+
+(f)축을 구현하며 실측으로 드러난 두 건이다. 둘 다 `schemas/`를 고쳐야 하는데 그것은
+`slice_plan.md`가 허용한 슬라이스 A 파일 수정 예외 3건 **밖**이므로 임의로 고치지 않고 기록만
+남긴다.
+
+**(1) `externalUrl`을 담을 자리가 세 계층에 없다.**
+
+| 계층 | `basis` enum에 `external` | `externalUrl` 프로퍼티 | `additionalProperties` |
+|---|---|---|---|
+| career | 있음 | **없음** | `false` |
+| knowledge-map | 있음 | 있음 | `false` |
+| gap-report | 있음 | **없음** | `false` |
+| plan | 있음 | **없음** | `false` |
+
+career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처인지 기록할 자리가 없고
+`additionalProperties: false`가 추가도 막는다. 심사 C-4가 「강등 상태를 담을 필드가 정본 JSON에
+없다」로 지적한 것과 같은 형태다. (f)축은 이 경우를 `EXTERNAL_URL_MISSING`으로 잡지만, 탐지일
+뿐 표현 수단을 주지는 못한다.
+
+**(2) `basis: "external"` 노드가 커밋 인용을 강제당한다.**
+
+`evidence`가 빈 배열이면 `basis`는 `insufficient`여야 한다는 조건절이 `external`을 예외로 두지
+않는다. 따라서 `basis: "external"`인 노드는 커밋 인용을 함께 달아야 한다. 그런데 `evidence`의
+스키마 description은 "basis:inference일 때의 근거 커밋 나열"이고 L2·L3는 `basis: commit`이 금지된
+계층이다 — **"URL 출처만 있고 커밋 근거는 없는 노드"를 표현할 방법이 없다.** 없는 커밋을 달거나
+`insufficient`로 강등되는 두 선택지뿐이다.
+
+즉 (f)축은 계약을 검사하는 코드로서 완성됐지만, **검사 대상이 실제로 생성될 수 있으려면 위 두
+건에 대한 결정이 선행돼야 한다.** 구현 8단계(KnowledgeMapper)가 `external` 노드를 만들기 시작하는
+지점이 그 결정의 마감 시한이다.
 
 ## □ 게이트 D — 도그푸딩 (구현 10단계 착수 전, 그러나 **결정은 지금**)
 
