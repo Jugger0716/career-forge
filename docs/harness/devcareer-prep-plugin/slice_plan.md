@@ -7,14 +7,14 @@
 | Slice | Goal | In scope | AC ids | Depends on | Command |
 |---|---|---|---|---|---|
 | `slice-a-deterministic-foundation` | 결정적 기반 — 명명·라이선스 정본, JSON Schema 세트, validate-plugin.mjs(Layer 1 하네스), 결정적 픽스처 생성기, collect-git-facts.mjs(L0 수집기), verify-evidence.mjs(인용 무결성). LLM이 전혀 개입하지 않는 순수 스크립트·스키마 계층이며 단독으로 기계 검증 가능하다. | 구현 단계 1~6 · `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `package.json`, `LICENSE`, `README.md`, `.gitattributes`, … 외 23개 | AC-1, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-11, AC-14, AC-15, AC-17, AC-18, AC-19, AC-21 | — | `/harness "slice-a-deterministic-foundation" --output-dir docs/harness/devcareer-prep-plugin` |
-| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 3건은 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/harness/devcareer-prep-plugin` |
+| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 표에 적힌 건만 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/harness/devcareer-prep-plugin` |
 | `slice-c-extension-and-release` | 확장·공개 — /devcareer-prep:prep-plan(Phase 3), README·아키텍처 다이어그램·예제·한계 고지, 오픈소스 공개 준비. 앞 두 슬라이스가 "쓸 만해"진 뒤에만 착수한다. | 구현 단계 11~12 · `skills/prep-plan/SKILL.md`, `skills/prep-plan/templates/curriculum-designer.md`, `schemas/plan.schema.json`, `README.md`, `examples/`, `docs/harness/devcareer-prep-plugin/`, … 외 1개 | AC-14, AC-18, AC-19 | `slice-b-p0-skill-layer` | `/harness "slice-c-extension-and-release" --output-dir docs/harness/devcareer-prep-plugin` |
 
 ## 슬라이스 A 파일 수정 예외 (slice-b-p0-skill-layer)
 
 `slice-b-p0-skill-layer`는 원칙적으로 슬라이스 A의 스크립트를 **소비만 하고 수정하지 않는다.**
-그러나 슬라이스 B 스펙 심사(`slice_b_spec_review.md`)에서 드러난 세 항목은 슬라이스 B가 소유할
-검사·계약인데 그 코드가 살 자리가 슬라이스 A 파일이다. 예외를 여기 적지 않으면 구현자가 경계를
+그러나 슬라이스 B 스펙 심사(`slice_b_spec_review.md`)와 콜드 리뷰에서 드러난 아래 항목들은
+슬라이스 B가 소유할 검사·계약인데 그 코드가 살 자리가 슬라이스 A 파일이다. 예외를 여기 적지 않으면 구현자가 경계를
 지키려고 사본을 만들고, 그 순간 정본이 둘로 갈린다(콜드 리뷰 A-21이 이미 같은 형태를 기록했다).
 
 | # | 대상 파일 | 무엇을 | 근거 |
@@ -23,8 +23,9 @@
 | 2 | `scripts/validate-plugin.mjs` | `--secret-scan <artifact>` 모드 추가(`ARTIFACT_SECRET_LEAK`) | 구현 7단계 (e) — AC-8 마스킹 우회 카테고리가 채점될 REJECT 사유를 만드는 유일한 지점 |
 | 3 | `scripts/verify-evidence.mjs` | `basis: external`의 allow-list 대조 축 추가 | 구현 8단계 (a) — 스키마가 이미 "스크립트가 런타임에 검사한다"고 선언한 계약의 소유 파일 |
 | 4 | `schemas/career.json`·`gap-report.json`·`plan.json`·`knowledge-map.json` | ① 앞 셋에 `externalUrl` 프로퍼티 + `basis:external → required` 조건절 추가 ② 네 파일 모두 「`evidence`가 비면 `basis`는 `insufficient`」 조건절을 `["insufficient","external"]`로 완화 | 예외 3번을 구현하다 **검사 대상이 생성 불가**임이 실측으로 드러났다 — 아래 근거 참조 |
+| 5 | `scripts/verify-evidence.mjs` | ① 게이트 C-5 — 산출물이 1계층 이상 로드됐는데 **인용이 0건이면 `PASS`가 아니라 `INCONCLUSIVE`(exit 2)** ② A-32 — 입력 파일 오류를 raw 스택 대신 `[INPUT_ERROR]` + exit 2로 ③ A-34(이 파일 몫) — `KNOWN_LAYERS`를 export 해 `validate-plugin.mjs`의 하드코딩 사본과의 드리프트를 오라클이 관측 | 심사 C-3 수정안 ③ / 콜드 리뷰 B-1·A-32·A-34 — 아래 근거 참조 |
 
-**이 넷 외의 슬라이스 A 파일 수정은 여전히 금지다.**
+**이 다섯 외의 슬라이스 A 파일 수정은 여전히 금지다.**
 
 > **예외 4번의 근거 (2026-08-19 추가).** 예외 3번(allow-list 대조 축)을 구현하고 나서
 > `basis: "external"`인 노드를 만들어 보려 했더니 **어느 계층에서도 만들 수 없었다.**
@@ -47,6 +48,32 @@
 > 전제에 걸린다). 따라서 LLM이 allow-list 안의 아무 URL이나 붙여 `insufficient` 강등을 회피하는
 > 경로가 남아 있으며, 그것을 막는 것은 2단 팩트체크(`verification`, 구현 8단계 (d))뿐이다 — 즉
 > **기계가 아니라 LLM 판정에 의존하는 구간**이다. 스키마 description에도 같은 문장을 적어 뒀다.
+
+> **예외 5번의 근거 (2026-08-19 추가).** 게이트 C-5는 심사가 「T3 반영과 같은 회차에 처리하는 것이
+> 싸다」고 적어 둔 채 미반영으로 남아 있었고, 그 회차는 지나갔다. 이번에 콜드 리뷰 T4(Minor 16건)와
+> 묶을지를 판단하며 **T4 16건이 건드리는 파일을 실제로 셌다**: `collect-git-facts.mjs` 5건,
+> `validate-plugin.mjs` 4건, `schema-validate.mjs` 3건, `run-smoke.mjs` 3건, `git.mjs` 2건,
+> `make-fixture.mjs` 2건, 그 밖에 9개 파일에 각 1건. **`verify-evidence.mjs`와 겹치는 것은 16건 중
+> 2건(A-32, A-34의 절반)뿐이다.** T4를 전량 지금 반영하면 예외 표가 사실상 전면 허용으로 바뀌므로,
+> 사용자 확인을 받아 **이 파일 하나로 범위를 좁혔다**. 나머지 T4 14건은 그대로 미반영이며 그 사실을
+> 여기 남긴다 — 「T4를 처리했다」고 읽히면 안 된다.
+>
+> **C-5가 닫는 구멍.** 콜드 리뷰 B-1이 지적한 두 fail-open 중 **도구 오류 쪽은 이미 닫혀 있다**
+> (status 3분기 + exit 2 — 파일 헤더가 그 계약을 적고 있다). 남아 있던 것은 심사 C-3 수정안 ③의
+> **「인용 0건 = PASS」** 다: 산출물이 로드됐는데 인용이 한 건도 없으면 인용 축이 **한 번도 집행되지
+> 않았는데** `[PASS]` exit 0이 나왔다. C-3이 적었듯 이것은 `nodes.minItems`와 곱해질 때 가장 나쁘다 —
+> **산출물이 비어 있을수록 파이프라인이 더 확실하게 녹색이 되는 구간**이 생긴다.
+>
+> **경계를 좁게 잡았다.** 판정은 「인용 0건」이 아니라 **「산출물이 1계층 이상 로드됐는데 인용 0건」**
+> 이다. `artifactsByLayer: {}`로 부르는 호출자는 (e)축·contentHash처럼 `evidence.json` 하나로
+> 성립하는 검사만 요구한 것이므로 그 경우의 PASS는 정직하다. 이 경계는 **양방향으로 관측한다** —
+> 좁히는 조건(`artifactLayerCount > 0`)을 지우면 `{}` 호출이 INCONCLUSIVE로 뒤집히고, 0건 조건을
+> 지우면 빈손 산출물이 다시 PASS가 된다. 두 변이가 **서로 다른 단언**을 깨는 것을 실측한다.
+>
+> **A-34는 이 파일 안에서만 닫는다.** 계층 enum이 `validate-plugin.mjs`에도 하드코딩돼 있는 것이
+> A-34의 본체이지만 그 파일은 예외 2번(`--secret-scan`)으로만 열렸고 이 건은 그 범위 밖이다.
+> 그래서 `KNOWN_LAYERS`를 export 하고 **드리프트를 소스 스캔 오라클로 관측만 한다** — 저쪽 파일은
+> 고치지 않는다. 관측이 붙으면 다음에 한쪽만 바뀔 때 게이트가 빨개진다.
 
 > **이미 발생한 슬라이스 A 수정(기록).** 슬라이스 B 착수 전 게이트 작업에서 `schemas/`(evidence·
 > career·knowledge-map·gap-report), `scripts/lib/schema-validate.mjs`, `scripts/lib/lang-lint.mjs`,

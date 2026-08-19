@@ -78,18 +78,30 @@
 //
 // 종료 코드(콜드 리뷰 C4 대응 — fail-open 제거, 3분기):
 //   0 = PASS         인용 FAIL·미해결 parentRefs·(e)축 위반 0건이고
-//                     도구 오류로 미검증된 인용도 0건.
+//                     도구 오류로 미검증된 인용도 0건이며, **산출물이
+//                     로드됐다면 실제로 검증한 인용이 1건 이상**이다.
 //   1 = FAIL          위 위반 중 하나라도 있음(도구 오류가 섞여 있어도
 //                     확정된 위반이 우선한다).
-//   2 = INCONCLUSIVE  확정된 위반은 0건이지만 도구·레포 오류로 일부
-//                     인용을 검증하지 못함(예: --repo 오타, git이 PATH에
-//                     없는 셸) — "성공"이 아니므로 0을 반환하지 않는다.
-//                     CLI 인자 오류(usage)도 같은 exit 2를 쓴다(둘 다
-//                     "결론을 낼 수 없음" 계열).
+//   2 = INCONCLUSIVE  확정된 위반은 0건이지만 검증을 완결하지 못함. 사유는
+//                     report.inconclusiveReasons에 코드로 남는다:
+//                       CITATION_TOOL_ERRORS   — 도구·레포 오류로 일부
+//                         인용을 검증하지 못함(예: --repo 오타, git이
+//                         PATH에 없는 셸).
+//                       NO_CITATIONS_TO_VERIFY — 산출물이 1계층 이상
+//                         로드됐는데 인용도 0건이고 (f)축 대조 대상도
+//                         0건이라 **어떤 축도 집행되지 않음**(게이트 C-5 /
+//                         심사 C-3 수정안 ③). 두 경우는 여기 걸리지
+//                         않는다: artifactsByLayer가 비어 있는 호출
+//                         ((e)축·contentHash만 요구한 것이므로 그 PASS는
+//                         공허하지 않다)과, 인용은 0건이지만 (f)축이
+//                         external 노드를 실제로 대조한 산출물.
+//                     둘 다 "성공"이 아니므로 0을 반환하지 않는다. CLI 인자
+//                     오류(usage)와 입력 파일 오류(A-32의 [INPUT_ERROR])도
+//                     같은 exit 2를 쓴다(전부 "결론을 낼 수 없음" 계열).
 // report.ok(boolean)는 status==="PASS"의 축약이다 — INCONCLUSIVE도
 // ok===false다(더 이상 "도구 오류만 있으면 exit 0"이 성립하지 않는다).
 //
-// 프로그래밍 API: verifyCitation / verifySnippetCitation / verifyArtifactInstance /
+// 프로그래밍 API: KNOWN_LAYERS / verifyCitation / verifySnippetCitation / verifyArtifactInstance /
 // verifyMergeFileSetEquivalence / checkLayerRefs / verifyEvidence /
 // exitCodeForReport / createVerificationCache — 순수 함수(디스크에 쓰지
 // 않음). CLI는 이 함수들을 호출하고 결과를 출력·파일 기록만 담당한다.
@@ -116,7 +128,12 @@ const LAYER_PARENT = {
   "plan": "gap-report",
 };
 
-const KNOWN_LAYERS = ["career", "knowledge-map", "gap-report", "plan"];
+// 콜드 리뷰 A-34 대응(이 파일 몫). 같은 리터럴이 scripts/validate-plugin.mjs
+// 에도 하드코딩돼 있는데 그 파일은 이번 예외 범위 밖이므로 고치지 않는다.
+// 대신 여기서 export 해 **드리프트를 tests/run-smoke.mjs의 소스 스캔
+// 오라클이 관측**한다 — 한쪽만 계층을 추가하면 그 오라클이 FAIL한다.
+// export 없이 두면 대조할 정본이 없어 두 사본이 갈려도 아무도 모른다.
+export const KNOWN_LAYERS = ["career", "knowledge-map", "gap-report", "plan"];
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -795,7 +812,66 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   const hasFailures =
     violations.length > 0 || layerRefViolations.length > 0 || mergeFileSetViolations.length > 0 ||
     contentHashViolations.length > 0 || externalSourceViolations.length > 0;
-  const hasUnverified = allToolErrors.length > 0;
+
+  // 게이트 C-5 / 심사 C-3 수정안 ③ — 「인용 0건 = PASS」 fail-open 제거.
+  //
+  // 위 C4 수정이 닫은 것은 "도구 오류로 검증을 못 했는데 PASS"였다. 남아
+  // 있던 구멍은 그 이웃이다: **산출물이 로드됐는데 인용이 한 건도 없으면**
+  // (a)(b)(c)축이 한 번도 집행되지 않았는데도 위반 0건·도구 오류 0건이
+  // 성립해 PASS가 나왔다(실측: nodes를 []로 비운 career.json 하나로
+  // `--schema-check`·`--lang-check`·이 검증기 3게이트를 모두 통과시켰다 —
+  // 심사 C-3). nodes.minItems:1이 들어간 지금도 이 성질 자체는 남는다 —
+  // 노드가 있어도 전부 evidence:[] + basis:insufficient면 인용은 0건이다.
+  // 그 조합에서 "인용 무결성 검증 통과"를 선언하는 것은 거짓이 아니라
+  // **공허**하고, 공허한 PASS는 호출자에게 참인 PASS와 구별되지 않는다.
+  //
+  // **경계를 좁게 잡는다** — 판정은 "인용 0건"이 아니라 "산출물이 1계층
+  // 이상 로드됐는데 인용 0건"이다. artifactsByLayer가 비어 있는 호출은
+  // (e)축·contentHash처럼 evidence.json 하나로 성립하는 검사만 요구한
+  // 것이므로(이 함수는 그 두 검사를 artifactsByLayer와 무관하게 항상
+  // 실행한다) 그 경우의 PASS는 공허하지 않다. 이 조건을 넓혀 무조건
+  // "인용 0건 → INCONCLUSIVE"로 만들면 evidence 전용 호출이 전부
+  // INCONCLUSIVE가 되어, 실제로는 완결된 검사가 미완결로 보고된다.
+  //
+  // **(f)축이 집행된 산출물은 여기 걸리지 않는다.** 초판은 조건을 "인용
+  // 0건"으로만 썼는데, 그 판은 게이트 C-2의 대조군(노드 하나가
+  // basis:"external" + 유효한 allow-list URL인 knowledge-map)을 즉시
+  // INCONCLUSIVE로 뒤집었다 — 그 산출물에는 인용이 0건인 것이 정상이고
+  // (L2·L3의 basis enum에는 commit이 없다) 대신 (f)축이 실제로 1건을
+  // 대조했다. "집행된 검사가 있는데 없다고 보고"하는 것은 이 변경이
+  // 없애려던 거짓 신호를 방향만 바꿔 재생산하는 것이므로, 조건에
+  // externalSourcesChecked를 넣어 **어느 축도 집행되지 않았을 때만**
+  // INCONCLUSIVE로 떨어뜨린다.
+  //
+  // **남은 약점(닫지 않았다).** 이 조건은 산출물 단위다 — 노드 100개 중
+  // 99개가 evidence:[] + basis:insufficient이고 1개만 allow-list URL을
+  // 가진 external이면 집행 1건이 성립해 PASS가 된다. 그 부분 커버리지는
+  // summary의 totalCitations·externalSourcesChecked·artifactLayers 세
+  // 수치로 노출되지만 종료 코드로는 구별되지 않는다. 노드 단위 커버리지
+  // 판정은 AC-13의 '근거 부족 — 미검증' 배지(구현 7단계 렌더 계약)가
+  // 담당할 영역이며 여기서 앞당기지 않는다.
+  const artifactLayerCount = Object.keys(artifactsByLayer ?? {}).length;
+  const noCitationsToVerify =
+    artifactLayerCount > 0 && allCitations.length === 0 && externalSourcesChecked === 0;
+
+  // INCONCLUSIVE의 사유를 코드로 남긴다 — 종료 코드 2 하나로는 "도구 오류로
+  // 못 봤다"와 "볼 것이 없었다"가 구별되지 않고, 그 둘은 호출자가 취할
+  // 조치가 다르다(전자는 --repo·git 환경, 후자는 산출물 생성 쪽 문제다).
+  const inconclusiveReasons = [];
+  if (allToolErrors.length > 0) {
+    inconclusiveReasons.push({
+      code: "CITATION_TOOL_ERRORS",
+      message: `도구·레포 오류로 ${allToolErrors.length}건을 검증하지 못했습니다(인용 ${toolErrors.length}건 + 머지 집합 ${mergeFileSetToolErrors.length}건).`,
+    });
+  }
+  if (noCitationsToVerify) {
+    inconclusiveReasons.push({
+      code: "NO_CITATIONS_TO_VERIFY",
+      message: `산출물 ${artifactLayerCount}계층이 로드됐지만 검증할 인용이 0건이고 allow-list 대조 대상도 0건입니다 — 어떤 검증 축도 집행되지 않았으므로 PASS로 보고하지 않습니다.`,
+    });
+  }
+
+  const hasUnverified = inconclusiveReasons.length > 0;
   const status = hasFailures ? "FAIL" : hasUnverified ? "INCONCLUSIVE" : "PASS";
   const ok = status === "PASS";
 
@@ -804,6 +880,10 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
     status,
     summary: {
       totalCitations: allCitations.length,
+      // 게이트 C-5 — 인용 0건이 "통과"인지 "집행 대상이 없었음"인지를
+      // 구별하려면 로드된 계층 수가 함께 있어야 한다((f)축의
+      // externalSourcesChecked·(e)축의 mergeFileSetChecked와 같은 이유).
+      artifactLayers: artifactLayerCount,
       passCitations: passed.length,
       failCitations: violations.length,
       toolErrorCitations: toolErrors.length,
@@ -827,6 +907,7 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
       externalSourceViolations: externalSourceViolations.length,
     },
     violations,
+    inconclusiveReasons,
     toolErrors: allToolErrors,
     layerRefViolations,
     layerRefUnverifiable,
@@ -857,8 +938,33 @@ export function exitCodeForReport(report) {
 // CLI
 // ---------------------------------------------------------------------------
 
+/**
+ * CLI 입력 JSON 하나를 읽는다. 콜드 리뷰 A-32 대응.
+ *
+ * 예전에는 `JSON.parse(fs.readFileSync(...))` 한 줄이라 파일이 없거나
+ * JSON이 깨졌을 때 **raw Node 스택 트레이스 + exit 1**이 나왔다. 그 exit 1은
+ * 이 도구의 정본 계약(1 = 확정된 인용 위반 발견)과 같은 코드여서, 호출자가
+ * 종료 코드만 보면 "검증했더니 위반이 있었다"와 "입력 파일 경로를 잘못
+ * 줬다"가 구별되지 않았다. 게다가 JSON 파싱 오류 메시지는 파일명을 담지
+ * 않아 --artifact를 여러 개 넘긴 실행에서 어느 파일이 깨졌는지 알 수 없었다.
+ *
+ * 입력 오류는 "결론을 낼 수 없음" 계열이므로 usage 오류·INCONCLUSIVE와 같은
+ * **exit 2**를 쓴다(exitCodeForReport의 3분기 계약과 통일).
+ */
 function readJson(p) {
-  return JSON.parse(fs.readFileSync(p, "utf8"));
+  let text;
+  try {
+    text = fs.readFileSync(p, "utf8");
+  } catch (e) {
+    console.error(`[INPUT_ERROR] 입력 파일을 읽을 수 없습니다: ${p} (${e.code ?? e.message})`);
+    process.exit(2);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error(`[INPUT_ERROR] JSON 파싱 실패: ${p} — ${e.message}`);
+    process.exit(2);
+  }
 }
 
 function parseArgs(argv) {
@@ -1008,9 +1114,14 @@ function printReport(report) {
   if (report.status === "PASS") {
     console.log("[PASS] verify-evidence");
   } else if (report.status === "INCONCLUSIVE") {
-    console.log(
-      `[INCONCLUSIVE] verify-evidence — 확정된 위반은 없지만 도구·레포 오류로 ${report.summary.unverifiedCitations + report.summary.mergeFileSetToolErrors}건을 검증하지 못했습니다(PASS 아님, exit 2).`
-    );
+    // 게이트 C-5 — 사유를 코드와 함께 찍는다. 예전에는 이 줄이 도구 오류
+    // 하나만 가정하고 문구를 고정했는데, 이제 "볼 것이 없었다"
+    // (NO_CITATIONS_TO_VERIFY)도 같은 exit 2로 오므로 그 둘이 출력에서
+    // 구별되지 않으면 호출자가 엉뚱한 곳을 고치게 된다.
+    console.log("[INCONCLUSIVE] verify-evidence — 확정된 위반은 없지만 검증을 완결하지 못했습니다(PASS 아님, exit 2).");
+    for (const r of report.inconclusiveReasons ?? []) {
+      console.error(`[INCONCLUSIVE] ${r.code}: ${r.message}`);
+    }
   } else {
     console.log("[FAIL] verify-evidence");
   }
