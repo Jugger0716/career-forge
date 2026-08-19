@@ -383,3 +383,45 @@ export function writeState(root, state) {
 export function writeConfig(root, config) {
   return writeJsonAtomic(path.resolve(root), CONFIG_FILE_NAME, config);
 }
+
+// ---------------------------------------------------------------------------
+// 원장 → LLM 컨텍스트 투영
+//   구현 7단계 (f) / §6 제외 커밋 프라이버시 경계
+//
+// **이것은 보조 방어다.** 스킬이 원장 파일을 직접 읽는 것을 막을 결정적
+// 수단은 없다 — 실제 방어는 §6의 **기록 시점 축소**(수집기가 제외 커밋의
+// authorEmail·subject·coAuthors를 애초에 쓰지 않는 것, T3)이다. 그럼에도
+// 소유 파일을 여기 지정하는 이유는 스펙이 "구현 7단계가 지정한 단일 함수"라고
+// 확정형으로 적어 놓고 실제로는 어디에도 지정하지 않았던 상태 — 즉 '문서는
+// 약속하는데 그 코드가 살 자리가 없는' 형태(M-1과 같은 형태)를 없애기
+// 위해서다.
+//
+// **얕은 사본이다.** 커밋 레코드 객체 자체는 공유한다. 깊은 복사를 하면
+// 300커밋 원장에서 무의미한 복제 비용이 들고, 이 함수의 목적은 변조 방지가
+// 아니라 **제외 커밋을 컨텍스트에서 빼는 것** 하나다.
+// ---------------------------------------------------------------------------
+
+/**
+ * 원장에서 `excluded: true` 커밋을 제거한 얕은 사본을 돌려준다.
+ *
+ * 각 템플릿 프롬프트 조립 지점은 원장 원본이 아니라 이 함수를 거친다.
+ * `coverage`·`truncated` 등 공통 필드는 그대로 옮긴다 — 커버리지 고지가
+ * 빠지면 LLM이 "전량을 봤다"고 오인하고, 그것이 AC-13이 막으려는 과장의
+ * 출발점이다.
+ *
+ * `excluded` 판정은 `=== true`가 아니라 `!== true`의 상보로 쓴다: 필드가
+ * 없거나 다른 값이면 **포함**한다. 제외를 놓치는 쪽이 프라이버시 사고이므로
+ * 반대로 보이지만, 여기서 판정 대상은 이미 수집기가 축소해 기록한 원장이고,
+ * 알 수 없는 값을 조용히 버리면 커버리지 수치와 실제 전달 건수가 어긋나
+ * 그 불일치를 아무도 보지 못하게 된다.
+ *
+ * @param {{commits?: Array<{excluded?: boolean}>}} evidence
+ * @returns {object} 같은 형태의 얕은 사본(commits만 필터링됨)
+ */
+export function projectLedgerForSkills(evidence) {
+  const commits = Array.isArray(evidence?.commits) ? evidence.commits : [];
+  return {
+    ...evidence,
+    commits: commits.filter((c) => c?.excluded !== true),
+  };
+}

@@ -848,7 +848,7 @@ export function verifyEvidence({ repoPath, evidence, selectedIdentities, artifac
   // 가진 external이면 집행 1건이 성립해 PASS가 된다. 그 부분 커버리지는
   // summary의 totalCitations·externalSourcesChecked·artifactLayers 세
   // 수치로 노출되지만 종료 코드로는 구별되지 않는다. 노드 단위 커버리지
-  // 판정은 AC-13의 '근거 부족 — 미검증' 배지(구현 7단계 렌더 계약)가
+  // 판정은 AC-13의 '근거 부족 - 미검증' 배지(구현 7단계 렌더 계약)가
   // 담당할 영역이며 여기서 앞당기지 않는다.
   const artifactLayerCount = Object.keys(artifactsByLayer ?? {}).length;
   const noCitationsToVerify =
