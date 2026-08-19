@@ -1941,6 +1941,16 @@ function makeCareerNode(overrides = {}) {
   };
 }
 
+/**
+ * draft 단계 노드 — `verification`을 담지 않는다(콜드 리뷰 M-1 이후의 계약).
+ * 값은 병합이 채우므로 생성 템플릿 출력에는 그 필드가 없는 것이 정상이다.
+ */
+function makeDraftNode(overrides = {}) {
+  const n = makeCareerNode(overrides);
+  delete n.verification;
+  return n;
+}
+
 function runArtifactContractOracleSmoke() {
   console.log("[산출물 계약 오라클] 구현 7단계 (a)(b)(g): contentHash 정본·기입 주체·재생성 병합");
 
@@ -2022,13 +2032,31 @@ function runArtifactContractOracleSmoke() {
     report(ok, "(AC-7) draft 단계가 verification.status='verified'를 기입하면 VERIFICATION_SET_BY_TEMPLATE(구현 7단계 (g))");
   }
 
-  // ---- (AC-8) 허용 방향: draft 단계의 not-attempted는 통과 ----
+  // ---- (AC-8) 허용 방향: draft가 verification을 **담지 않으면** 통과 ----
   //      이것이 없으면 "무조건 위반을 내는" 검사가 (AC-7)을 통과한다.
+  //      **콜드 리뷰 M-1로 계약이 바뀌었다**: 초판은 "draft는 not-attempted만
+  //      기입할 수 있다"였고 이 단언도 그 값을 통과시켰다. 그 설계가 스키마의
+  //      `not-attempted → attempts const 0`과 재시도 이어받기를 동시에
+  //      만족시킬 수 없어 attempts>=1 노드의 draft 재작성을 전면 봉쇄했다
+  //      (4갈래 전부 exit 1로 실측). 지금은 **필드 자체가 금지**이며 값은
+  //      병합이 채운다. 이것은 "기존 단언을 고쳐 맞춘" 것이 아니라 **단언이
+  //      기술하던 설계가 모순임이 밝혀져 설계를 바꾼 것**이다 — 그 구별을
+  //      감추지 않으려고 여기 적는다.
   {
-    const v = checkAuthorshipContract("career", makeCareerInstance([makeCareerNode()]), { stage: "draft" });
+    const v = checkAuthorshipContract("career", makeCareerInstance([makeDraftNode()]), { stage: "draft" });
     const ok = v.length === 0;
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
-    report(ok, "(AC-8) 허용 방향: draft 단계의 not-attempted + origin:generated는 위반 0건");
+    report(ok, "(AC-8) 허용 방향: draft가 verification을 담지 않으면 위반 0건(값은 병합이 채운다)");
+  }
+
+  // ---- (AC-8b) 금지 방향: draft가 not-attempted라도 **담으면** 위반 ----
+  //      값이 아니라 필드의 존재가 판정 기준임을 고정한다. 이 단언이 없으면
+  //      "verified만 막는" 초판 조건으로 되돌아가도 아무것도 깨지지 않는다.
+  {
+    const v = checkAuthorshipContract("career", makeCareerInstance([makeCareerNode()]), { stage: "draft" });
+    const ok = v.some((x) => x.code === "VERIFICATION_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-8b) draft가 not-attempted를 담아도 VERIFICATION_SET_BY_TEMPLATE(값이 아니라 필드 존재가 기준)");
   }
 
   // ---- (AC-9) 단계 구분이 실제로 작동하는가 ----
@@ -2060,9 +2088,9 @@ function runArtifactContractOracleSmoke() {
   {
     const node = makeCareerNode();
     delete node.verification;
-    const v = checkAuthorshipContract("career", makeCareerInstance([node]), { stage: "draft" });
+    const v = checkAuthorshipContract("career", makeCareerInstance([node]), { stage: "fact-checked" });
     const ok = v.some((x) => x.code === "VERIFICATION_MISSING");
-    report(ok, "(AC-12) verification 필드 부재는 VERIFICATION_MISSING이다(부재를 '판정 대상 아님'으로 읽지 않는다)");
+    report(ok, "(AC-12) fact-checked 단계의 verification 부재는 VERIFICATION_MISSING이다(부재를 '판정 대상 아님'으로 읽지 않는다)");
   }
 
   // ---- (AC-13) plan 계층에는 verification 축이 없다(허용 방향) ----
@@ -2090,7 +2118,7 @@ function runArtifactContractOracleSmoke() {
       makeCareerNode({ id: "car:002", locked: true, text: "사용자가 손으로 고친 서술." }),
     ]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
-    const { merged, violations } = mergeArtifact("career", prev, draft);
+    const { merged, violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = violations.length === 0 && merged.nodes.some((n) => n.id === "car:002" && n.text === "사용자가 손으로 고친 서술.");
     if (!ok) console.log(`    실제: ${JSON.stringify(merged.nodes.map((n) => n.id))} 위반=${JSON.stringify(violations)}`);
     report(ok, "(AC-15) locked 노드는 draft에 없어도 병합 결과에 보존된다(AC-16 사용자 편집 보존)");
@@ -2100,7 +2128,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", locked: true, text: "사용자 원문." })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001", text: "LLM이 새로 쓴 문장." })]);
-    const { merged } = mergeArtifact("career", prev, draft);
+    const { merged } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = merged.nodes[0].text === "사용자 원문.";
     if (!ok) console.log(`    실제: ${merged.nodes[0].text}`);
     report(ok, "(AC-16) locked 노드는 같은 id의 draft가 덮어쓰지 못한다(prev가 이긴다)");
@@ -2112,7 +2140,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:009", text: "낡은 서술." })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
-    const { merged } = mergeArtifact("career", prev, draft);
+    const { merged } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = !merged.nodes.some((n) => n.id === "car:009");
     if (!ok) console.log(`    실제: ${JSON.stringify(merged.nodes.map((n) => n.id))}`);
     report(ok, "(AC-17) 허용 방향: locked=false인 prev 노드는 draft에 없으면 사라진다(전량 보존 병합 방어)");
@@ -2122,7 +2150,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:777" })]);
-    const { violations } = mergeArtifact("career", prev, draft);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = violations.some((v) => v.code === "NODE_ID_CHURN" && v.message.includes("car:001"));
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
     report(ok, "(AC-18) 동일 text가 새 id로 오면 NODE_ID_CHURN이고 메시지가 기존 id를 지목한다(AC-16 재실행 안정성)");
@@ -2132,7 +2160,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002", text: "새로 발견한 사실." })]);
-    const { violations } = mergeArtifact("career", prev, draft);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = violations.length === 0;
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
     report(ok, "(AC-19) 허용 방향: 새 text의 새 id는 위반이 아니다(모든 신규 id를 막는 병합 방어)");
@@ -2143,7 +2171,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002" })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:777" })]);
-    const { violations } = mergeArtifact("career", prev, draft);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = !violations.some((v) => v.code === "NODE_ID_CHURN");
     report(ok, "(AC-20) prev에 동일 text가 2건이면 대응이 모호하므로 churn 판정에서 뺀다");
   }
@@ -2152,7 +2180,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
-    const { violations } = mergeArtifact("career", prev, draft);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = violations.some((v) => v.code === "VERIFICATION_ATTEMPTS_RESET");
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
     report(ok, "(AC-21) verification.attempts가 2→0으로 줄면 VERIFICATION_ATTEMPTS_RESET(§3 재생성 상한 무력화 방어)");
@@ -2162,7 +2190,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
-    const { violations } = mergeArtifact("career", prev, draft);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = violations.length === 0;
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
     report(ok, "(AC-22) 허용 방향: attempts 1→2 증가는 위반이 아니다(모든 변화를 막는 검사 방어)");
@@ -2172,7 +2200,7 @@ function runArtifactContractOracleSmoke() {
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", origin: "user" })]);
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
-    const { merged } = mergeArtifact("career", prev, draft);
+    const { merged } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
     const ok = merged.nodes[0].origin === "user";
     if (!ok) console.log(`    실제: origin=${merged.nodes[0].origin}`);
     report(ok, "(AC-23) 기존 노드의 origin은 prev를 이어받는다(사용자 수동 추가분이 재생성으로 generated가 되지 않는다)");
@@ -2181,7 +2209,7 @@ function runArtifactContractOracleSmoke() {
   // ---- (AC-24) 신규 노드의 origin은 generated인가 ----
   {
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
-    const { merged } = mergeArtifact("career", null, draft);
+    const { merged } = mergeArtifact("career", null, draft, { stage: "fact-checked" });
     const ok = merged.nodes[0].origin === "generated";
     report(ok, "(AC-24) 신규 노드의 origin은 병합이 'generated'로 정한다(템플릿 값이 정본이 아니다)");
   }
@@ -2189,7 +2217,7 @@ function runArtifactContractOracleSmoke() {
   // ---- (AC-25) 산출물 안의 id 중복은 잡히는가 ----
   {
     const draft = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:001", text: "다른 서술." })]);
-    const { violations } = mergeArtifact("career", null, draft);
+    const { violations } = mergeArtifact("career", null, draft, { stage: "fact-checked" });
     const ok = violations.some((v) => v.code === "NODE_ID_DUPLICATE");
     report(ok, "(AC-25) 산출물 안에 같은 id가 2건이면 NODE_ID_DUPLICATE(병합 키가 성립하지 않는다)");
   }
@@ -2197,7 +2225,7 @@ function runArtifactContractOracleSmoke() {
   // ---- (AC-26) 최초 실행(prev 없음)은 위반 0건인가 ----
   {
     const draft = makeCareerInstance([makeCareerNode()]);
-    const { merged, violations } = mergeArtifact("career", null, draft);
+    const { merged, violations } = mergeArtifact("career", null, draft, { stage: "fact-checked" });
     const ok = violations.length === 0 && merged.nodes.length === 1;
     report(ok, "(AC-26) prev가 없는 최초 실행은 위반 0건이고 draft 노드가 그대로 남는다");
   }
@@ -2215,6 +2243,77 @@ function runArtifactContractOracleSmoke() {
     const ok = errs.length === 0;
     if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
     report(ok, "(AC-27) 병합 오라클 픽스처가 career.schema.json을 실제로 통과한다(픽스처를 세계로 착각하지 않는다)");
+  }
+
+  // ---- (AC-28) draft 병합이 prev의 판정을 그대로 이어받는가(콜드 리뷰 M-1) ----
+  //      M-1의 본체다. 초판에서는 prev에 attempts>=1인 비잠금 노드가 있으면
+  //      그 노드를 draft로 재작성할 방법이 **하나도 없었다**(4갈래 전부 exit 1
+  //      실측). 이제 draft는 그 필드를 담지 않고 병합이 prev 값을 옮기므로
+  //      **attempts 초기화가 표현 자체로 불가능**하다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const draft = makeCareerInstance([makeDraftNode({ id: "car:001" })]);
+    const { merged, violations } = mergeArtifact("career", prev, draft, { stage: "draft" });
+    // 판정을 안 채우는 변이에서 여기가 예외로 죽으면 섹션이 통째로 중단되어
+    // 어떤 단언이 대응하는지 읽을 수 없다(변이 N2에서 실측) — 옵셔널로 읽는다.
+    const v = merged.nodes[0]?.verification;
+    const ok = violations.length === 0 && v?.status === "refuted" && v?.attempts === 2 && v?.reasonCode === "NO_SUPPORTING_DIFF";
+    if (!ok) console.log(`    실제: 위반=${JSON.stringify(violations)} verification=${JSON.stringify(v)}`);
+    report(ok, "(AC-28) draft 병합은 prev의 verification을 그대로 이어받는다(attempts 초기화가 표현 불가 — 콜드 리뷰 M-1)");
+  }
+
+  // ---- (AC-29) draft 병합의 신규 노드는 초기 판정을 받는가 ----
+  {
+    const { merged } = mergeArtifact("career", null, makeCareerInstance([makeDraftNode({ id: "car:001" })]), { stage: "draft" });
+    const v = merged.nodes[0].verification;
+    const ok = v?.status === "not-attempted" && v.attempts === 0 && v.reasonCode === null;
+    if (!ok) console.log(`    실제: ${JSON.stringify(v)}`);
+    report(ok, "(AC-29) draft 병합의 신규 노드는 {not-attempted, 0, null}을 받는다(스키마 required를 병합이 채운다)");
+  }
+
+  // ---- (AC-30) 허용 방향: fact-checked 병합은 판정을 덮어쓰지 않는가 ----
+  //      이것이 없으면 "항상 prev를 이어받는" 병합이 (AC-28)을 통과하고
+  //      FactChecker의 판정이 영원히 반영되지 않는다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "not-attempted", attempts: 0, reasonCode: null } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const { merged } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
+    const ok = merged.nodes[0].verification.status === "refuted" && merged.nodes[0].verification.attempts === 2;
+    if (!ok) console.log(`    실제: ${JSON.stringify(merged.nodes[0].verification)}`);
+    report(ok, "(AC-30) 허용 방향: fact-checked 병합은 draft의 판정을 그대로 쓴다(항상 prev를 이어받는 병합 방어)");
+  }
+
+  // ---- (AC-31) nodes 비배열을 빈 배열로 강등하지 않는가(콜드 리뷰 M-3) ----
+  //      실측: 강등하던 초판에서는 nodes 필드가 없는 draft가 **exit 0으로
+  //      성공하면서** 잠기지 않은 prev 노드를 지웠다.
+  {
+    const inst = makeCareerInstance([]);
+    delete inst.nodes;
+    const v = checkAuthorshipContract("career", inst, { stage: "draft" });
+    const ok = v.some((x) => x.code === "NODES_NOT_ARRAY");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-31) nodes가 배열이 아니면 NODES_NOT_ARRAY다(빈 배열 강등 금지 — 콜드 리뷰 M-3)");
+  }
+
+  // ---- (AC-32) 병합도 같은 입력을 거부하는가 ----
+  //      기입 주체 검사만 막으면 mergeArtifact를 직접 부르는 호출자에게는
+  //      같은 fail-open이 남는다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002", locked: true, text: "잠긴 서술." })]);
+    const bad = makeCareerInstance([]);
+    delete bad.nodes;
+    const { violations } = mergeArtifact("career", prev, bad, { stage: "fact-checked" });
+    const ok = violations.some((x) => x.code === "NODES_NOT_ARRAY");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-32) mergeArtifact도 nodes 비배열을 NODES_NOT_ARRAY로 거부한다(잠기지 않은 prev 노드 조용한 삭제 차단)");
+  }
+
+  // ---- (AC-33) 병합이 stage 없이 불리면 던지는가 ----
+  //      기본값을 두면 호출자가 빠뜨렸을 때 조용히 한쪽 의미로 돈다.
+  {
+    let threw = false;
+    try { mergeArtifact("career", null, makeCareerInstance([makeCareerNode()])); } catch { threw = true; }
+    report(threw, "(AC-33) mergeArtifact는 stage 없이 부르면 던진다(기본값으로 조용히 한쪽 의미가 되지 않는다)");
   }
 }
 
@@ -2344,12 +2443,12 @@ function runWriteArtifactOracleSmoke() {
   const readJsonOrNull = (p) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null);
   const readTextOrNull = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null);
 
-  const runWriter = (root, draftObj, extra = []) => {
+  const runWriter = (root, draftObj, extra = [], stage = "fact-checked") => {
     const draftPath = path.join(tmp, `draft-${crypto.randomBytes(6).toString("hex")}.json`);
     fs.writeFileSync(draftPath, JSON.stringify(draftObj), "utf8");
     return spawnSync(
       process.execPath,
-      [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", "fact-checked",
+      [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", stage,
        "--skill", "career-from-git", "--generated-at", FIXED_AT, ...extra],
       { encoding: "utf8" }
     );
@@ -2503,6 +2602,60 @@ function runWriteArtifactOracleSmoke() {
       const ok = missing.length === 0 && md.includes(EVIDENCE_BADGE);
       if (!ok) console.log(`    실제: 빠진 요소=${JSON.stringify(missing)}`);
       report(ok, "(WA-14) writer가 실제로 기록한 career.json이 렌더 계약 요소를 전부 만족한다(쓰기↔렌더 접합)");
+    }
+
+    // ---- (WA-15) exit 4: 산출물은 기록됐으나 레지스트리 갱신 실패 ----
+    //      **콜드 리뷰 M-2.** 파일 헤더가 스스로 "'쓰지 않았다' 불변식을 깨는
+    //      유일한 코드"라고 못 박은 분기인데 스위트 전체에 `status === 4`
+    //      단언이 0건이었다(grep 실측). 함께 미검증이던 것이 updateRegistry의
+    //      손상 레지스트리 거부라, 그 거부가 회귀해 손상 state.json을 새
+    //      골격으로 덮어써도 전부 초록이었다.
+    {
+      const root = freshRoot("registry-broken");
+      fs.writeFileSync(path.join(root, "state.json"), "{broken", "utf8");
+      const r = runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const stateRaw = readTextOrNull(path.join(root, "state.json"));
+      const ok = r.status === 4 && r.stderr.includes("[REGISTRY]") &&
+        fs.existsSync(path.join(root, "career.json")) && stateRaw === "{broken";
+      if (!ok) console.log(`    실제: status=${r.status} state=${JSON.stringify(stateRaw)} stderr=${r.stderr}`);
+      report(ok, "(WA-15) 손상된 state.json에서 exit 4 — 산출물은 기록되고 레지스트리 원문은 덮어써지지 않는다(콜드 리뷰 M-2)");
+    }
+
+    // ---- (WA-16) nodes 없는 draft가 조용히 통과하지 않는가 ----
+    //      **콜드 리뷰 M-3.** 초판 실측: exit 0으로 성공하면서 비잠금 노드
+    //      car:001이 경고도 .bak도 없이 사라졌다(v1 [car:001, car:002] →
+    //      결과 [car:002]).
+    {
+      const root = freshRoot("nodes-missing");
+      runWriter(root, makeCareerInstance([
+        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeCareerNode({ id: "car:002", text: "잠긴 서술.", locked: true, verification: { status: "verified", attempts: 1, reasonCode: null } }),
+      ]));
+      const filePath = path.join(root, "career.json");
+      const before = readTextOrNull(filePath);
+      const bad = makeCareerInstance([]);
+      delete bad.nodes;
+      const r = runWriter(root, bad);
+      const ok = before !== null && r.status === 1 && r.stderr.includes("NODES_NOT_ARRAY") && readTextOrNull(filePath) === before;
+      if (!ok) console.log(`    실제: status=${r.status} 변경됨=${readTextOrNull(filePath) !== before} stderr=${r.stderr}`);
+      report(ok, "(WA-16) nodes 필드가 없는 draft는 exit 1이고 기존 산출물이 그대로 남는다(조용한 노드 삭제 차단 — 콜드 리뷰 M-3)");
+    }
+
+    // ---- (WA-17) draft 단계 재작성이 실제로 성공하는가 ----
+    //      **콜드 리뷰 M-1의 엔드투엔드.** 이전 계약에서는 prev에 attempts>=1인
+    //      비잠금 노드가 있으면 draft 재작성이 네 갈래 모두 exit 1이었다.
+    //      이제 draft는 verification을 담지 않고 병합이 이전 판정을 옮긴다.
+    {
+      const root = freshRoot("draft-rewrite");
+      runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]));
+      const draft = makeCareerInstance([makeDraftNode({ id: "car:001", text: "표현을 다듬은 같은 사실." })]);
+      const r = runWriter(root, draft, [], "draft");
+      const after = readJsonOrNull(path.join(root, "career.json"));
+      const v = after?.nodes?.[0]?.verification;
+      const ok = r.status === 0 && after?.nodes?.[0]?.text === "표현을 다듬은 같은 사실." &&
+        v?.status === "refuted" && v.attempts === 2 && v.reasonCode === "NO_SUPPORTING_DIFF";
+      if (!ok) console.log(`    실제: status=${r.status} verification=${JSON.stringify(v)} stderr=${r.stderr}`);
+      report(ok, "(WA-17) attempts=2인 노드를 --stage draft로 재작성하면 exit 0이고 이전 판정이 보존된다(콜드 리뷰 M-1)");
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

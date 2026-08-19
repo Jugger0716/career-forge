@@ -23,7 +23,14 @@
 //        [--force] [--generated-at <ISO8601>]
 //
 //   --stage        생성 템플릿 출력이면 draft, FactChecker 판정을 실었으면
-//                  fact-checked. verification 기입 권한을 가른다(구현 7단계 (g)).
+//                  fact-checked. verification의 **주인**을 가른다(구현 7단계 (g)):
+//                  draft 출력은 그 필드를 아예 담지 않고 병합이 채우며(기존
+//                  노드는 이전 판정을 이어받는다), fact-checked 출력만 판정을
+//                  실을 수 있다. 콜드 리뷰 M-1 참조 — 초판은 draft가
+//                  `not-attempted`를 기입하게 두었고, 그것이 스키마의
+//                  `not-attempted → attempts const 0`과 재시도 이어받기 요구를
+//                  동시에 만족시킬 수 없게 만들어 attempts>=1인 노드의 draft
+//                  재작성을 네 갈래 모두 exit 1로 봉쇄했다.
 //   --force        사용자 편집이 감지된 산출물을 덮어쓴다. 덮어쓰기 직전
 //                  <파일명>.bak 1세대를 남긴다(AC-16).
 //   --generated-at generatedAt을 고정한다(픽스처 재현용). 생략 시 현재 시각.
@@ -266,7 +273,7 @@ function main() {
   // (b)/AC-16 — 병합. prev를 읽지 못한 상태에서 --force로 강행하면 병합할
   // 대상이 없으므로 draft가 그대로 새 산출물이 된다(그때 .bak이 유일한
   // 복구 수단이다).
-  const { merged, violations } = mergeArtifact(opts.layer, inspected.prev, draft);
+  const { merged, violations } = mergeArtifact(opts.layer, inspected.prev, draft, { stage: opts.stage });
   if (violations.length > 0) {
     printViolations("MERGE", violations);
     console.error("[write-artifact] 병합 계약 위반으로 아무것도 쓰지 않았습니다(구현 7단계 (b) / AC-16).");
