@@ -51,7 +51,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { runValidation, runLangCheck, runSchemaCheck } from "../scripts/validate-plugin.mjs";
+import { runValidation, runLangCheck, runSchemaCheck, runSecretScan } from "../scripts/validate-plugin.mjs";
+import { scanForSecrets, collectEmailFormatPaths, isSingleEmail } from "../scripts/lib/secret-scan.mjs";
 import { walk, listFilesByExt } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
 import { computeRepoKeyForPath, getRepoToplevel } from "../scripts/lib/store.mjs";
@@ -210,6 +211,16 @@ const NEGATIVE_CASES = [
   // 이 케이스의 위반은 PII 유출 3건으로 정확히 격리된다(다른 케이스처럼
   // 부수 위반이 섞여 있지 않다).
   { n: 22, dir: "22-evidence-excluded-commit-pii-leak", mode: "schema", file: "evidence.json", code: "SCHEMA_CHECK_VIOLATION", messageIncludes: "authorEmail", label: "T3: excluded 커밋에 authorEmail·subject·coAuthors가 남은 원장" },
+  // 게이트 C-1 / 심사 C-2: 마스킹 우회 시크릿. 이 픽스처는 구조상 완전히
+  // 유효해서 `--schema-check`도 `--lang-check`도 exit 0을 낸다(실측) —
+  // AC-8의 「마스킹 우회」 카테고리가 REJECT를 낼 코드가 프로덕션에 0곳이던
+  // 상태에서는 이 산출물이 모든 게이트를 통과했다는 뜻이다. 새 검사 지점만
+  // 이것을 잡는다.
+  //
+  // messageIncludes로 패턴 이름까지 단언하는 이유는 케이스 19·21·22와 같다 —
+  // ARTIFACT_SECRET_LEAK 코드만 보면 "아무 패턴으로든 FAIL이면 통과"가 되어
+  // 겨냥한 패턴이 발화했다는 증거가 되지 않는다.
+  { n: 23, dir: "23-career-secret-leak", mode: "secret", file: "career.json", code: "ARTIFACT_SECRET_LEAK", messageIncludes: "aws-access-key", label: "C-2: 마스킹 우회 — career 노드 free-text에 남은 AWS 액세스 키" },
 ];
 
 // AC-3(b): 알 수 없는 SPDX 라이선스는 FAIL이 아니라 명시적 SKIP(경고)으로
@@ -496,6 +507,282 @@ function runSchemaClauseOracleSmoke() {
 
   for (const layer of ["career", "knowledge-map", "gap-report"]) run(layer, NODE_CASES);
   run("evidence", EVIDENCE_CASES);
+}
+
+// ---------------------------------------------------------------------------
+// 시크릿 스캔 절 단위 오라클 — 게이트 C-1 / 심사 C-2 / 구현 7단계 (e)
+//
+// scripts/lib/secret-scan.mjs가 넣은 판정 규칙을 **절 하나씩 격리해** 관측한다.
+// "영역당 한 번"으로는 부족하다는 것이 직전 세션에서 실측됐다(스키마 제약 35개
+// 중 32개가 미관측인 채 "관측됐다"고 보고됐고 적대 검증이 반증했다).
+//
+// 이 오라클이 겨냥하는 회귀는 셋이고, 각각 다른 방향이다:
+//   (1) **미탐** — redact.mjs의 패턴 6종이 각각 실제로 발화하는가.
+//   (2) **오탐** — 40자 hex 커밋 SHA와 format:email 필드의 합법 이메일이
+//       통과하는가. 오탐 회귀는 정탐 테스트로 절대 잡히지 않는다(A-10과 동일
+//       근거). 오탐이 생기면 정상 산출물이 빨갛게 되고, 그러면 남는 선택지가
+//       "게이트를 끄는 것"뿐이 된다.
+//   (3) **과잉 면제** — 이게 가장 무섭고, 직전 세션에서 실제로 생존했던 변이의
+//       형태다(언어 린트의 origin 제외를 "노드 하나가 user면 파일 전체 건너뜀"
+//       으로 넓힌 변이가 픽스처 쌍의 배치 때문에 살아남았다). 여기서는 세
+//       방향으로 닫는다 — format:email 필드에 AWS 키를 넣으면 여전히 FAIL,
+//       합법 이메일에 시크릿을 덧붙이면 여전히 FAIL, 같은 이메일을 면제 대상이
+//       아닌 경로에 넣으면 FAIL.
+// ---------------------------------------------------------------------------
+function runSecretScanOracleSmoke() {
+  console.log("[시크릿 스캔 절 단위 오라클] scripts/lib/secret-scan.mjs — 패턴별 탐지 · 오탐 · 과잉 면제 3방향");
+
+  const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"));
+  const careerSchema = loadJson("schemas/career.schema.json");
+  const evidenceSchema = loadJson("schemas/evidence.schema.json");
+  const careerBase = loadJson("tests/fixtures-valid/career.json");
+
+  // evidence 기준 인스턴스는 손으로 쓰지 않고 실제 수집 결과를 쓴다 —
+  // commits[].authorEmail 면제 경로가 "문자열 authorEmail이 실제로 존재하는"
+  // 원장에서 관측돼야 공허하지 않다. selectedIdentities에 OWNER_EMAIL을 주면
+  // 그 저자의 커밋이 excluded:false로 남아 authorEmail이 문자열이 된다.
+  let evidenceBase;
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-secretscan-"));
+  try {
+    const dir = path.join(tmpBase, "repo");
+    buildMultiAuthor(dir);
+    evidenceBase = collectGitFacts({
+      repoPath: dir,
+      selectedIdentities: [OWNER_EMAIL],
+      ref: "HEAD",
+      maxCommits: 1000,
+    }).evidence;
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+
+  // --- 대조군 -------------------------------------------------------------
+  // 기준 인스턴스가 위반 0건이어야 아래 변이 단언이 공허하지 않다.
+  report(
+    scanForSecrets(careerSchema, careerBase).length === 0,
+    "대조군: career 기준 인스턴스가 위반 0건(40자 hex 해시 · format:email 이메일 포함)"
+  );
+
+  const evidenceIncluded = evidenceBase.commits.filter((c) => typeof c.authorEmail === "string");
+  // 이 단언이 없으면 아래 evidence 대조군이 "authorEmail이 애초에 하나도
+  // 없어서" 공허하게 참일 수 있다 — 직전 세션의 coAuthors 사고와 같은 형태다.
+  report(
+    evidenceIncluded.length >= 1,
+    `선결: evidence 기준 인스턴스에 authorEmail이 문자열인 커밋이 최소 1건 존재(실제 ${evidenceIncluded.length}건) — 없으면 아래 면제 관측이 공허해진다`
+  );
+  report(
+    scanForSecrets(evidenceSchema, evidenceBase).length === 0,
+    "대조군: 실제 수집한 evidence 기준 인스턴스가 위반 0건(commits[].authorEmail 면제 경로 실행됨)"
+  );
+
+  // --- (1) 패턴별 탐지 ----------------------------------------------------
+  // redact.mjs의 PATTERNS 6종에 1:1 대응한다. 하나라도 빠지면 그 패턴은
+  // 이 새 검사 경로에서 관측되지 않은 것이다.
+  const PATTERN_CASES = [
+    { name: "aws-access-key", payload: "AKIAIOSFODNN7EXAMPLE" },
+    { name: "aws-secret-key", payload: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" },
+    { name: "private-key-block", payload: "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQ\n-----END RSA PRIVATE KEY-----" },
+    { name: "jwt", payload: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.QWxpY2VTaWduYXR1cmU" },
+    { name: "password-field", payload: "password=hunter2correcthorse" },
+    { name: "email", payload: "colleague@example.com" },
+  ];
+
+  for (const c of PATTERN_CASES) {
+    const inst = structuredClone(careerBase);
+    inst.nodes[0].text = `이 작업에서 설정값을 다뤘다: ${c.payload} 관련 처리.`;
+    const violations = scanForSecrets(careerSchema, inst);
+    const hit = violations.find((v) => v.path === "nodes[0].text" && v.patterns.includes(c.name));
+    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(Boolean(hit), `패턴 '${c.name}'이 nodes[0].text에서 발화`);
+  }
+
+  // --- (2) 오탐 방향 ------------------------------------------------------
+  // A-10의 "40자 hex 커밋 SHA는 마스킹하지 않는다" 단언을 이 새 경로로
+  // 이식한다. 이 도구의 산출물은 커밋 해시로 가득하므로, 이 예외가 깨지면
+  // 정상 산출물 전부가 시크릿 유출로 판정된다.
+  {
+    const inst = structuredClone(careerBase);
+    inst.nodes[0].text = `근거 커밋 a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4 에서 처리했다.`;
+    const violations = scanForSecrets(careerSchema, inst);
+    // **겨냥한 경로의 위반만** 본다. 전체 위반 수(=== 0)로 판정하면 같은
+    // 인스턴스의 selectedIdentities 이메일이 오염원으로 섞여, 면제 로직을
+    // 건드리는 변이에서도 이 단언이 함께 깨진다(실측: M1에서 그렇게 깨졌다).
+    // 그러면 이 단언이 무엇을 관측하는 것인지가 흐려진다.
+    const textViolation = violations.find((v) => v.path === "nodes[0].text");
+    if (textViolation) console.log(`    실제 위반: ${JSON.stringify(textViolation)}`);
+    report(!textViolation, "무오탐: free-text 안의 40자 hex 커밋 SHA는 위반이 아님(A-10 단언의 새 경로 이식)");
+  }
+
+  // --- (3) 과잉 면제 방지 — 이 셋이 핵심이다 ------------------------------
+  // (3-a) 면제는 **필드 단위가 아니라 (필드 × 패턴) 단위**다. format:email
+  //       경로에 AWS 키를 넣으면 email 패턴만 면제될 뿐 aws 패턴은 발화해야
+  //       한다. 필드 단위로 면제하면 그 필드가 통째로 사각지대가 된다.
+  {
+    // 페이로드가 **값 전체로 단일 이메일이면서 동시에 AWS 키 패턴도 발화**해야
+    // 한다. 그래야 면제 분기에 실제로 진입하고, 그 분기 안에서 email 히트만
+    // 걸러지는지를 관측할 수 있다.
+    //
+    // 첫 판은 `["AKIAIOSFODNN7EXAMPLE"]`(이메일이 아닌 값)을 썼고, 그 값은
+    // isSingleEmail이 false라 **면제 분기에 아예 들어가지 않았다** — 변이는
+    // 분기 안에 있으므로 단언이 통과해 버렸다(실측: 면제를 필드 단위로 넓히는
+    // 변이에서 FAIL 0건). 핸드오프가 금지한 자기충족 테스트의 형태 그대로였다.
+    const inst = structuredClone(careerBase);
+    inst.coverage.exclusions.selectedIdentities = ["AKIAIOSFODNN7EXAMPLE@example.com"];
+    const violations = scanForSecrets(careerSchema, inst);
+    const hit = violations.find(
+      (v) => v.path === "coverage.exclusions.selectedIdentities[0]" && v.patterns.includes("aws-access-key")
+    );
+    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(
+      Boolean(hit),
+      "과잉 면제 방지 (a): 값 전체가 단일 이메일이라 면제 분기에 진입해도 aws-access-key는 살아남음(면제는 email 패턴 한정)"
+    );
+  }
+
+  // (3-b) 면제 조건은 "값 **전체**가 단일 이메일일 때"다. 합법 이메일에
+  //       시크릿을 덧붙이는 회피를 막는다. 이 조건이 없으면 email 패턴이
+  //       한 번이라도 맞는 값은 통째로 면제된다.
+  {
+    const inst = structuredClone(careerBase);
+    inst.coverage.exclusions.selectedIdentities = ["dev@example.com AKIAIOSFODNN7EXAMPLE"];
+    const violations = scanForSecrets(careerSchema, inst);
+    const hit = violations.find((v) => v.patterns.includes("email"));
+    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(
+      Boolean(hit),
+      "과잉 면제 방지 (b): format:email 경로라도 값 전체가 단일 이메일이 아니면 email 면제가 적용되지 않음"
+    );
+  }
+
+  // (3-c) 면제는 **경로 단위**다. 같은 이메일 문자열이라도 면제 대상이 아닌
+  //       경로(nodes[].text)에 있으면 위반이다. 면제가 전역 값 집합으로
+  //       구현되면 이 단언이 깨진다.
+  {
+    // (c-1) 값 **전체가 단일 이메일**인 경우. 이 형태라야 면제 분기의 진입
+    //       조건 중 `isSingleEmail`은 만족하고 경로 조건만 불만족하게 되어,
+    //       "경로 검사를 빼면 전역 면제가 된다"는 변이가 관측된다.
+    //
+    //       첫 판은 (c-2) 형태(산문에 이메일이 박힌 값)만 두었는데, 그 값은
+    //       isSingleEmail이 false라 경로 조건을 지워도 여전히 면제되지 않아
+    //       단언이 통과했다(실측: 면제를 전역으로 넓히는 변이에서 FAIL 0건).
+    //       두 형태는 서로를 대신하지 못한다.
+    const inst1 = structuredClone(careerBase);
+    inst1.nodes[0].text = "dev@example.com";
+    const v1 = scanForSecrets(careerSchema, inst1);
+    const hit1 = v1.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
+    if (!hit1) console.log(`    실제 위반: ${JSON.stringify(v1)}`);
+    report(
+      Boolean(hit1),
+      "과잉 면제 방지 (c-1): 값 전체가 단일 이메일이어도 format:email이 아닌 경로(nodes[].text)에서는 위반(면제는 경로 단위)"
+    );
+
+    // (c-2) 실제 유출이 나타날 법한 형태 — 산문 안에 동료 이메일이 박힌 경우.
+    const inst2 = structuredClone(careerBase);
+    inst2.nodes[0].text = `동료 dev@example.com 와 함께 작업했다.`;
+    const v2 = scanForSecrets(careerSchema, inst2);
+    const hit2 = v2.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
+    if (!hit2) console.log(`    실제 위반: ${JSON.stringify(v2)}`);
+    report(Boolean(hit2), "과잉 면제 방지 (c-2): 산문 안에 박힌 동료 이메일도 free-text 경로에서는 위반");
+  }
+
+  // --- 면제 경로 수집기가 allOf/then 안의 선언까지 보는가 -----------------
+  // evidence.schema.json은 excluded:false 조건절의 then 안에서도 authorEmail을
+  // 재선언한다. collectEmailFormatPaths가 properties/items만 순회하면 그 선언은
+  // 수집되지 않는다. 현재 evidence 스키마는 base properties에도 같은 선언을
+  // 두고 있어 실물로는 관측되지 않으므로, **그 분기만 격리한 합성 스키마**로
+  // 관측한다 — 이렇게 하지 않으면 allOf/then 순회는 "선언만 되고 관측되지 않은"
+  // 코드가 된다.
+  {
+    const synthetic = {
+      type: "object",
+      properties: { holder: { type: "object", properties: {} } },
+      allOf: [
+        {
+          then: {
+            properties: {
+              holder: { type: "object", properties: { addr: { type: "string", format: "email" } } },
+            },
+          },
+        },
+      ],
+    };
+    const paths = collectEmailFormatPaths(synthetic).map((p) => p.join("."));
+    report(
+      paths.includes("holder.addr"),
+      `면제 경로 수집기가 allOf[].then 안의 format:email까지 수집(실제: ${JSON.stringify(paths)})`
+    );
+    const inst = { holder: { addr: "dev@example.com" } };
+    report(
+      scanForSecrets(synthetic, inst).length === 0,
+      "allOf[].then 안에서만 선언된 format:email 경로도 면제가 적용됨"
+    );
+  }
+
+  // --- evidence 계층에서도 탐지가 작동하는가 ------------------------------
+  // career 계층에서만 관측하면 "다른 계층은 스캔 대상에서 빠졌다"는 회귀를
+  // 못 잡는다. 스캔은 스키마 비의존적으로 모든 문자열을 순회하므로 계층이
+  // 늘어나도 자동으로 덮이지만, 그 성질 자체를 한 번은 관측한다.
+  {
+    const inst = structuredClone(evidenceBase);
+    const target = inst.commits.find((c) => typeof c.subject === "string");
+    report(Boolean(target), "선결: evidence 기준 인스턴스에 subject가 문자열인 커밋이 존재");
+    if (target) {
+      target.subject = `fix: rotate AKIAIOSFODNN7EXAMPLE`;
+      const violations = scanForSecrets(evidenceSchema, inst);
+      const hit = violations.find((v) => v.patterns.includes("aws-access-key"));
+      if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+      report(Boolean(hit), "evidence 계층의 commits[].subject에 남은 AWS 키도 탐지됨");
+    }
+  }
+
+  // --- 오류 메시지가 시크릿을 재유출하지 않는가 ---------------------------
+  // 유출을 막겠다는 검사기가 자기 오류 메시지로 시크릿을 CI 로그에 다시
+  // 흘리면 방어가 아니라 두 번째 유출 경로다.
+  {
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const inst = structuredClone(careerBase);
+    inst.nodes[0].text = `키 ${secret} 를 사용했다.`;
+    const violations = scanForSecrets(careerSchema, inst);
+    const excerpts = violations.map((v) => v.excerpt).join("\n");
+    report(
+      violations.length > 0 && !excerpts.includes(secret) && excerpts.includes("[REDACTED:aws-access-key]"),
+      "위생: 위반 메시지의 excerpt가 원문 시크릿이 아니라 마스킹된 형태를 담음"
+    );
+  }
+
+  // --- FULL_EMAIL_RE 복제본이 스키마 검증기와 갈리지 않는가 ---------------
+  // secret-scan.mjs는 schema-validate.mjs의 FORMAT_CHECKERS.email 리터럴을
+  // 복제해 갖고 있다(그 상수가 export되지 않았고, export 추가는 슬라이스 A
+  // 파일 수정이라 slice_plan.md의 예외 3건 밖이다). 두 리터럴이 갈리면
+  // "스키마는 이메일로 인정하는데 스캐너는 아니라 오탐" 또는 그 반대가
+  // 생기므로, 경계값으로 두 판정이 일치하는지 관측한다.
+  {
+    const samples = [
+      "dev@example.com",
+      "76617183+Jugger0716@users.noreply.github.com",
+      "not-an-email",
+      "a@b.c",
+      "two words@example.com",
+      "no-at-sign.example.com",
+    ];
+    const schemaVerdicts = samples.map((s) => {
+      const errs = validateInstance({ type: "string", format: "email" }, s, {}, "$");
+      return errs.length === 0;
+    });
+    // 스캐너 쪽은 술어를 **직접** 부른다. 간접 관측("format:email 경로에 넣고
+    // 위반이 나는지")은 쓰지 않는다 — redact.mjs의 email 패턴이 애초에
+    // 발화하지 않는 값(`a@b.c`: 그 패턴은 TLD를 `[A-Za-z]{2,}`로 요구한다)에서
+    // "면제되지 않음"과 "면제할 것이 없음"이 구별되지 않아 거짓 FAIL이 난다.
+    // 이 오라클의 첫 판이 정확히 그렇게 실패했고, 그건 스캐너가 아니라 측정
+    // 방법의 결함이었다.
+    const scannerVerdicts = samples.map((s) => isSingleEmail(s));
+    const agree = samples.every((s, i) => schemaVerdicts[i] === scannerVerdicts[i]);
+    if (!agree) {
+      console.log(`    schema : ${JSON.stringify(schemaVerdicts)}`);
+      console.log(`    scanner: ${JSON.stringify(scannerVerdicts)}`);
+    }
+    report(agree, `이메일 판정 드리프트 없음: schema-validate.mjs와 secret-scan.mjs가 경계값 ${samples.length}종에서 동일 판정`);
+  }
 }
 
 // AC-15: "같은 레포를 표기만 다른 절대경로(백슬래시/슬래시 혼용·드라이브
@@ -3585,6 +3872,8 @@ async function runNegativeSuite() {
       result = await runValidation({ root: caseDir, explicitRoot: true });
     } else if (c.mode === "schema") {
       result = await runSchemaCheck({ instancePath: path.join(caseDir, c.file ?? "career.json") });
+    } else if (c.mode === "secret") {
+      result = await runSecretScan({ artifactPath: path.join(caseDir, c.file ?? "career.json") });
     } else {
       result = await runLangCheck({ outDir: caseDir });
     }
@@ -3613,6 +3902,23 @@ async function runNegativeSuite() {
     for (const e of positiveResult.errors) console.log(`    실제 오류: ${e.code}: ${e.message}`);
   }
   report(positiveResult.ok, "tests/fixtures-valid/ positive 픽스처 → exit 0 (AC-19 오탐 없음)");
+
+  // 게이트 C-1의 오탐 방향을 CLI 경로(runSecretScan)로도 관측한다. 라이브러리
+  // 수준 오라클(runSecretScanOracleSmoke)이 이미 같은 성질을 보지만, 그것은
+  // scanForSecrets를 직접 부른다 — 스키마 해석·파일 읽기·오류 코드 부착을
+  // 담당하는 runSecretScan 자체가 정상 산출물에서 조용히 빨갛게 되는 회귀는
+  // 그 오라클로 잡히지 않는다. 세 계층 전부를 도는 이유도 같다: 한 계층만
+  // 보면 "다른 계층의 스키마에서 면제 경로 수집이 깨졌다"를 놓친다.
+  for (const layer of ["career", "knowledge-map", "gap-report"]) {
+    const artifactPath = path.join(positiveDir, `${layer}.json`);
+    if (!fs.existsSync(artifactPath)) {
+      report(false, `positive 픽스처 ${layer}.json이 없어 시크릿 스캔 오탐 관측이 공허해짐`);
+      continue;
+    }
+    const r = await runSecretScan({ artifactPath });
+    if (!r.ok) for (const e of r.errors) console.log(`    실제 오류: ${e.code}: ${e.message}`);
+    report(r.ok, `tests/fixtures-valid/${layer}.json → --secret-scan exit 0 (게이트 C-1 오탐 없음)`);
+  }
 
   // AC-3(b): 알 수 없는 SPDX 라이선스는 FAIL이 아니라 SKIP 경고여야 한다.
   const skipCaseDir = path.join(TESTS_DIR, "fixtures-invalid", UNKNOWN_LICENSE_SKIP_CASE.dir);
@@ -3672,6 +3978,7 @@ async function runSectionAsync(label, fn) {
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
+  runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);

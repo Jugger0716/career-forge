@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-13T00:00:00Z",
+  "sourceRepoHead": "0000000000000000000000000000000000000000",
+  "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "coverage": {
+    "analyzed": 1,
+    "total": 1,
+    "traversed": 2,
+    "period": {
+      "since": "2026-01-01",
+      "until": "2026-08-13"
+    },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": [
+        "dev@example.com"
+      ]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": {
+    "reason": "none",
+    "dropped_commits": 0
+  },
+  "nodes": [
+    {
+      "id": "career:001",
+      "basis": "insufficient",
+      "evidence": [],
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      },
+      "origin": "generated",
+      "locked": false,
+      "text": "배포 파이프라인에서 자격증명 AKIAIOSFODNN7EXAMPLE 을 회전시키는 작업을 했습니다.",
+      "skills": [
+        "Kafka Consumer Group",
+        "JPA N+1",
+        "Spring WebFlux",
+        "AWS Elastic Container Service"
+      ]
+    },
+    {
+      "id": "career:002",
+      "basis": "insufficient",
+      "evidence": [],
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      },
+      "origin": "user",
+      "locked": true,
+      "text": "I wrote this entry myself after the generated draft missed the migration work.",
+      "skills": [
+        "Flyway",
+        "PostgreSQL"
+      ]
+    }
+  ]
+}
