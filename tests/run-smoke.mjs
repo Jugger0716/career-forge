@@ -485,6 +485,14 @@ function runSchemaClauseOracleSmoke() {
     { label: "refuted인데 attempts≠2", mutate: (i) => { i.nodes[0].verification = { status: "refuted", attempts: 0, reasonCode: "NO_SUPPORT" }; }, expect: "const 불일치(기대 2)" },
     { label: "refuted인데 reasonCode가 null", mutate: (i) => { i.nodes[0].verification = { status: "refuted", attempts: 2, reasonCode: null }; }, expect: "type 불일치(기대 string)" },
     { label: "verified인데 reasonCode 있음", mutate: (i) => { i.nodes[0].verification = { status: "verified", attempts: 0, reasonCode: "NO_SUPPORT" }; }, expect: "type 불일치(기대 null)" },
+    // 게이트 C-2 후속 — basis:"external" 표현 가능성 수정(2026-08-19).
+    // 세 계층 모두에 externalUrl 프로퍼티와 조건절이 들어갔으므로 세 계층
+    // 각각에서 관측한다(한 계층의 관측이 다른 계층을 대신하지 못한다 —
+    // 스키마가 네 파일로 복제돼 있다).
+    { label: "basis:external인데 externalUrl 없음", mutate: (i) => { i.nodes[0].basis = "external"; delete i.nodes[0].externalUrl; }, expect: "required 필드 'externalUrl' 없음" },
+    // evidence 비움 조건절을 external까지 넓혔다고 해서 아무 basis나
+    // 통과하면 안 된다 — AC-12의 이빨이 남아 있는지 확인한다.
+    { label: "evidence가 비었는데 basis가 inference", mutate: (i) => { i.nodes[0].evidence = []; i.nodes[0].basis = "inference"; }, expect: "enum 불일치" },
   ];
 
   const EVIDENCE_CASES = [
@@ -509,6 +517,23 @@ function runSchemaClauseOracleSmoke() {
 
   for (const layer of ["career", "knowledge-map", "gap-report"]) run(layer, NODE_CASES);
   run("evidence", EVIDENCE_CASES);
+
+  // --- 게이트 C-2 후속의 **허용 방향** 관측 -------------------------------
+  // 위 변이 케이스들은 "금지된 것이 FAIL하는가"만 본다. 이번 수정의 핵심은
+  // 오히려 **허용**이다 — 「URL 출처만 있고 커밋 근거는 없는 노드」가 이제
+  // 표현 가능해야 한다. 수정 전에는 evidence 비움 조건절이 basis를
+  // insufficient로 못 박아 이 인스턴스가 FAIL했다. 이 단언이 없으면
+  // 조건절을 되돌려도 아무도 모른다(금지 방향만 관측하면 완화를 못 잡는다).
+  for (const layer of ["career", "knowledge-map", "gap-report"]) {
+    const schema = schemaOf(layer);
+    const inst = structuredClone(bases[layer]);
+    inst.nodes[0].evidence = [];
+    inst.nodes[0].basis = "external";
+    inst.nodes[0].externalUrl = "https://developer.mozilla.org/en-US/docs/Web/HTTP";
+    const errors = validateInstance(schema, inst, schema, "$");
+    if (errors.length > 0) console.log(`    실제 오류: ${JSON.stringify(errors)}`);
+    report(errors.length === 0, `${layer}: 커밋 근거 없이 URL 출처만 있는 external 노드가 스키마를 통과함(표현 가능성)`);
+  }
 }
 
 // ---------------------------------------------------------------------------

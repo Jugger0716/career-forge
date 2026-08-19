@@ -164,12 +164,21 @@
           "type": "string",
           "x-freeText": true,
           "description": "사용자가 입력한 자가진단 원문 요약(한국어로). 퀴즈로 재검증하지 않는다(MVP 범위)."
+        },
+        "externalUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "basis:\"external\"일 때 필수. references/sources.json allow-list 내 URL이어야 한다(allow-list 대조는 scripts/verify-evidence.mjs의 (f)축 checkExternalSources가 런타임에 검사하며 이 스키마는 형식만 검사한다). 그 검사는 allow-list 소속 여부만 확인하며 URL이 실제로 존재하는지·그 서술을 뒷받침하는지는 확인하지 않는다 — 후자는 2단 팩트체크(verification)의 몫이다(구현 8단계 (d))."
         }
       },
       "allOf": [
         {
+          "if": { "properties": { "basis": { "const": "external" } } },
+          "then": { "required": ["externalUrl"] }
+        },
+        {
           "if": { "properties": { "evidence": { "maxItems": 0 } } },
-          "then": { "properties": { "basis": { "const": "insufficient" } } }
+          "then": { "properties": { "basis": { "enum": ["insufficient", "external"] } } }
         },
         {
           "if": { "properties": { "verification": { "properties": { "status": { "const": "not-attempted" } } } } },
