@@ -144,17 +144,33 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
     throw new Error(`알 수 없는 단계입니다: '${stage}' (지원: ${AUTHORSHIP_STAGES.join(", ")})`);
   }
   const violations = [];
-  const nodes = Array.isArray(instance?.nodes) ? instance.nodes : [];
   const hasVerificationAxis = VERIFICATION_LAYERS.includes(layer);
 
-  for (const node of nodes) {
+  // **nodes 비배열을 빈 배열로 강등하지 않는다(콜드 리뷰 M-3).** 초판은
+  // `Array.isArray(...) ? ... : []`로 조용히 넘겼고, 그 결과 nodes 필드가 없는
+  // draft가 위반 0건으로 통과한 뒤 병합이 `{...draft, nodes: mergedNodes}`를
+  // 돌려주는 바람에 **기형 draft였다는 신호가 스키마 검증 앞에서 세탁**됐다.
+  // 실측: prev `[car:001, car:002(locked)]`에 nodes 없는 draft를 넣자
+  // **exit 0으로 성공하면서** car:001이 경고도 .bak도 없이 사라졌다.
+  // 이 모듈이 VERIFICATION_MISSING·PREV_ARTIFACT_HASH_MISSING에서 내세운
+  // fail-closed와 정면으로 어긋나던 유일한 통로다.
+  if (!Array.isArray(instance?.nodes)) {
+    violations.push({
+      code: "NODES_NOT_ARRAY",
+      message:
+        `산출물의 nodes가 배열이 아닙니다(실제: ${instance?.nodes === undefined ? "필드 없음" : typeof instance.nodes}) — ` +
+        "빈 배열로 강등하면 기형 출력이 '노드 0건'과 구별되지 않고, 잠기지 않은 이전 노드가 조용히 사라집니다.",
+    });
+    return violations;
+  }
+
+  for (const node of instance.nodes) {
     const id = node?.id ?? "(id 없음)";
 
     // `origin`은 **두 단계 모두** "generated"여야 한다. 생성 주체가 무엇을
-    // 만들든 그것은 LLM 생성분이고, `user`로 바꾸는 것은 병합만 할 수 있다
-    // (아래 mergeArtifact). 단계로 완화하지 않는 이유는, `origin:"user"`가
-    // 언어 린트 제외 통로이기 때문에 어느 단계에서 새든 같은 구멍이 되기
-    // 때문이다.
+    // 만들든 그것은 LLM 생성분이고, `user`로 바꾸는 것은 병합만 할 수 있다.
+    // 단계로 완화하지 않는 이유는, `origin:"user"`가 언어 린트 제외 통로이기
+    // 때문에 어느 단계에서 새든 같은 구멍이 되기 때문이다.
     if (node?.origin !== "generated") {
       violations.push({
         code: "ORIGIN_SET_BY_TEMPLATE",
@@ -165,24 +181,43 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
     }
 
     if (!hasVerificationAxis) continue;
+    const hasVerification = node?.verification !== undefined && node?.verification !== null;
 
-    if (node?.verification === undefined || node?.verification === null) {
-      // 부재를 통과시키지 않는다 — 스키마도 required로 잡지만, 이 검사가
-      // 스키마 검증보다 **앞**에서 돌기 때문에 여기서 조용히 넘기면
-      // "verification이 없으면 (g)를 어길 수 없다"는 fail-open이 된다.
-      violations.push({
-        code: "VERIFICATION_MISSING",
-        message: `노드 '${id}'에 verification 필드가 없습니다 — 부재를 '판정 대상이 아님'으로 읽지 않습니다.`,
-      });
+    if (stage === "draft") {
+      // **draft는 `verification`을 담지 않는다 — 값이 아니라 필드 자체가 금지다.**
+      //
+      // 초판은 "draft는 not-attempted만 기입할 수 있다"였는데, 그 판이
+      // 콜드 리뷰 M-1의 3중 자기모순을 만들었다: prev에 attempts>=1인 비잠금
+      // 노드가 있으면 그 노드를 draft로 재작성할 방법이 **하나도 없었다**
+      // (실측 4갈래 전부 exit 1 — ATTEMPTS_RESET / 스키마 const 0 /
+      // SET_BY_TEMPLATE / NODE_ID_CHURN). 스키마의 `not-attempted → attempts
+      // const 0`과 「재시도 상한 이어받기」가 동시에 성립할 수 없었기 때문이다.
+      //
+      // 필드 자체를 금지하고 **병합이 채우게** 하면 그 모순이 사라진다 —
+      // 기존 노드는 prev의 verification을 그대로 이어받으므로 attempts가
+      // 애초에 초기화될 수 없고(검사로 막는 것이 아니라 표현할 수 없다),
+      // 신규 노드만 not-attempted/0/null을 받는다. 스키마 required와도
+      // 부딪히지 않는다 — 검증 대상은 draft 파일이 아니라 병합 결과다.
+      if (hasVerification) {
+        violations.push({
+          code: "VERIFICATION_SET_BY_TEMPLATE",
+          message:
+            `노드 '${id}'에 verification이 실려 있습니다 — draft 단계(생성 템플릿 출력)는 이 필드를 ` +
+            "**아예 담지 않습니다**. 값은 병합이 채우고(기존 노드는 이전 판정을 이어받습니다), 판정은 " +
+            "FactChecker 디스패치를 수행한 스킬 오케스트레이션만 실을 수 있습니다(구현 7단계 (g)).",
+        });
+      }
       continue;
     }
 
-    if (stage === "draft" && node.verification.status !== "not-attempted") {
+    // fact-checked — 이 단계는 판정을 실어야 하므로 부재가 위반이다.
+    // 부재를 '판정 대상이 아님'으로 읽지 않는다(fail-closed). 이 검사가
+    // 스키마 검증보다 **앞**에서 돌기 때문에 여기서 조용히 넘기면
+    // "verification이 없으면 (g)를 어길 수 없다"는 fail-open이 된다.
+    if (!hasVerification) {
       violations.push({
-        code: "VERIFICATION_SET_BY_TEMPLATE",
-        message:
-          `노드 '${id}'의 verification.status가 '${node.verification.status}'입니다 — draft 단계(생성 템플릿 출력)는 ` +
-          "'not-attempted'만 기입할 수 있습니다. 판정은 FactChecker 디스패치를 수행한 스킬 오케스트레이션만 실을 수 있습니다(구현 7단계 (g)).",
+        code: "VERIFICATION_MISSING",
+        message: `노드 '${id}'에 verification 필드가 없습니다 — fact-checked 단계는 판정을 실어야 합니다.`,
       });
     }
   }
@@ -196,7 +231,10 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
 /**
  * 이전 산출물과 이번 출력을 병합한다(순수 — 디스크에 닿지 않는다).
  *
- * 규칙 네 가지. 각각 **양방향으로** 관측된다(금지 방향만 보면 "전부 보존"
+ * `stage`는 **필수**다. 기본값을 두면 호출자가 빠뜨렸을 때 조용히 한쪽
+ * 의미로 동작하고, 그 한쪽이 하필 verification을 덮어쓰는 쪽이다.
+ *
+ * 규칙 다섯 가지. 각각 **양방향으로** 관측된다(금지 방향만 보면 "전부 보존"
  * 하는 병합이나 "전부 덮어쓰는" 병합이 통과한다).
  *
  *  1. **`locked` 보존(AC-16).** prev의 `locked:true` 노드는 draft가 같은 id로
@@ -205,18 +243,22 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
  *  2. **노드 id 재사용(구현 7단계 (b)).** draft가 prev에 이미 있는 **동일
  *     text**를 새 id로 들고 오면 `NODE_ID_CHURN` 위반이다. id를 만드는 주체가
  *     LLM이므로 이 성질은 저절로 성립하지 않고, 깨지면 `locked`로 잠근 사용자
- *     편집분이 고아가 된다(리스크 절이 '가장 확실하게 이탈시키는 데이터 유실
- *     사고'로 분류한 경로).
- *  3. **재시도 상한 이어받기(AC-13 (iii)).** draft의 `verification.attempts`가
- *     prev보다 **작으면** `VERIFICATION_ATTEMPTS_RESET` 위반이다. 조용히
- *     `max()`로 고치지 않는다 — 고치면 §3의 상한 2회가 실행마다 초기화되는
- *     버그가 산출물에는 안 보이고 계속 재발한다. 시끄럽게 거부하는 쪽이
- *     이 레포의 관례다.
+ *     편집분이 고아가 된다.
+ *  3. **`verification`의 주인은 단계가 정한다(구현 7단계 (g) / 콜드 리뷰 M-1).**
+ *     - `draft`: draft는 이 필드를 담지 않는다(`checkAuthorshipContract`가
+ *       고발한다). 여기서 **병합이 채운다** — 기존 노드는 prev의 값을 그대로
+ *       이어받고, 신규 노드만 `{not-attempted, 0, null}`을 받는다. 그래서
+ *       attempts 초기화가 **표현 자체로 불가능**하다(검사로 막는 것이 아니다).
+ *     - `fact-checked`: draft가 판정을 싣는다. 이 단계에서만 attempts 감소를
+ *       `VERIFICATION_ATTEMPTS_RESET`으로 거부한다 — 조용히 `max()`로 고치면
+ *       §3의 상한 2회가 실행마다 초기화되는 버그가 산출물에는 안 보인다.
  *  4. **`origin`은 병합만 설정한다.** prev에 있던 노드는 prev의 `origin`을
- *     이어받고(사용자 수동 추가분 보존), 신규 노드는 `generated`다. 템플릿이
- *     기입하려 한 값은 `checkAuthorshipContract`가 별도로 고발하며, 여기서
- *     덮어쓰는 것은 그 고발을 대신하지 않는다 — 덮어쓰기만 있으면 템플릿의
- *     시도가 조용히 정상화되어 아무도 배우지 못한다.
+ *     이어받고, 신규 노드는 `generated`다. 템플릿이 기입하려 한 값은
+ *     `checkAuthorshipContract`가 별도로 고발하며, 여기서 덮어쓰는 것이 그
+ *     고발을 대신하지 않는다.
+ *  5. **`nodes` 비배열은 빈 배열로 강등하지 않는다(콜드 리뷰 M-3).**
+ *     `NODES_NOT_ARRAY`로 거부한다 — 강등하면 기형 draft가 exit 0으로 통과하며
+ *     잠기지 않은 prev 노드를 지운다(실측).
  *
  * 노드 순서: draft 순서를 그대로 두고, draft에 없던 `locked` 생존자를 prev
  * 순서로 뒤에 붙인다. 순서를 섞으면 재실행 diff가 무의미해진다.
@@ -224,13 +266,29 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
  * @param {string} layer
  * @param {object|null} prev 이전 산출물(없으면 null)
  * @param {object} draft 이번 출력
+ * @param {{stage: string}} opts
  * @returns {{merged: object, violations: {code: string, message: string}[]}}
  */
-export function mergeArtifact(layer, prev, draft) {
+export function mergeArtifact(layer, prev, draft, { stage } = {}) {
+  if (!AUTHORSHIP_STAGES.includes(stage)) {
+    throw new Error(`알 수 없는 단계입니다: '${stage}' (지원: ${AUTHORSHIP_STAGES.join(", ")})`);
+  }
   const violations = [];
-  const draftNodes = Array.isArray(draft?.nodes) ? draft.nodes : [];
-  const prevNodes = Array.isArray(prev?.nodes) ? prev.nodes : [];
   const hasVerificationAxis = VERIFICATION_LAYERS.includes(layer);
+  const prevNodes = Array.isArray(prev?.nodes) ? prev.nodes : [];
+
+  if (!Array.isArray(draft?.nodes)) {
+    // 규칙 5 — 강등하지 않는다. 여기서 통과시키면 아래 조립이 prev의
+    // 비잠금 노드를 전부 버린 결과를 정상 산출물처럼 돌려준다.
+    return {
+      merged: draft,
+      violations: [{
+        code: "NODES_NOT_ARRAY",
+        message: "병합 입력의 nodes가 배열이 아닙니다 — 빈 배열로 강등하면 잠기지 않은 이전 노드가 조용히 사라집니다.",
+      }],
+    };
+  }
+  const draftNodes = draft.nodes;
 
   const prevById = new Map();
   for (const node of prevNodes) {
@@ -247,6 +305,9 @@ export function mergeArtifact(layer, prev, draft) {
     if (prevIdByText.has(text)) ambiguousTexts.add(text);
     else prevIdByText.set(text, node.id);
   }
+
+  /** draft 단계에서 신규 노드가 받는 초기 판정. */
+  const FRESH_VERIFICATION = { status: "not-attempted", attempts: 0, reasonCode: null };
 
   const mergedNodes = [];
   const consumedPrevIds = new Set();
@@ -271,30 +332,39 @@ export function mergeArtifact(layer, prev, draft) {
 
       if (prevNode.locked === true) {
         // 규칙 1 — 잠긴 노드는 draft가 같은 id로 덮어써도 prev가 이긴다.
-        mergedNodes.push(prevNode);
+        // 얕은 사본으로 넣어 호출자가 merged를 만져도 prev 객체가 오염되지
+        // 않게 한다(콜드 리뷰: merged와 prev의 참조 공유).
+        mergedNodes.push({ ...prevNode });
         continue;
       }
 
+      const merged = { ...node, origin: prevNode.origin };
+
       if (hasVerificationAxis) {
-        const prevAttempts = prevNode?.verification?.attempts;
-        const draftAttempts = node?.verification?.attempts;
-        if (
-          typeof prevAttempts === "number" &&
-          typeof draftAttempts === "number" &&
-          draftAttempts < prevAttempts
-        ) {
-          // 규칙 3 — 조용히 고치지 않는다.
-          violations.push({
-            code: "VERIFICATION_ATTEMPTS_RESET",
-            message:
-              `노드 '${id}'의 verification.attempts가 ${prevAttempts} → ${draftAttempts}로 줄었습니다 — ` +
-              "재시도 횟수는 실행 간에 이어받아야 하며 초기화하면 §3의 재생성 상한 2회가 사실상 무한이 됩니다(AC-13 (iii)).",
-          });
+        if (stage === "draft") {
+          // 규칙 3 — draft는 판정을 못 만든다. prev의 값을 그대로 이어받는다.
+          merged.verification = prevNode.verification === undefined
+            ? { ...FRESH_VERIFICATION }
+            : prevNode.verification;
+        } else {
+          const prevAttempts = prevNode?.verification?.attempts;
+          const draftAttempts = node?.verification?.attempts;
+          if (
+            typeof prevAttempts === "number" &&
+            typeof draftAttempts === "number" &&
+            draftAttempts < prevAttempts
+          ) {
+            violations.push({
+              code: "VERIFICATION_ATTEMPTS_RESET",
+              message:
+                `노드 '${id}'의 verification.attempts가 ${prevAttempts} → ${draftAttempts}로 줄었습니다 — ` +
+                "재시도 횟수는 실행 간에 이어받아야 하며 초기화하면 §3의 재생성 상한 2회가 사실상 무한이 됩니다(AC-13 (iii)).",
+            });
+          }
         }
       }
 
-      // 규칙 4 — origin은 prev를 이어받는다.
-      mergedNodes.push({ ...node, origin: prevNode.origin });
+      mergedNodes.push(merged);
       continue;
     }
 
@@ -309,13 +379,15 @@ export function mergeArtifact(layer, prev, draft) {
           "받았습니다 — 동일 사실 항목에는 기존 id를 재사용해야 locked 편집분이 고아가 되지 않습니다(구현 7단계 (b) / AC-16).",
       });
     }
-    mergedNodes.push({ ...node, origin: "generated" });
+    const fresh = { ...node, origin: "generated" };
+    if (hasVerificationAxis && stage === "draft") fresh.verification = { ...FRESH_VERIFICATION };
+    mergedNodes.push(fresh);
   }
 
   // draft에 없던 prev 노드 — 잠긴 것만 살린다(규칙 1의 허용 방향).
   for (const node of prevNodes) {
     if (typeof node?.id !== "string" || consumedPrevIds.has(node.id)) continue;
-    if (node.locked === true) mergedNodes.push(node);
+    if (node.locked === true) mergedNodes.push({ ...node });
   }
 
   return { merged: { ...draft, nodes: mergedNodes }, violations };
