@@ -56,6 +56,12 @@ import { scanForSecrets, collectEmailFormatPaths, isSingleEmail } from "../scrip
 import { walk, listFilesByExt } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
 import {
+  EVIDENCE_BADGE,
+  TRUNCATION_NOTICE_PREFIX,
+  RENDER_REQUIRED_ELEMENTS,
+} from "../scripts/lib/render-contract.mjs";
+import { renderLayer } from "../scripts/render-markdown.mjs";
+import {
   computeRepoKeyForPath,
   getRepoToplevel,
   writeJsonAtomic,
@@ -1686,6 +1692,209 @@ function declaredFileChangeMismatches(entry, declared) {
 // INCONCLUSIVE)만 보면 조건을 통째로 넓혀도(모든 0건을 INCONCLUSIVE로)
 // 아무 단언이 깨지지 않는다. (C5-2)·(C5-3)이 그 방향을 잡는다.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 렌더 계약 오라클 — 구현 7단계 렌더 계약 / 심사 m-3 / AC-13 (ii)
+//
+// **왜 이 검사가 렌더러보다 먼저 서야 하는가.** 마크다운은 사용자 눈에 닿는
+// 유일한 표면이다. 절단 고지와 강등 배지가 여기서 빠지면 JSON이 아무리
+// 정확해도 사용자는 그것을 보지 못하고, 어떤 기계 게이트도 그 누락을 보지
+// 못한다(마크다운을 읽는 검사가 하나도 없었다). 그래서 프롬프트 계층보다
+// 먼저 이 오라클을 세운다 — "하네스를 먼저".
+//
+// **자기충족을 피한 방법.** 렌더러와 이 오라클이 **둘 다**
+// scripts/lib/render-contract.mjs의 리터럴을 import한다. 오라클이 문자열을
+// 자기 안에 다시 적으면 렌더러가 리터럴을 바꿔도 두 곳을 같이 고치면 되므로
+// 검사가 사실상 없는 것이 된다. 대신 그 리터럴이 **스키마 description과
+// 일치하는지**를 따로 단언한다 — 정본은 스키마이고 render-contract는 그것을
+// 따르는 쪽이다.
+//
+// **허용 방향도 본다.** 배지 단언을 금지 방향(강등 노드가 있는데 배지가
+// 없으면 FAIL)만 두면, 렌더러가 배지를 **항상** 붙여도 통과한다. 그러면
+// 배지가 정보를 잃는다 — (R-5)가 그 방향을 잡는다.
+// ---------------------------------------------------------------------------
+
+function runRenderContractOracleSmoke() {
+  console.log("[렌더 계약 오라클] 구현 7단계: 커버리지 3수치·절단 고지·AC-13 배지가 출력에 실재하는가");
+
+  // 최소 인스턴스 — 스키마가 required로 두는 필드만 채운다. 여기서
+  // 스키마 검증을 함께 돌려, 픽스처가 "렌더는 되지만 스키마는 어기는"
+  // 물건이 아님을 확인한다(픽스처를 세계로 착각하지 않기 위해).
+  const baseInstance = {
+    schemaVersion: "1.0.0",
+    generatedAt: "2026-08-19T00:00:00Z",
+    sourceRepoHead: "a".repeat(40),
+    contentHash: "b".repeat(64),
+    coverage: {
+      analyzed: 7,
+      total: 9,
+      traversed: 12,
+      period: { since: "2026-01-01", until: "2026-08-01" },
+      exclusions: { bots: true, vendoredPaths: true, mergeIncluded: false, selectedIdentities: ["owner@example.com"] },
+      samplingMethod: "none:full-scan",
+    },
+    truncated: { reason: "none", dropped_commits: 0 },
+    nodes: [
+      {
+        id: "car:001",
+        basis: "commit",
+        evidence: [{ ledgerId: `commit:${"c".repeat(40)}`, path: "a.txt" }],
+        verification: { status: "verified", attempts: 1, reasonCode: null },
+        origin: "generated",
+        locked: false,
+        text: "결제 모듈의 재시도 로직을 설계하고 구현했다.",
+      },
+    ],
+  };
+
+  const withRefuted = structuredClone(baseInstance);
+  withRefuted.nodes.push({
+    id: "car:002",
+    basis: "inference",
+    evidence: [{ ledgerId: `commit:${"c".repeat(40)}` }],
+    verification: { status: "refuted", attempts: 2, reasonCode: "UNSUPPORTED_CLAIM" },
+    origin: "generated",
+    locked: false,
+    text: "대규모 트래픽을 처리하는 아키텍처를 주도했다.",
+  });
+
+  // ---- (R-1) 계약 요소가 전부 출력에 실재하는가 ----
+  //      RENDER_REQUIRED_ELEMENTS는 데이터다 — 요소가 늘면 이 루프가
+  //      자동으로 그것을 검사한다(산문으로 적힌 계약은 검사가 못 읽는다).
+  {
+    const md = renderLayer("career", withRefuted);
+    for (const el of RENDER_REQUIRED_ELEMENTS) {
+      const ok = el.probe(md, withRefuted);
+      if (!ok) console.log(`    실제 출력:\n${md}`);
+      report(ok, `(R-1/${el.id}) 렌더 계약 요소가 출력에 실재: ${el.why}`);
+    }
+  }
+
+  // ---- (R-2) 커버리지 3수치가 **값까지** 옮겨졌는가 ----
+  //      라벨만 보면 렌더러가 라벨을 찍고 값을 0으로 채워도 통과한다.
+  {
+    const md = renderLayer("career", baseInstance);
+    const ok = md.includes("7건") && md.includes("9건") && md.includes("12건") && md.includes("none:full-scan");
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-2) 커버리지 3수치의 값(7/9/12)과 samplingMethod가 출력에 그대로 실린다(라벨만 찍고 넘어가지 않는다)");
+  }
+
+  // ---- (R-3) 절단이 있으면 사유와 건수를 고지하는가 ----
+  {
+    const truncatedInstance = structuredClone(baseInstance);
+    truncatedInstance.truncated = { reason: "budget_commits", dropped_commits: 42 };
+    const md = renderLayer("career", truncatedInstance);
+    const ok = md.includes(TRUNCATION_NOTICE_PREFIX) && md.includes("budget_commits") && md.includes("42");
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-3) 절단이 있으면 사유(budget_commits)와 건수(42)가 출력에 실린다");
+  }
+
+  // ---- (R-4) 강등 배지: 금지 방향 ----
+  {
+    const md = renderLayer("career", withRefuted);
+    const ok = md.includes(EVIDENCE_BADGE) && md.includes("car:002");
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-4) verification.status=refuted 노드가 있으면 '근거 부족 - 미검증' 배지가 출력에 실재한다(AC-13)");
+  }
+
+  // ---- (R-5) 강등 배지: 허용 방향 ----
+  //      전 노드가 verified면 배지가 **없어야** 한다. 이 단언이 없으면
+  //      "항상 배지를 붙이는" 렌더러가 (R-4)를 통과한다.
+  {
+    const md = renderLayer("career", baseInstance);
+    const ok = !md.includes(EVIDENCE_BADGE);
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-5) 허용 방향: 전 노드가 verified면 배지가 출력에 없다(렌더러가 스스로 강등을 만들지 않는다)");
+  }
+
+  // ---- (R-6) 배지는 basis가 아니라 verification에서만 파생한다 ----
+  //      basis:insufficient이지만 verification.status=verified인 노드에
+  //      배지가 붙으면, 렌더러가 basis를 보고 판단한 것이다(AC-13 (ii) 금지).
+  {
+    const basisOnly = structuredClone(baseInstance);
+    basisOnly.nodes = [{
+      id: "car:003",
+      basis: "insufficient",
+      evidence: [],
+      verification: { status: "verified", attempts: 1, reasonCode: null },
+      origin: "generated",
+      locked: false,
+      text: "근거 등급은 낮지만 반증 시도는 통과한 항목.",
+    }];
+    const md = renderLayer("career", basisOnly);
+    const ok = !md.includes(EVIDENCE_BADGE) && md.includes("근거 등급: 근거 부족");
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-6) 배지는 verification에서만 파생 — basis:insufficient + status:verified 노드에는 배지가 붙지 않는다");
+  }
+
+  // ---- (R-7) verification 필드 부재는 '검증됨'이 아니다(fail-closed) ----
+  {
+    const noVerification = structuredClone(baseInstance);
+    delete noVerification.nodes[0].verification;
+    const md = renderLayer("career", noVerification);
+    const ok = md.includes(EVIDENCE_BADGE);
+    if (!ok) console.log(`    실제 출력:\n${md}`);
+    report(ok, "(R-7) verification 필드가 없으면 배지가 붙는다(부재를 '검증됨'으로 읽지 않는다 — fail-closed)");
+  }
+
+  // ---- (R-8) 배지 리터럴이 세 스키마 description과 일치하는가(드리프트 가드) ----
+  //      정본은 스키마다. render-contract가 그것을 따르며, 갈리면 여기서 FAIL.
+  {
+    // 닻은 **render-contract 밖**에 있어야 한다. R-4도 배지 문자열을 보지만
+    // R-4는 EVIDENCE_BADGE를 import하므로 리터럴을 바꾸면 단언도 함께
+    // 움직인다 — 실측으로 확인했다(변이 RM6에서 R-8만 FAIL했다). 즉 이
+    // 단언이 리터럴 드리프트를 잡는 유일한 지점이다.
+    //
+    // `samplingMethod` 정본 리터럴이 4곳으로 묶여 있는 것과 같은 형태로,
+    // 세 스키마 description과 spec.md를 함께 닻으로 쓴다.
+    const anchors = [
+      ["schemas", "career.schema.json"],
+      ["schemas", "knowledge-map.schema.json"],
+      ["schemas", "gap-report.schema.json"],
+      ["docs", "harness", "devcareer-prep-plugin", "spec.md"],
+    ];
+    const missing = [];
+    for (const parts of anchors) {
+      const rel = path.join(...parts);
+      const full = path.join(REPO_ROOT, rel);
+      if (!fs.existsSync(full)) {
+        // 파일이 없으면 조용히 통과시키지 않는다 — 드리프트 가드가
+        // "대상이 사라져서 통과"하는 것이 가장 조용한 실패다
+        // (checkSamplingMethodLiteralDrift의 missing 처리와 같은 규약).
+        missing.push(`${rel}(파일 없음)`);
+        continue;
+      }
+      if (!fs.readFileSync(full, "utf8").includes(EVIDENCE_BADGE)) missing.push(rel);
+    }
+    const ok = missing.length === 0;
+    if (!ok) console.log(`    실제: 배지 리터럴 '${EVIDENCE_BADGE}'이 없는 파일 = ${JSON.stringify(missing)}`);
+    report(ok, "(R-8) 배지 리터럴이 세 스키마 description과 spec.md AC-13에 바이트 일치(드리프트 가드 4곳)");
+  }
+
+  // ---- (R-9) 픽스처가 실제로 스키마를 통과하는가 ----
+  //      "렌더는 되지만 스키마는 어기는" 픽스처로 계약을 검사하면 그 검사는
+  //      현실과 무관해진다.
+  {
+    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    // validateInstance는 오류 **문자열 배열**을 돌려준다(객체가 아니다).
+    const e1 = validateInstance(schema, baseInstance);
+    const e2 = validateInstance(schema, withRefuted);
+    const ok = e1.length === 0 && e2.length === 0;
+    if (!ok) console.log(`    실제: base=${JSON.stringify(e1)} refuted=${JSON.stringify(e2)}`);
+    report(ok, "(R-9) 렌더 계약 픽스처 2종이 career.schema.json을 실제로 통과한다(픽스처가 스키마와 어긋나지 않는다)");
+  }
+
+  // ---- (R-10) 미지원 계층은 조용히 넘어가지 않는다 ----
+  {
+    let threw = false;
+    try {
+      renderLayer("knowledge-map", baseInstance);
+    } catch {
+      threw = true;
+    }
+    report(threw, "(R-10) 미지원 계층 렌더 요청은 던진다(조용한 스킵 금지 — A-34와 같은 형태)");
+  }
+}
 
 function runCitationCoverageOracleSmoke() {
   console.log("[인용 커버리지 오라클] C-5: 인용 0건 = PASS fail-open 제거 · A-32 입력 오류 · A-34 계층 enum 드리프트");
@@ -4516,6 +4725,7 @@ function runCommonSections() {
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
   runSection("인용 커버리지 오라클(게이트 C-5·A-32·A-34)", runCitationCoverageOracleSmoke);
+  runSection("렌더 계약 오라클(구현 7단계·AC-13)", runRenderContractOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
