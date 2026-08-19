@@ -62,6 +62,13 @@ import {
 } from "../scripts/lib/render-contract.mjs";
 import { renderLayer } from "../scripts/render-markdown.mjs";
 import {
+  ARTIFACT_LAYERS,
+  checkAuthorshipContract,
+  computeArtifactContentHash,
+  mergeArtifact,
+} from "../scripts/lib/artifact-contract.mjs";
+import { projectWithReport } from "../scripts/project-ledger.mjs";
+import {
   computeRepoKeyForPath,
   getRepoToplevel,
   writeJsonAtomic,
@@ -71,6 +78,7 @@ import {
   writeState,
   readConfig,
   writeConfig,
+  projectLedgerForSkills,
 } from "../scripts/lib/store.mjs";
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
@@ -1893,6 +1901,611 @@ function runRenderContractOracleSmoke() {
       threw = true;
     }
     report(threw, "(R-10) 미지원 계층 렌더 요청은 던진다(조용한 스킵 금지 — A-34와 같은 형태)");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 구현 7단계 (a)(b)(f)(g) — 결정적 진입점 계약 오라클
+// ---------------------------------------------------------------------------
+
+/** career 계층의 최소 정상 인스턴스. R-9와 같은 이유로 스키마 통과를 함께 단언한다. */
+function makeCareerInstance(nodes) {
+  return {
+    schemaVersion: "1.0.0",
+    generatedAt: "2026-08-19T00:00:00Z",
+    sourceRepoHead: "a".repeat(40),
+    contentHash: "b".repeat(64),
+    coverage: {
+      analyzed: 7,
+      total: 9,
+      traversed: 12,
+      period: { since: "2026-01-01", until: "2026-08-01" },
+      exclusions: { bots: true, vendoredPaths: true, mergeIncluded: false, selectedIdentities: ["owner@example.com"] },
+      samplingMethod: "none:full-scan",
+    },
+    truncated: { reason: "none", dropped_commits: 0 },
+    nodes,
+  };
+}
+
+function makeCareerNode(overrides = {}) {
+  return {
+    id: "car:001",
+    basis: "commit",
+    evidence: [{ ledgerId: `commit:${"c".repeat(40)}`, path: "a.txt" }],
+    verification: { status: "not-attempted", attempts: 0, reasonCode: null },
+    origin: "generated",
+    locked: false,
+    text: "결제 모듈의 재시도 로직을 설계하고 구현했다.",
+    ...overrides,
+  };
+}
+
+function runArtifactContractOracleSmoke() {
+  console.log("[산출물 계약 오라클] 구현 7단계 (a)(b)(g): contentHash 정본·기입 주체·재생성 병합");
+
+  // ---- (AC-1) 계층 표가 KNOWN_LAYERS와 어긋나지 않는가(드리프트 가드) ----
+  //      닻은 artifact-contract.mjs **밖**이다 — verify-evidence.mjs가 export한
+  //      KNOWN_LAYERS와 schemas/state.schema.json이 정본이고, 이 모듈은 그것을
+  //      따른다. 같은 상수를 import하는 단언은 드리프트와 함께 움직여 아무것도
+  //      잡지 못한다(렌더 계약 RM6에서 실측된 형태다).
+  {
+    const mine = Object.keys(ARTIFACT_LAYERS).sort();
+    const theirs = [...KNOWN_LAYERS].sort();
+    const ok = JSON.stringify(mine) === JSON.stringify(theirs);
+    if (!ok) console.log(`    실제: artifact-contract=${JSON.stringify(mine)} verify-evidence=${JSON.stringify(theirs)}`);
+    report(ok, "(AC-1) ARTIFACT_LAYERS의 계층 키 집합이 verify-evidence.mjs의 KNOWN_LAYERS와 일치(드리프트 가드)");
+  }
+
+  // ---- (AC-2) stateKey가 state.schema.json의 artifacts 프로퍼티와 일치하는가 ----
+  {
+    const stateSchema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "state.schema.json"), "utf8"));
+    const schemaKeys = Object.keys(stateSchema.properties.artifacts.properties).filter((k) => k !== "evidence").sort();
+    const mine = Object.values(ARTIFACT_LAYERS).map((v) => v.stateKey).sort();
+    const ok = JSON.stringify(mine) === JSON.stringify(schemaKeys);
+    if (!ok) console.log(`    실제: stateKey=${JSON.stringify(mine)} schema=${JSON.stringify(schemaKeys)}`);
+    report(ok, "(AC-2) ARTIFACT_LAYERS의 stateKey 집합이 state.schema.json의 artifacts 키(evidence 제외)와 일치");
+  }
+
+  // ---- (AC-3) 해시 알고리즘의 닻이 모듈 밖에 있는가 ----
+  //      같은 evidence 객체에 대해 content-hash.mjs의 정본 함수와 바이트
+  //      동일한 값을 내야 한다. 이 단언이 없으면 새 모듈에서 해시 알고리즘·
+  //      직렬화·제외 규칙을 바꿔도 "내가 해시해 내가 대조"하는 자기충족이라
+  //      아무도 모른다.
+  {
+    const ev = {
+      schemaVersion: "1.0.0",
+      generatedAt: "2026-08-19T00:00:00Z",
+      sourceRepoHead: "d".repeat(40),
+      contentHash: "e".repeat(64),
+      coverage: { analyzed: 1, total: 1, traversed: 1 },
+      truncated: { reason: "none", dropped_commits: 0 },
+      commits: [{ id: `commit:${"f".repeat(40)}` }],
+    };
+    const a = computeArtifactContentHash("evidence", ev);
+    const b = computeEvidenceContentHash(ev);
+    const ok = a === b;
+    if (!ok) console.log(`    실제: artifact-contract=${a} content-hash=${b}`);
+    report(ok, "(AC-3) computeArtifactContentHash('evidence')가 content-hash.mjs의 정본 함수와 바이트 동일(알고리즘 닻이 모듈 밖)");
+  }
+
+  // ---- (AC-4) generatedAt은 해시 대상에서 제외되는가 ----
+  {
+    const a = makeCareerInstance([makeCareerNode()]);
+    const b = { ...a, generatedAt: "2099-01-01T00:00:00Z" };
+    const ok = computeArtifactContentHash("career", a) === computeArtifactContentHash("career", b);
+    report(ok, "(AC-4) generatedAt만 다른 두 산출물의 contentHash가 같다(같은 입력 → 같은 해시 결정성)");
+  }
+
+  // ---- (AC-5) 허용 방향: 본문이 바뀌면 해시가 바뀌는가 ----
+  //      (AC-4)만 두면 "항상 상수를 돌려주는" 해시 함수가 통과한다.
+  {
+    const a = makeCareerInstance([makeCareerNode()]);
+    const b = makeCareerInstance([makeCareerNode({ text: "다른 서술." })]);
+    const ok = computeArtifactContentHash("career", a) !== computeArtifactContentHash("career", b);
+    report(ok, "(AC-5) 허용 방향: nodes 본문이 바뀌면 contentHash가 바뀐다(상수 해시 함수 방어)");
+  }
+
+  // ---- (AC-6) 미지원 계층은 조용히 넘어가지 않는가 ----
+  {
+    let threw = false;
+    try { computeArtifactContentHash("nope", {}); } catch { threw = true; }
+    report(threw, "(AC-6) 미지원 계층의 contentHash 요청은 던진다(조용한 스킵 금지)");
+  }
+
+  // ---- (AC-7) (g) 금지 방향: draft 단계가 verification을 기입하면 위반 ----
+  {
+    const inst = makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const v = checkAuthorshipContract("career", inst, { stage: "draft" });
+    const ok = v.some((x) => x.code === "VERIFICATION_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-7) draft 단계가 verification.status='verified'를 기입하면 VERIFICATION_SET_BY_TEMPLATE(구현 7단계 (g))");
+  }
+
+  // ---- (AC-8) 허용 방향: draft 단계의 not-attempted는 통과 ----
+  //      이것이 없으면 "무조건 위반을 내는" 검사가 (AC-7)을 통과한다.
+  {
+    const v = checkAuthorshipContract("career", makeCareerInstance([makeCareerNode()]), { stage: "draft" });
+    const ok = v.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-8) 허용 방향: draft 단계의 not-attempted + origin:generated는 위반 0건");
+  }
+
+  // ---- (AC-9) 단계 구분이 실제로 작동하는가 ----
+  {
+    const inst = makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const v = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
+    const ok = v.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-9) fact-checked 단계는 verification 기입이 허용된다(단계 구분이 값을 가른다)");
+  }
+
+  // ---- (AC-10) origin 기입 주체 ----
+  {
+    const inst = makeCareerInstance([makeCareerNode({ origin: "user" })]);
+    const v = checkAuthorshipContract("career", inst, { stage: "draft" });
+    const ok = v.some((x) => x.code === "ORIGIN_SET_BY_TEMPLATE");
+    report(ok, "(AC-10) 생성 출력이 origin:'user'를 기입하면 ORIGIN_SET_BY_TEMPLATE(AC-19 언어 린트 자기면제 통로 차단)");
+  }
+
+  // ---- (AC-11) origin 규칙은 단계로 완화되지 않는가 ----
+  {
+    const inst = makeCareerInstance([makeCareerNode({ origin: "user", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const v = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
+    const ok = v.some((x) => x.code === "ORIGIN_SET_BY_TEMPLATE");
+    report(ok, "(AC-11) fact-checked 단계에서도 origin:'user' 기입은 위반이다(단계로 완화되지 않는다)");
+  }
+
+  // ---- (AC-12) verification 부재를 통과시키지 않는가(fail-closed) ----
+  {
+    const node = makeCareerNode();
+    delete node.verification;
+    const v = checkAuthorshipContract("career", makeCareerInstance([node]), { stage: "draft" });
+    const ok = v.some((x) => x.code === "VERIFICATION_MISSING");
+    report(ok, "(AC-12) verification 필드 부재는 VERIFICATION_MISSING이다(부재를 '판정 대상 아님'으로 읽지 않는다)");
+  }
+
+  // ---- (AC-13) plan 계층에는 verification 축이 없다(허용 방향) ----
+  //      plan 노드는 verificationStatus라는 **다른 축**을 갖는다. 이 구별이
+  //      없으면 slice C에서 plan을 쓸 때 존재하지 않는 필드를 요구하게 된다.
+  {
+    const node = { id: "pln:001", type: "problem", basis: "inference", evidence: [], parentRefs: ["gap:001"], origin: "generated", locked: false, title: "제목", text: "본문", verificationStatus: "unverified" };
+    const v = checkAuthorshipContract("plan", { nodes: [node] }, { stage: "draft" });
+    const ok = !v.some((x) => x.code === "VERIFICATION_MISSING" || x.code === "VERIFICATION_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-13) plan 계층에는 verification 축 검사를 적용하지 않는다(verificationStatus는 다른 축 — 통합 금지)");
+  }
+
+  // ---- (AC-14) 알 수 없는 stage는 던지는가 ----
+  {
+    let threw = false;
+    try { checkAuthorshipContract("career", makeCareerInstance([makeCareerNode()]), { stage: "whatever" }); } catch { threw = true; }
+    report(threw, "(AC-14) 알 수 없는 stage는 던진다(오타가 조용히 검사를 끄지 않는다)");
+  }
+
+  // ---- (AC-15) locked 노드는 draft에 없어도 살아남는가(AC-16) ----
+  {
+    const prev = makeCareerInstance([
+      makeCareerNode({ id: "car:001" }),
+      makeCareerNode({ id: "car:002", locked: true, text: "사용자가 손으로 고친 서술." }),
+    ]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const { merged, violations } = mergeArtifact("career", prev, draft);
+    const ok = violations.length === 0 && merged.nodes.some((n) => n.id === "car:002" && n.text === "사용자가 손으로 고친 서술.");
+    if (!ok) console.log(`    실제: ${JSON.stringify(merged.nodes.map((n) => n.id))} 위반=${JSON.stringify(violations)}`);
+    report(ok, "(AC-15) locked 노드는 draft에 없어도 병합 결과에 보존된다(AC-16 사용자 편집 보존)");
+  }
+
+  // ---- (AC-16) locked 노드는 같은 id의 draft가 덮어쓰지 못하는가 ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", locked: true, text: "사용자 원문." })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", text: "LLM이 새로 쓴 문장." })]);
+    const { merged } = mergeArtifact("career", prev, draft);
+    const ok = merged.nodes[0].text === "사용자 원문.";
+    if (!ok) console.log(`    실제: ${merged.nodes[0].text}`);
+    report(ok, "(AC-16) locked 노드는 같은 id의 draft가 덮어쓰지 못한다(prev가 이긴다)");
+  }
+
+  // ---- (AC-17) 허용 방향: locked가 아닌 prev 노드는 draft에 없으면 사라지는가 ----
+  //      이것이 없으면 "prev를 전부 보존하는" 병합이 (AC-15)를 통과하고,
+  //      재생성이 사실상 누적만 하는 동작이 된다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:009", text: "낡은 서술." })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const { merged } = mergeArtifact("career", prev, draft);
+    const ok = !merged.nodes.some((n) => n.id === "car:009");
+    if (!ok) console.log(`    실제: ${JSON.stringify(merged.nodes.map((n) => n.id))}`);
+    report(ok, "(AC-17) 허용 방향: locked=false인 prev 노드는 draft에 없으면 사라진다(전량 보존 병합 방어)");
+  }
+
+  // ---- (AC-18) 동일 text가 새 id로 오면 churn 위반인가(구현 7단계 (b)) ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:777" })]);
+    const { violations } = mergeArtifact("career", prev, draft);
+    const ok = violations.some((v) => v.code === "NODE_ID_CHURN" && v.message.includes("car:001"));
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-18) 동일 text가 새 id로 오면 NODE_ID_CHURN이고 메시지가 기존 id를 지목한다(AC-16 재실행 안정성)");
+  }
+
+  // ---- (AC-19) 허용 방향: 진짜 신규 항목의 새 id는 위반이 아닌가 ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002", text: "새로 발견한 사실." })]);
+    const { violations } = mergeArtifact("career", prev, draft);
+    const ok = violations.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-19) 허용 방향: 새 text의 새 id는 위반이 아니다(모든 신규 id를 막는 병합 방어)");
+  }
+
+  // ---- (AC-20) prev에 같은 text가 2건이면 churn 판정을 하지 않는가 ----
+  //      대응이 모호한데 위반을 만들면 근거 없는 FAIL이 된다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002" })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:777" })]);
+    const { violations } = mergeArtifact("career", prev, draft);
+    const ok = !violations.some((v) => v.code === "NODE_ID_CHURN");
+    report(ok, "(AC-20) prev에 동일 text가 2건이면 대응이 모호하므로 churn 판정에서 뺀다");
+  }
+
+  // ---- (AC-21) 재시도 상한이 초기화되면 위반인가(AC-13 (iii)) ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const { violations } = mergeArtifact("career", prev, draft);
+    const ok = violations.some((v) => v.code === "VERIFICATION_ATTEMPTS_RESET");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-21) verification.attempts가 2→0으로 줄면 VERIFICATION_ATTEMPTS_RESET(§3 재생성 상한 무력화 방어)");
+  }
+
+  // ---- (AC-22) 허용 방향: 유지·증가는 위반이 아닌가 ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const { violations } = mergeArtifact("career", prev, draft);
+    const ok = violations.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-22) 허용 방향: attempts 1→2 증가는 위반이 아니다(모든 변화를 막는 검사 방어)");
+  }
+
+  // ---- (AC-23) origin은 prev를 이어받는가(구현 7단계 (g) 병합 몫) ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", origin: "user" })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const { merged } = mergeArtifact("career", prev, draft);
+    const ok = merged.nodes[0].origin === "user";
+    if (!ok) console.log(`    실제: origin=${merged.nodes[0].origin}`);
+    report(ok, "(AC-23) 기존 노드의 origin은 prev를 이어받는다(사용자 수동 추가분이 재생성으로 generated가 되지 않는다)");
+  }
+
+  // ---- (AC-24) 신규 노드의 origin은 generated인가 ----
+  {
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" })]);
+    const { merged } = mergeArtifact("career", null, draft);
+    const ok = merged.nodes[0].origin === "generated";
+    report(ok, "(AC-24) 신규 노드의 origin은 병합이 'generated'로 정한다(템플릿 값이 정본이 아니다)");
+  }
+
+  // ---- (AC-25) 산출물 안의 id 중복은 잡히는가 ----
+  {
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:001", text: "다른 서술." })]);
+    const { violations } = mergeArtifact("career", null, draft);
+    const ok = violations.some((v) => v.code === "NODE_ID_DUPLICATE");
+    report(ok, "(AC-25) 산출물 안에 같은 id가 2건이면 NODE_ID_DUPLICATE(병합 키가 성립하지 않는다)");
+  }
+
+  // ---- (AC-26) 최초 실행(prev 없음)은 위반 0건인가 ----
+  {
+    const draft = makeCareerInstance([makeCareerNode()]);
+    const { merged, violations } = mergeArtifact("career", null, draft);
+    const ok = violations.length === 0 && merged.nodes.length === 1;
+    report(ok, "(AC-26) prev가 없는 최초 실행은 위반 0건이고 draft 노드가 그대로 남는다");
+  }
+
+  // ---- (AC-27) 병합 픽스처가 실제로 스키마를 통과하는가 ----
+  //      R-9와 같은 이유다 — 픽스처가 스키마를 어기면 위 26개 단언은 전부
+  //      녹색인 채로 현실의 어떤 산출물과도 대응하지 않는 검사가 된다.
+  {
+    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    const inst = makeCareerInstance([
+      makeCareerNode({ id: "car:001" }),
+      makeCareerNode({ id: "car:002", locked: true, verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
+    ]);
+    const errs = validateInstance(schema, inst);
+    const ok = errs.length === 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
+    report(ok, "(AC-27) 병합 오라클 픽스처가 career.schema.json을 실제로 통과한다(픽스처를 세계로 착각하지 않는다)");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 원장 투영 진입점 — 구현 7단계 (f) / 게이트 E-3
+// ---------------------------------------------------------------------------
+
+function runLedgerProjectionOracleSmoke() {
+  console.log("[원장 투영 오라클] 구현 7단계 (f)·게이트 E-3: projectLedgerForSkills의 소비 지점");
+
+  const ledger = {
+    schemaVersion: "1.0.0",
+    generatedAt: "2026-08-19T00:00:00Z",
+    sourceRepoHead: "a".repeat(40),
+    contentHash: "b".repeat(64),
+    coverage: { analyzed: 2, total: 2, traversed: 3 },
+    truncated: { reason: "none", dropped_commits: 0 },
+    commits: [
+      { id: `commit:${"1".repeat(40)}`, excluded: false, authorEmail: "owner@example.com" },
+      { id: `commit:${"2".repeat(40)}`, excluded: true, exclusionReason: "other-author", authorEmail: null },
+      { id: `commit:${"3".repeat(40)}`, authorEmail: "owner@example.com" },
+    ],
+  };
+
+  // ---- (LP-1) 소스 스캔: 투영 함수의 소비 지점이 store.mjs 밖에 실재하는가 ----
+  //      게이트 E-3의 본체다. 함수만 있고 호출자가 0곳이면 §6의 보조 방어가
+  //      선언으로만 남는다(심사 M-1이 지적한 형태). 닻은 store.mjs 밖에 둔다.
+  {
+    const callers = [];
+    const scan = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { scan(full); continue; }
+        if (!entry.name.endsWith(".mjs")) continue;
+        const rel = path.relative(REPO_ROOT, full).split(path.sep).join("/");
+        if (rel === "scripts/lib/store.mjs") continue;
+        // **문자열 존재가 아니라 호출 지점을 요구한다.** 변이 M17(투영 함수를
+        // 쓰지 않고 필터를 손으로 복제하되 import는 남긴다)이 이름만 보는
+        // 스캔을 통과했다 — 실측된 구멍이다. `projectLedgerForSkills(`까지
+        // 요구하면 그 형태가 잡힌다(정의부를 가진 store.mjs는 위에서 제외한다).
+        if (fs.readFileSync(full, "utf8").includes("projectLedgerForSkills(")) callers.push(rel);
+      }
+    };
+    scan(path.join(REPO_ROOT, "scripts"));
+    const ok = callers.length >= 1;
+    if (!ok) console.log("    실제: scripts/ 안에 projectLedgerForSkills 소비 지점이 0곳이다(죽은 코드).");
+    else console.log(`    소비 지점: ${JSON.stringify(callers)}`);
+    report(ok, "(LP-1) projectLedgerForSkills의 **호출 지점**이 store.mjs 밖 scripts/에 1곳 이상 실재한다(게이트 E-3)");
+  }
+
+  // ---- (LP-2) 금지 방향: 제외 커밋이 투영에 남지 않는가 ----
+  {
+    // **누출 여부만 본다.** 초판은 여기서 건수(total/excluded)까지 함께
+    // 단언했는데, 그러면 "전량 통과" 변이(M18)와 "전량 버림" 변이(M19)가
+    // **둘 다** 이 단언과 (LP-3)을 동시에 깨서 방향 분리가 성립하지 않았다
+    // — 실측이다. 건수 보고는 (LP-4)의 CLI 경로가 본다.
+    const { projected } = projectWithReport(ledger);
+    const leaked = projected.commits.filter((c) => c.excluded === true);
+    if (leaked.length > 0) console.log(`    실제: 누출 ${leaked.length}건`);
+    report(leaked.length === 0, "(LP-2) 금지 방향: 투영 결과에 excluded:true 커밋이 0건이다(§6 프라이버시 경계)");
+  }
+
+  // ---- (LP-3) 허용 방향: 제외가 아닌 커밋은 전부 남는가 ----
+  //      이것이 없으면 "빈 배열을 돌려주는" 투영이 (LP-2)를 통과한다.
+  {
+    const { projected } = projectWithReport(ledger);
+    // **잔존 여부만 본다**(개수는 세지 않는다) — 위와 같은 이유로 방향을
+    // 섞지 않는다. 개수까지 보면 "전량 통과" 변이도 여기서 FAIL해 두 단언이
+    // 같은 것을 말하게 된다.
+    const ids = projected.commits.map((c) => c.id);
+    const ok = ids.includes(`commit:${"1".repeat(40)}`) && ids.includes(`commit:${"3".repeat(40)}`);
+    if (!ok) console.log(`    실제: ${JSON.stringify(ids)}`);
+    report(ok, "(LP-3) 허용 방향: excluded !== true인 커밋은 전부 남는다(전량 필터 방어 — excluded 필드 부재 포함)");
+  }
+
+  // ---- (LP-6) 투영 결과가 store.mjs의 정본 함수와 갈리지 않는가 ----
+  //      **(LP-1)의 한계를 여기서 좁힌다.** 소스 스캔은 "그 이름이 파일에
+  //      등장하는가"만 본다 — import를 남겨 둔 채 필터를 손으로 다시 짜면
+  //      (LP-1)은 그대로 녹색이다(변이로 실측했다). 이 단언은 그 형태를
+  //      **결과 대조**로 잡는다. 다만 "호출했는가" 자체는 계측 없이는 관측할
+  //      수 없으므로, 두 단언을 합쳐도 남는 구멍이 있다는 것을 감추지 않는다:
+  //      정본 함수와 **바이트 동일한 로직**을 손으로 복제하면 둘 다 통과한다.
+  {
+    const viaEntry = projectWithReport(ledger).projected;
+    const viaStore = projectLedgerForSkills(ledger);
+    const ok = JSON.stringify(viaEntry) === JSON.stringify(viaStore);
+    if (!ok) console.log(`    실제: entry=${JSON.stringify(viaEntry.commits?.length)} store=${JSON.stringify(viaStore.commits?.length)}`);
+    report(ok, "(LP-6) 투영 진입점의 결과가 store.mjs의 projectLedgerForSkills 결과와 동일하다(사본 드리프트 방어)");
+  }
+
+  // ---- (LP-4) CLI가 실제로 도는가 ----
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-ledger-"));
+    try {
+      const inPath = path.join(tmp, "evidence.json");
+      fs.writeFileSync(inPath, JSON.stringify(ledger), "utf8");
+      const r = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--in", inPath], { encoding: "utf8" });
+      const out = JSON.parse(r.stdout);
+      const ok = r.status === 0 && out.commits.length === 2 && r.stderr.includes("제외 1건");
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(LP-4) CLI가 exit 0으로 투영을 stdout에 내고 제외 건수를 stderr로 보고한다");
+
+      const bad = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--in", path.join(tmp, "nope.json")], { encoding: "utf8" });
+      const ok2 = bad.status === 2 && bad.stderr.includes("[INPUT_ERROR]");
+      if (!ok2) console.log(`    실제: status=${bad.status} stderr=${bad.stderr}`);
+      report(ok2, "(LP-5) 입력 파일 부재는 [INPUT_ERROR] + exit 2다(A-32 규약과 같은 계열)");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 쓰기 경계 — 구현 7단계 (a) / AC-16 / AC-22
+// ---------------------------------------------------------------------------
+
+function runWriteArtifactOracleSmoke() {
+  console.log("[쓰기 경계 오라클] 구현 7단계 (a)·AC-16·AC-22: 자기 검증·편집 감지·레지스트리");
+
+  const WRITER = path.join(REPO_ROOT, "scripts", "write-artifact.mjs");
+  const FIXED_AT = "2026-08-19T12:00:00Z";
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-writer-"));
+
+  // 쓰기를 못 하게 만드는 변이에서는 후속 단언이 읽을 파일이 아예 없다.
+  // 그때 예외를 던지면 **섹션 전체가 중단되어 어떤 단언이 대응하는지 읽을 수
+  // 없다** — 변이 M5·M13에서 실측했다. 부재를 각 단언의 FAIL로 떨어뜨린다.
+  const readJsonOrNull = (p) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null);
+  const readTextOrNull = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null);
+
+  const runWriter = (root, draftObj, extra = []) => {
+    const draftPath = path.join(tmp, `draft-${crypto.randomBytes(6).toString("hex")}.json`);
+    fs.writeFileSync(draftPath, JSON.stringify(draftObj), "utf8");
+    return spawnSync(
+      process.execPath,
+      [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", "fact-checked",
+       "--skill", "career-from-git", "--generated-at", FIXED_AT, ...extra],
+      { encoding: "utf8" }
+    );
+  };
+  const freshRoot = (tag) => {
+    const r = path.join(tmp, tag);
+    fs.mkdirSync(r, { recursive: true });
+    return r;
+  };
+
+  try {
+    // ---- (WA-1) 정상 경로 ----
+    const root1 = freshRoot("ok");
+    const base = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    {
+      const r = runWriter(root1, base);
+      const filePath = path.join(root1, "career.json");
+      const written = readJsonOrNull(filePath);
+      const ok = r.status === 0 && written !== null;
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-1) 정상 출력은 exit 0으로 career.json이 저장 루트에 기록된다");
+
+      const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+      const errs = written === null ? ["(파일이 기록되지 않았다)"] : validateInstance(schema, written);
+      if (errs.length > 0) console.log(`    실제: ${JSON.stringify(errs)}`);
+      report(errs.length === 0, "(WA-2) 기록된 산출물이 career.schema.json을 통과한다");
+
+      const ok3 = written !== null && written.contentHash === computeArtifactContentHash("career", written) && written.generatedAt === FIXED_AT;
+      if (!ok3 && written !== null) console.log(`    실제: 기록 ${written.contentHash} 재계산 ${computeArtifactContentHash("career", written)}`);
+      report(ok3, "(WA-3) 기록된 contentHash가 본문 재계산값과 일치하고 generatedAt이 쓰기 시점 값이다(AC-16)");
+
+      // ---- 레지스트리(AC-22) ----
+      // 레지스트리 갱신이 실패하면(exit 4) state.json이 아예 없다 — 여기서도
+      // 부재를 예외가 아니라 FAIL로 떨어뜨린다.
+      const state = readJsonOrNull(path.join(root1, "state.json"));
+      const entry = state?.artifacts?.career ?? null;
+      const ok4 = entry !== null && written !== null && entry.path === "career.json" &&
+        entry.schemaVersion === written.schemaVersion && entry.generatedBySkill === "career-from-git";
+      if (!ok4) console.log(`    실제: ${JSON.stringify(entry)}`);
+      report(ok4, "(WA-4) state.json 레지스트리에 경로·schemaVersion·생성 스킬이 기재된다(AC-22 쓰기 주체)");
+
+      const ok5 = entry !== null && !("sourceRepoHead" in entry) && !("contentHash" in entry);
+      report(ok5, "(WA-5) 레지스트리에 sourceRepoHead·contentHash를 두지 않는다(진실 원천은 산출물 파일 하나 — AC-22)");
+
+      const ok6 = typeof entry?.path === "string" && !path.isAbsolute(entry.path) && !entry.path.includes("\\");
+      if (!ok6) console.log(`    실제 path=${entry?.path}`);
+      report(ok6, "(WA-6) 레지스트리 경로가 저장 루트 기준 상대 POSIX 경로다(AC-15 — 로컬 절대경로·백슬래시 유입 방어)");
+    }
+
+    // ---- (WA-7) (a) 본체: 스키마 위반이면 쓰지 않는다 ----
+    {
+      const root = freshRoot("schema-violation");
+      const bad = makeCareerInstance([makeCareerNode({ id: "car:001", evidence: [], basis: "inference", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+      const r = runWriter(root, bad);
+      const ok = r.status === 1 && !fs.existsSync(path.join(root, "career.json")) && r.stderr.includes("[SCHEMA]");
+      if (!ok) console.log(`    실제: status=${r.status} exists=${fs.existsSync(path.join(root, "career.json"))} stderr=${r.stderr}`);
+      report(ok, "(WA-7) 스키마 위반 출력은 exit 1이고 **파일이 생기지 않는다**(구현 7단계 (a) — 쓰기 직전 자기 검증)");
+    }
+
+    // ---- (WA-8) (g) 기입 주체 위반이면 쓰지 않는다 ----
+    {
+      const root = freshRoot("authorship-violation");
+      const draftPath = path.join(tmp, "draft-stage.json");
+      fs.writeFileSync(draftPath, JSON.stringify(makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })])), "utf8");
+      const r = spawnSync(process.execPath, [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", "draft", "--skill", "career-from-git", "--generated-at", FIXED_AT], { encoding: "utf8" });
+      const ok = r.status === 1 && !fs.existsSync(path.join(root, "career.json")) && r.stderr.includes("VERIFICATION_SET_BY_TEMPLATE");
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-8) draft 단계가 verification을 기입하면 exit 1이고 파일이 생기지 않는다(구현 7단계 (g))");
+    }
+
+    // ---- (WA-9~11) 사용자 편집 감지 → 보류 → 강행 + .bak (AC-16) ----
+    {
+      const root = freshRoot("edit-detect");
+      runWriter(root, makeCareerInstance([
+        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeCareerNode({ id: "car:002", text: "두 번째 서술.", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+      ]));
+      const filePath = path.join(root, "career.json");
+      const seeded = readJsonOrNull(filePath);
+
+      if (seeded === null) {
+        const why = "사전 조건 실패 — 최초 쓰기가 기록되지 않아 편집 감지를 관측할 수 없다";
+        report(false, `(WA-9) ${why}`);
+        report(false, `(WA-10) ${why}`);
+        report(false, `(WA-11) ${why}`);
+      } else {
+        // 사용자가 손으로 편집: car:002를 고치고 locked로 잠근다(해시는 갱신하지 않는다).
+        seeded.nodes[1].text = "사용자가 직접 고쳐 쓴 문장.";
+        seeded.nodes[1].locked = true;
+        fs.writeFileSync(filePath, JSON.stringify(seeded, null, 2), "utf8");
+        const editedRaw = fs.readFileSync(filePath, "utf8");
+
+        // 재생성: car:002가 빠진 출력.
+        const v2 = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+
+        const held = runWriter(root, v2);
+        const ok = held.status === 3 && held.stderr.includes("PREV_ARTIFACT_EDITED") && readTextOrNull(filePath) === editedRaw;
+        if (!ok) console.log(`    실제: status=${held.status} stderr=${held.stderr}`);
+        report(ok, "(WA-9) 사용자 편집(contentHash 불일치)이 감지되면 exit 3으로 보류하고 기존 파일을 건드리지 않는다(AC-16 확인 게이트)");
+
+        const forced = runWriter(root, v2, ["--force"]);
+        const bakPath = `${filePath}.bak`;
+        const ok2 = forced.status === 0 && readTextOrNull(bakPath) === editedRaw && !fs.existsSync(`${bakPath}.bak`);
+        if (!ok2) console.log(`    실제: status=${forced.status} bak=${fs.existsSync(bakPath)} stderr=${forced.stderr}`);
+        report(ok2, "(WA-10) --force 강행은 덮어쓰기 직전 .bak 1세대를 남긴다(2세대는 두지 않는다 — AC-16)");
+
+        const after = readJsonOrNull(filePath);
+        const survivor = after?.nodes?.find((n) => n.id === "car:002");
+        const ok3 = survivor !== undefined && survivor.text === "사용자가 직접 고쳐 쓴 문장." && survivor.locked === true;
+        if (!ok3) console.log(`    실제: ${JSON.stringify(after?.nodes?.map((n) => n.id))}`);
+        report(ok3, "(WA-11) 강행 후에도 locked 노드는 draft에서 빠졌음에도 사용자 편집 원문 그대로 보존된다(AC-16 엔드투엔드)");
+      }
+    }
+
+    // ---- (WA-12) 병합 계약 위반이면 쓰지 않는다 ----
+    {
+      const root = freshRoot("churn");
+      runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const filePath = path.join(root, "career.json");
+      const before = readTextOrNull(filePath);
+      const churned = makeCareerInstance([makeCareerNode({ id: "car:999", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+      const r = runWriter(root, churned);
+      const ok = before !== null && r.status === 1 && r.stderr.includes("NODE_ID_CHURN") && readTextOrNull(filePath) === before;
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-12) 병합 계약 위반(NODE_ID_CHURN)은 exit 1이고 기존 파일을 덮어쓰지 않는다");
+    }
+
+    // ---- (WA-13) 입력 오류는 exit 2 ----
+    {
+      const root = freshRoot("input-error");
+      const r = spawnSync(process.execPath, [WRITER, "--layer", "career", "--draft", path.join(tmp, "nope.json"), "--root", root, "--stage", "draft", "--skill", "x"], { encoding: "utf8" });
+      const ok = r.status === 2 && r.stderr.includes("[INPUT_ERROR]");
+      report(ok, "(WA-13) 입력 파일 부재는 [INPUT_ERROR] + exit 2다(계약 위반 exit 1과 구별된다)");
+    }
+
+    // ---- (WA-14) 쓰기 경계와 렌더 계약이 실제로 접합되는가 ----
+    //      이 단언이 없으면 "쓰기는 되지만 사용자 표면에는 아무것도 안 나오는"
+    //      상태를 아무도 보지 못한다. 렌더 계약(E-1)은 픽스처 위에서만 돌고
+    //      있었고, 여기가 처음으로 **writer가 실제로 쓴 파일**을 렌더한다.
+    {
+      const root = freshRoot("render-join");
+      runWriter(root, makeCareerInstance([
+        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeCareerNode({ id: "car:002", text: "반증당한 서술.", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
+      ]));
+      const written = readJsonOrNull(path.join(root, "career.json"));
+      const md = written === null ? "" : renderLayer("career", written);
+      const missing = written === null
+        ? ["(파일이 기록되지 않았다)"]
+        : RENDER_REQUIRED_ELEMENTS.filter((el) => !el.probe(md, written)).map((el) => el.id);
+      const ok = missing.length === 0 && md.includes(EVIDENCE_BADGE);
+      if (!ok) console.log(`    실제: 빠진 요소=${JSON.stringify(missing)}`);
+      report(ok, "(WA-14) writer가 실제로 기록한 career.json이 렌더 계약 요소를 전부 만족한다(쓰기↔렌더 접합)");
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -4726,6 +5339,9 @@ function runCommonSections() {
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
   runSection("인용 커버리지 오라클(게이트 C-5·A-32·A-34)", runCitationCoverageOracleSmoke);
   runSection("렌더 계약 오라클(구현 7단계·AC-13)", runRenderContractOracleSmoke);
+  runSection("산출물 계약 오라클(구현 7단계 (a)(b)(g))", runArtifactContractOracleSmoke);
+  runSection("원장 투영 오라클(구현 7단계 (f)·게이트 E-3)", runLedgerProjectionOracleSmoke);
+  runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
