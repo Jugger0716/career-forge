@@ -1942,11 +1942,39 @@ function makeCareerNode(overrides = {}) {
 }
 
 /**
- * draft 단계 노드 — `verification`을 담지 않는다(콜드 리뷰 M-1 이후의 계약).
- * 값은 병합이 채우므로 생성 템플릿 출력에는 그 필드가 없는 것이 정상이다.
+ * **fact-checked 단계 출력** 노드 — `verification`은 담고 `locked`는 담지
+ * 않는다(게이트 B-7).
+ *
+ * `makeCareerNode`와 갈라 두는 이유: 저 함수는 **저장된 노드**(스키마 완전 —
+ * prev·병합 결과·스키마 픽스처)를 뜻하고, 이 함수는 **생성 주체가 내놓는
+ * 출력**을 뜻한다. 초판은 둘을 한 함수로 겸했는데, 그 겸용이 「생성 출력이
+ * locked를 담아도 되는가」라는 질문을 테스트가 한 번도 묻지 않게 만들었다 —
+ * M-1이 숨어 있던 것과 같은 형태의 개념 뭉개기다.
+ */
+function makeFactCheckedNode(overrides = {}) {
+  // **overrides로 locked를 넘기면 던진다.** 조용히 지우면 픽스처 작성자가
+  // `locked: true`를 적어 놓고 그것이 반영됐다고 믿는다 — 이 회차에 실제로
+  // WA-16에서 그 형태가 났다(잠긴 prev 노드를 심으려던 코드가 아무것도 심지
+  // 못한 채 녹색으로 남았다). 잠금을 심으려면 산출물 파일을 직접 편집해야
+  // 한다. 그것이 게이트 B-7 이후 남은 유일한 잠금 경로이기 때문이다.
+  if ("locked" in overrides) {
+    throw new Error(
+      "생성 출력 픽스처에는 locked를 실을 수 없습니다(게이트 B-7) — 잠긴 prev를 만들려면 " +
+      "산출물 파일을 직접 편집하십시오(사용자 편집 경로)."
+    );
+  }
+  const n = makeCareerNode(overrides);
+  delete n.locked;
+  return n;
+}
+
+/**
+ * draft 단계 노드 — `verification`도 `locked`도 담지 않는다(콜드 리뷰 M-1 /
+ * 게이트 B-7). 두 값 모두 병합이 채우므로 생성 템플릿 출력에는 그 필드가
+ * 없는 것이 정상이다.
  */
 function makeDraftNode(overrides = {}) {
-  const n = makeCareerNode(overrides);
+  const n = makeFactCheckedNode(overrides);
   delete n.verification;
   return n;
 }
@@ -2025,7 +2053,7 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-7) (g) 금지 방향: draft 단계가 verification을 기입하면 위반 ----
   {
-    const inst = makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const inst = makeCareerInstance([makeFactCheckedNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
     const v = checkAuthorshipContract("career", inst, { stage: "draft" });
     const ok = v.some((x) => x.code === "VERIFICATION_SET_BY_TEMPLATE");
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
@@ -2053,7 +2081,7 @@ function runArtifactContractOracleSmoke() {
   //      값이 아니라 필드의 존재가 판정 기준임을 고정한다. 이 단언이 없으면
   //      "verified만 막는" 초판 조건으로 되돌아가도 아무것도 깨지지 않는다.
   {
-    const v = checkAuthorshipContract("career", makeCareerInstance([makeCareerNode()]), { stage: "draft" });
+    const v = checkAuthorshipContract("career", makeCareerInstance([makeFactCheckedNode()]), { stage: "draft" });
     const ok = v.some((x) => x.code === "VERIFICATION_SET_BY_TEMPLATE");
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
     report(ok, "(AC-8b) draft가 not-attempted를 담아도 VERIFICATION_SET_BY_TEMPLATE(값이 아니라 필드 존재가 기준)");
@@ -2061,7 +2089,7 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-9) 단계 구분이 실제로 작동하는가 ----
   {
-    const inst = makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const inst = makeCareerInstance([makeFactCheckedNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })]);
     const v = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
     const ok = v.length === 0;
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
@@ -2070,7 +2098,7 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-10) origin 기입 주체 ----
   {
-    const inst = makeCareerInstance([makeCareerNode({ origin: "user" })]);
+    const inst = makeCareerInstance([makeDraftNode({ origin: "user" })]);
     const v = checkAuthorshipContract("career", inst, { stage: "draft" });
     const ok = v.some((x) => x.code === "ORIGIN_SET_BY_TEMPLATE");
     report(ok, "(AC-10) 생성 출력이 origin:'user'를 기입하면 ORIGIN_SET_BY_TEMPLATE(AC-19 언어 린트 자기면제 통로 차단)");
@@ -2078,7 +2106,7 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-11) origin 규칙은 단계로 완화되지 않는가 ----
   {
-    const inst = makeCareerInstance([makeCareerNode({ origin: "user", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const inst = makeCareerInstance([makeFactCheckedNode({ origin: "user", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
     const v = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
     const ok = v.some((x) => x.code === "ORIGIN_SET_BY_TEMPLATE");
     report(ok, "(AC-11) fact-checked 단계에서도 origin:'user' 기입은 위반이다(단계로 완화되지 않는다)");
@@ -2086,7 +2114,7 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-12) verification 부재를 통과시키지 않는가(fail-closed) ----
   {
-    const node = makeCareerNode();
+    const node = makeFactCheckedNode();
     delete node.verification;
     const v = checkAuthorshipContract("career", makeCareerInstance([node]), { stage: "fact-checked" });
     const ok = v.some((x) => x.code === "VERIFICATION_MISSING");
@@ -2097,7 +2125,7 @@ function runArtifactContractOracleSmoke() {
   //      plan 노드는 verificationStatus라는 **다른 축**을 갖는다. 이 구별이
   //      없으면 slice C에서 plan을 쓸 때 존재하지 않는 필드를 요구하게 된다.
   {
-    const node = { id: "pln:001", type: "problem", basis: "inference", evidence: [], parentRefs: ["gap:001"], origin: "generated", locked: false, title: "제목", text: "본문", verificationStatus: "unverified" };
+    const node = { id: "pln:001", type: "problem", basis: "inference", evidence: [], parentRefs: ["gap:001"], origin: "generated", title: "제목", text: "본문", verificationStatus: "unverified" };
     const v = checkAuthorshipContract("plan", { nodes: [node] }, { stage: "draft" });
     const ok = !v.some((x) => x.code === "VERIFICATION_MISSING" || x.code === "VERIFICATION_SET_BY_TEMPLATE");
     if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
@@ -2315,6 +2343,115 @@ function runArtifactContractOracleSmoke() {
     try { mergeArtifact("career", null, makeCareerInstance([makeCareerNode()])); } catch { threw = true; }
     report(threw, "(AC-33) mergeArtifact는 stage 없이 부르면 던진다(기본값으로 조용히 한쪽 의미가 되지 않는다)");
   }
+
+  // ---- (AC-34) 금지 방향: draft가 locked를 담으면 위반인가(게이트 B-7) ----
+  //      생성 템플릿이 자기 노드를 잠그면 그 노드는 이후 재생성에서 영원히
+  //      보존되어 2단 팩트체크의 사정권 밖으로 나간다 — (g)가 닫으려는
+  //      자기면제와 같은 구조다.
+  {
+    const inst = makeCareerInstance([{ ...makeDraftNode(), locked: true }]);
+    const v = checkAuthorshipContract("career", inst, { stage: "draft" });
+    const ok = v.some((x) => x.code === "LOCKED_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-34) draft가 locked를 담으면 LOCKED_SET_BY_TEMPLATE다(게이트 B-7)");
+  }
+
+  // ---- (AC-35) 값이 아니라 필드의 존재가 기준인가 ----
+  //      `locked: false`만 허용하는 판으로 되돌아가도 (AC-34)는 그대로
+  //      녹색이다 — M-1에서 배운 형태다. 이 단언이 그 회귀를 잡는다.
+  {
+    const inst = makeCareerInstance([{ ...makeDraftNode(), locked: false }]);
+    const v = checkAuthorshipContract("career", inst, { stage: "draft" });
+    const ok = v.some((x) => x.code === "LOCKED_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-35) locked:false를 담아도 LOCKED_SET_BY_TEMPLATE다(값이 아니라 필드 존재가 기준 — 게이트 B-7)");
+  }
+
+  // ---- (AC-36) 단계로 완화되지 않는가 ----
+  //      fact-checked 출력을 조립하는 주체도 같은 오케스트레이션이다.
+  //      한쪽 단계만 막으면 다른 쪽으로 새는 같은 구멍이 남는다(origin과 동형).
+  {
+    const inst = makeCareerInstance([{ ...makeFactCheckedNode(), locked: true }]);
+    const v = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
+    const ok = v.some((x) => x.code === "LOCKED_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-36) fact-checked 단계에서도 locked 기입은 위반이다(단계로 완화되지 않는다 — 게이트 B-7)");
+  }
+
+  // ---- (AC-37) 계층 중립인가 — verification 축이 없는 plan에도 걸리는가 ----
+  //      locked 보존은 모든 계층의 병합 규칙 1이므로 자기면제 통로도 모든
+  //      계층에 있다. verification 축 안쪽에 두면 plan만 뚫린다.
+  {
+    const node = { id: "pln:001", type: "problem", basis: "inference", evidence: [], parentRefs: ["gap:001"], origin: "generated", locked: true, title: "제목", text: "본문", verificationStatus: "unverified" };
+    const v = checkAuthorshipContract("plan", { nodes: [node] }, { stage: "draft" });
+    const ok = v.some((x) => x.code === "LOCKED_SET_BY_TEMPLATE");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(v)}`);
+    report(ok, "(AC-37) verification 축이 없는 plan 계층에서도 locked 기입은 위반이다(계층 중립 — 게이트 B-7)");
+  }
+
+  // ---- (AC-38) 허용 방향: locked를 담지 않으면 위반 0건인가 ----
+  //      이것이 없으면 "무조건 LOCKED 위반을 내는" 검사가 위 넷을 통과하고
+  //      정상 draft가 영원히 쓰이지 못한다.
+  {
+    const vd = checkAuthorshipContract("career", makeCareerInstance([makeDraftNode()]), { stage: "draft" });
+    const vf = checkAuthorshipContract("career", makeCareerInstance([makeFactCheckedNode()]), { stage: "fact-checked" });
+    const ok = vd.length === 0 && vf.length === 0;
+    if (!ok) console.log(`    실제 위반: draft=${JSON.stringify(vd)} fact-checked=${JSON.stringify(vf)}`);
+    report(ok, "(AC-38) 허용 방향: locked를 담지 않은 출력은 두 단계 모두 위반 0건이다(게이트 B-7)");
+  }
+
+  // ---- (AC-39) 병합이 기존 노드의 locked를 prev에서 이어받는가 ----
+  //      스키마가 locked를 required로 두므로 **누군가는 채워야** 한다. 기입
+  //      주체가 생성 출력이 아니라면 남는 것은 병합뿐이다(verification과 동형).
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", locked: true, text: "사용자 원문." })]);
+    // 잠긴 노드는 규칙 1이 prev를 통째로 이기므로, 이어받기는 **비잠금** 노드로 본다.
+    const prevUnlocked = makeCareerInstance([makeCareerNode({ id: "car:001", locked: false })]);
+    const draft = makeCareerInstance([makeFactCheckedNode({ id: "car:001" })]);
+    const a = mergeArtifact("career", prevUnlocked, draft, { stage: "fact-checked" }).merged;
+    const b = mergeArtifact("career", prev, makeCareerInstance([makeFactCheckedNode({ id: "car:001", text: "사용자 원문." })]), { stage: "fact-checked" }).merged;
+    const ok = a.nodes[0].locked === false && b.nodes[0].locked === true;
+    if (!ok) console.log(`    실제: 비잠금=${a.nodes[0].locked} 잠금=${b.nodes[0].locked}`);
+    report(ok, "(AC-39) 병합은 기존 노드의 locked를 prev에서 이어받는다(스키마 required를 병합이 채운다 — 게이트 B-7)");
+  }
+
+  // ---- (AC-40) 신규 노드는 locked:false를 받는가 ----
+  {
+    const { merged } = mergeArtifact("career", null, makeCareerInstance([makeFactCheckedNode({ id: "car:001" })]), { stage: "fact-checked" });
+    const ok = merged.nodes[0].locked === false;
+    if (!ok) console.log(`    실제: locked=${JSON.stringify(merged.nodes[0].locked)}`);
+    report(ok, "(AC-40) 병합의 신규 노드는 locked:false를 받는다(갓 생성된 노드가 잠긴 상태일 수 없다)");
+  }
+
+  // ---- (AC-41) 병합도 draft의 locked를 덮어쓰는가(두 가드 독립) ----
+  //      기입 주체 검사만 막으면 `mergeArtifact`를 직접 부르는 호출자에게는
+  //      구멍이 남는다 — N5·N6에서 실측된 형태다. 여기서는 검사를 우회해
+  //      병합만 부른다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", locked: false })]);
+    const sneaky = makeCareerInstance([{ ...makeFactCheckedNode({ id: "car:001" }), locked: true }]);
+    const { merged } = mergeArtifact("career", prev, sneaky, { stage: "fact-checked" });
+    const okExisting = merged.nodes[0].locked === false;
+    const fresh = mergeArtifact("career", null, makeCareerInstance([{ ...makeFactCheckedNode({ id: "car:002" }), locked: true }]), { stage: "fact-checked" }).merged;
+    const okFresh = fresh.nodes[0].locked === false;
+    const ok = okExisting && okFresh;
+    if (!ok) console.log(`    실제: 기존=${merged.nodes[0].locked} 신규=${fresh.nodes[0].locked}`);
+    report(ok, "(AC-41) 병합은 draft가 실은 locked:true를 prev 값/false로 덮어쓴다(기입 주체 검사와 독립인 두 번째 가드)");
+  }
+
+  // ---- (AC-42) B-7 병합 결과가 실제로 스키마를 통과하는가 ----
+  //      locked를 병합이 채우게 바꿨으니 **required를 정말 만족하는지**를
+  //      함께 물어야 한다. 안 물으면 통과하지만 현실의 어떤 산출물과도
+  //      대응하지 않는 검사가 된다(R-9에서 실측된 형태다).
+  {
+    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    const { merged } = mergeArtifact("career", null, makeCareerInstance([makeDraftNode({ id: "car:001" })]), { stage: "draft" });
+    merged.contentHash = computeArtifactContentHash("career", merged);
+    const errs = validateInstance(schema, merged);
+    const ok = errs.length === 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
+    report(ok, "(AC-42) locked·verification을 담지 않은 draft의 병합 결과가 career.schema.json을 통과한다(병합이 required를 실제로 채운다)");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2462,7 +2599,7 @@ function runWriteArtifactOracleSmoke() {
   try {
     // ---- (WA-1) 정상 경로 ----
     const root1 = freshRoot("ok");
-    const base = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const base = makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
     {
       const r = runWriter(root1, base);
       const filePath = path.join(root1, "career.json");
@@ -2501,7 +2638,7 @@ function runWriteArtifactOracleSmoke() {
     // ---- (WA-7) (a) 본체: 스키마 위반이면 쓰지 않는다 ----
     {
       const root = freshRoot("schema-violation");
-      const bad = makeCareerInstance([makeCareerNode({ id: "car:001", evidence: [], basis: "inference", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+      const bad = makeCareerInstance([makeFactCheckedNode({ id: "car:001", evidence: [], basis: "inference", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
       const r = runWriter(root, bad);
       const ok = r.status === 1 && !fs.existsSync(path.join(root, "career.json")) && r.stderr.includes("[SCHEMA]");
       if (!ok) console.log(`    실제: status=${r.status} exists=${fs.existsSync(path.join(root, "career.json"))} stderr=${r.stderr}`);
@@ -2512,7 +2649,7 @@ function runWriteArtifactOracleSmoke() {
     {
       const root = freshRoot("authorship-violation");
       const draftPath = path.join(tmp, "draft-stage.json");
-      fs.writeFileSync(draftPath, JSON.stringify(makeCareerInstance([makeCareerNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })])), "utf8");
+      fs.writeFileSync(draftPath, JSON.stringify(makeCareerInstance([makeFactCheckedNode({ verification: { status: "verified", attempts: 1, reasonCode: null } })])), "utf8");
       const r = spawnSync(process.execPath, [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", "draft", "--skill", "career-from-git", "--generated-at", FIXED_AT], { encoding: "utf8" });
       const ok = r.status === 1 && !fs.existsSync(path.join(root, "career.json")) && r.stderr.includes("VERIFICATION_SET_BY_TEMPLATE");
       if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
@@ -2523,8 +2660,8 @@ function runWriteArtifactOracleSmoke() {
     {
       const root = freshRoot("edit-detect");
       runWriter(root, makeCareerInstance([
-        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
-        makeCareerNode({ id: "car:002", text: "두 번째 서술.", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeFactCheckedNode({ id: "car:002", text: "두 번째 서술.", verification: { status: "verified", attempts: 1, reasonCode: null } }),
       ]));
       const filePath = path.join(root, "career.json");
       const seeded = readJsonOrNull(filePath);
@@ -2542,7 +2679,7 @@ function runWriteArtifactOracleSmoke() {
         const editedRaw = fs.readFileSync(filePath, "utf8");
 
         // 재생성: car:002가 빠진 출력.
-        const v2 = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+        const v2 = makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
 
         const held = runWriter(root, v2);
         const ok = held.status === 3 && held.stderr.includes("PREV_ARTIFACT_EDITED") && readTextOrNull(filePath) === editedRaw;
@@ -2566,10 +2703,10 @@ function runWriteArtifactOracleSmoke() {
     // ---- (WA-12) 병합 계약 위반이면 쓰지 않는다 ----
     {
       const root = freshRoot("churn");
-      runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
       const filePath = path.join(root, "career.json");
       const before = readTextOrNull(filePath);
-      const churned = makeCareerInstance([makeCareerNode({ id: "car:999", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+      const churned = makeCareerInstance([makeFactCheckedNode({ id: "car:999", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
       const r = runWriter(root, churned);
       const ok = before !== null && r.status === 1 && r.stderr.includes("NODE_ID_CHURN") && readTextOrNull(filePath) === before;
       if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
@@ -2591,8 +2728,8 @@ function runWriteArtifactOracleSmoke() {
     {
       const root = freshRoot("render-join");
       runWriter(root, makeCareerInstance([
-        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
-        makeCareerNode({ id: "car:002", text: "반증당한 서술.", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
+        makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeFactCheckedNode({ id: "car:002", text: "반증당한 서술.", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
       ]));
       const written = readJsonOrNull(path.join(root, "career.json"));
       const md = written === null ? "" : renderLayer("career", written);
@@ -2613,7 +2750,7 @@ function runWriteArtifactOracleSmoke() {
     {
       const root = freshRoot("registry-broken");
       fs.writeFileSync(path.join(root, "state.json"), "{broken", "utf8");
-      const r = runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
       const stateRaw = readTextOrNull(path.join(root, "state.json"));
       const ok = r.status === 4 && r.stderr.includes("[REGISTRY]") &&
         fs.existsSync(path.join(root, "career.json")) && stateRaw === "{broken";
@@ -2628,10 +2765,22 @@ function runWriteArtifactOracleSmoke() {
     {
       const root = freshRoot("nodes-missing");
       runWriter(root, makeCareerInstance([
-        makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
-        makeCareerNode({ id: "car:002", text: "잠긴 서술.", locked: true, verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+        makeFactCheckedNode({ id: "car:002", text: "잠긴 서술.", verification: { status: "verified", attempts: 1, reasonCode: null } }),
       ]));
       const filePath = path.join(root, "career.json");
+      // **잠금은 writer로 심을 수 없다(게이트 B-7).** 생성 출력이 locked를 담는
+      // 순간 LOCKED_SET_BY_TEMPLATE로 거부되므로, 사용자 편집을 흉내 내 파일을
+      // 직접 고친다 — 그것이 이 계약이 남긴 유일한 잠금 경로다. (여기서
+      // contentHash는 어긋난 채로 두지만 기입 주체 검사가 편집 감지보다 **앞**에
+      // 돌기 때문에 이 단언이 겨냥한 exit 1 NODES_NOT_ARRAY가 먼저 나온다.)
+      {
+        const seeded = readJsonOrNull(filePath);
+        if (seeded !== null) {
+          seeded.nodes[1].locked = true;
+          fs.writeFileSync(filePath, JSON.stringify(seeded, null, 2), "utf8");
+        }
+      }
       const before = readTextOrNull(filePath);
       const bad = makeCareerInstance([]);
       delete bad.nodes;
@@ -2647,7 +2796,7 @@ function runWriteArtifactOracleSmoke() {
     //      이제 draft는 verification을 담지 않고 병합이 이전 판정을 옮긴다.
     {
       const root = freshRoot("draft-rewrite");
-      runWriter(root, makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]));
+      runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]));
       const draft = makeCareerInstance([makeDraftNode({ id: "car:001", text: "표현을 다듬은 같은 사실." })]);
       const r = runWriter(root, draft, [], "draft");
       const after = readJsonOrNull(path.join(root, "career.json"));
@@ -2656,6 +2805,36 @@ function runWriteArtifactOracleSmoke() {
         v?.status === "refuted" && v.attempts === 2 && v.reasonCode === "NO_SUPPORTING_DIFF";
       if (!ok) console.log(`    실제: status=${r.status} verification=${JSON.stringify(v)} stderr=${r.stderr}`);
       report(ok, "(WA-17) attempts=2인 노드를 --stage draft로 재작성하면 exit 0이고 이전 판정이 보존된다(콜드 리뷰 M-1)");
+    }
+
+    // ---- (WA-18) 템플릿의 자기 잠금이 쓰기 경계에서 막히는가(게이트 B-7) ----
+    //      계약 함수 단위 관측(AC-34~AC-41)만 두면 CLI가 그 함수를 실제로
+    //      부르는지는 아무도 묻지 않는다. 여기서 프로세스를 띄워 확인한다.
+    {
+      const root = freshRoot("self-lock");
+      runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const filePath = path.join(root, "career.json");
+      const before = readTextOrNull(filePath);
+      const selfLocked = makeCareerInstance([
+        { ...makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }), locked: true },
+      ]);
+      const r = runWriter(root, selfLocked);
+      const ok = before !== null && r.status === 1 && r.stderr.includes("LOCKED_SET_BY_TEMPLATE") &&
+        readTextOrNull(filePath) === before;
+      if (!ok) console.log(`    실제: status=${r.status} 변경됨=${readTextOrNull(filePath) !== before} stderr=${r.stderr}`);
+      report(ok, "(WA-18) 생성 출력이 locked:true를 실으면 exit 1이고 기존 산출물이 그대로 남는다(게이트 B-7 엔드투엔드)");
+    }
+
+    // ---- (WA-19) 허용 방향: locked를 담지 않은 출력은 정상적으로 쓰이는가 ----
+    //      금지 방향만 두면 "무조건 거부하는" 검사가 (WA-18)을 통과하고
+    //      프로덕션 경로가 통째로 막힌 것을 아무도 모른다.
+    {
+      const root = freshRoot("no-lock-ok");
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const written = readJsonOrNull(path.join(root, "career.json"));
+      const ok = r.status === 0 && written?.nodes?.[0]?.locked === false;
+      if (!ok) console.log(`    실제: status=${r.status} locked=${JSON.stringify(written?.nodes?.[0]?.locked)} stderr=${r.stderr}`);
+      report(ok, "(WA-19) 허용 방향: locked를 담지 않은 출력은 exit 0으로 기록되고 병합이 locked:false를 채운다(게이트 B-7)");
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

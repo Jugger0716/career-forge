@@ -12,7 +12,8 @@
 //
 // 이 파일이 소유하는 것:
 //   - 산출물 contentHash 정본 계산(계층 중립) — AC-16의 파일 내 필드
-//   - `verification`·`origin` **기입 주체** 집행 — 구현 7단계 (g)
+//   - `verification`·`origin`·`locked` **기입 주체** 집행 — 구현 7단계 (g),
+//     `locked`는 게이트 B-7
 //   - 재생성 병합(노드 id 재사용 · `locked` 보존 · 재시도 상한 이어받기)
 //     — 구현 7단계 (b) / AC-16 / AC-13 (iii)
 //
@@ -117,6 +118,9 @@ export function computeArtifactContentHash(layer, instance) {
  *                  `verification`을 기입할 권한이 없다.
  *   fact-checked — FactChecker 디스패치를 **수행한 뒤** 스킬 오케스트레이션이
  *                  판정을 실은 출력. `verification`을 기입할 권한이 있다.
+ *
+ * `origin`과 `locked`는 **두 단계 모두** 기입할 수 없다 — 단계가 가르는 것은
+ * `verification` 하나뿐이다(게이트 B-7).
  */
 export const AUTHORSHIP_STAGES = Object.freeze(["draft", "fact-checked"]);
 
@@ -177,6 +181,37 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
         message:
           `노드 '${id}'의 origin이 '${node?.origin}'입니다 — 생성 출력의 origin은 항상 'generated'여야 하고 ` +
           "'user'는 병합·편집 감지 로직만 설정합니다(AC-19 언어 린트의 origin:user 제외가 자기면제 통로가 됩니다).",
+      });
+    }
+
+    // **`locked`도 생성 출력이 담지 않는다 — 게이트 B-7.**
+    //
+    // 여기까지 `origin`과 `verification`에는 집행 코드가 생겼는데 `locked`만
+    // 규약이 없었다. 그 상태에서 생성 템플릿이 자기 노드에 `locked: true`를
+    // 적으면 아래 병합 규칙 1이 그 노드를 **영원히** 보존한다 — 이후 어떤
+    // 재생성도 그 노드를 못 건드린다. (g)가 닫으려는 자기면제와 구조가 같다.
+    //
+    // **금지가 값이 아니라 필드의 존재인 이유**는 M-1에서 배운 것과 같다.
+    // `locked: false`만 허용하면 금지가 "검사로 막기"가 되어 이후 제약과
+    // 곱해질 때 다시 모순이 날 수 있고, 무엇보다 템플릿이 적을 수 있는
+    // 의미 있는 값이 애초에 없다. 필드를 없애면 **표현 자체가 불가능**해진다.
+    //
+    // **단계로 완화하지 않는다.** `origin`과 같은 이유다 — fact-checked 출력을
+    // 조립하는 주체도 같은 오케스트레이션이므로, 한쪽 단계만 막으면 다른 쪽으로
+    // 새는 같은 구멍이 남는다.
+    //
+    // **그럼 누가 잠그는가.** 사용자가 산출물 파일을 직접 편집하는 경로 하나뿐
+    // 이다 — 편집하면 contentHash가 어긋나 `PREV_ARTIFACT_EDITED`로 보류되고,
+    // `--force` 강행이 `.bak`을 남긴 뒤 병합이 그 `locked` 노드를 보존한다.
+    // 즉 잠금은 **사람의 결정**이며 그 결정이 파일에 남는다(AC-16의 설계 그대로).
+    if (node?.locked !== undefined) {
+      violations.push({
+        code: "LOCKED_SET_BY_TEMPLATE",
+        message:
+          `노드 '${id}'에 locked가 실려 있습니다(값: ${JSON.stringify(node.locked)}) — 생성 출력은 이 필드를 ` +
+          "**아예 담지 않습니다**. 값은 병합이 채우고(기존 노드는 이전 값을 이어받고 신규 노드는 false), " +
+          "잠금은 사용자가 산출물을 직접 편집할 때만 생깁니다(게이트 B-7). 템플릿이 스스로 잠그면 그 노드는 " +
+          "이후 재생성에서 영원히 보존되어 2단 팩트체크의 사정권 밖으로 나갑니다.",
       });
     }
 
@@ -252,10 +287,12 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
  *     - `fact-checked`: draft가 판정을 싣는다. 이 단계에서만 attempts 감소를
  *       `VERIFICATION_ATTEMPTS_RESET`으로 거부한다 — 조용히 `max()`로 고치면
  *       §3의 상한 2회가 실행마다 초기화되는 버그가 산출물에는 안 보인다.
- *  4. **`origin`은 병합만 설정한다.** prev에 있던 노드는 prev의 `origin`을
- *     이어받고, 신규 노드는 `generated`다. 템플릿이 기입하려 한 값은
- *     `checkAuthorshipContract`가 별도로 고발하며, 여기서 덮어쓰는 것이 그
- *     고발을 대신하지 않는다.
+ *  4. **`origin`과 `locked`는 병합만 설정한다(게이트 B-7).** prev에 있던
+ *     노드는 prev의 값을 이어받고, 신규 노드는 `generated`/`false`다.
+ *     템플릿이 기입하려 한 값은 `checkAuthorshipContract`가 별도로 고발하며,
+ *     여기서 덮어쓰는 것이 그 고발을 대신하지 않는다 — **두 가드는 독립이어야
+ *     한다.** 한쪽만 되돌리면 CLI는 여전히 막히지만 `mergeArtifact`를 직접
+ *     부르는 호출자에게는 구멍이 남는다(N5·N6에서 실측된 형태다).
  *  5. **`nodes` 비배열은 빈 배열로 강등하지 않는다(콜드 리뷰 M-3).**
  *     `NODES_NOT_ARRAY`로 거부한다 — 강등하면 기형 draft가 exit 0으로 통과하며
  *     잠기지 않은 prev 노드를 지운다(실측).
@@ -338,7 +375,9 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
         continue;
       }
 
-      const merged = { ...node, origin: prevNode.origin };
+      // 규칙 4 — `origin`·`locked` 모두 prev의 값을 이어받는다. 스프레드
+      // **뒤**에 두어야 draft가 실은 값이 덮어써진다(게이트 B-7의 병합 측 가드).
+      const merged = { ...node, origin: prevNode.origin, locked: prevNode.locked === true };
 
       if (hasVerificationAxis) {
         if (stage === "draft") {
@@ -379,7 +418,9 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
           "받았습니다 — 동일 사실 항목에는 기존 id를 재사용해야 locked 편집분이 고아가 되지 않습니다(구현 7단계 (b) / AC-16).",
       });
     }
-    const fresh = { ...node, origin: "generated" };
+    // 규칙 4 — 신규 노드는 `generated`이고 잠겨 있지 않다. 잠금은 사용자가
+    // 파일을 직접 편집할 때만 생기므로 갓 생성된 노드가 잠긴 상태일 수 없다.
+    const fresh = { ...node, origin: "generated", locked: false };
     if (hasVerificationAxis && stage === "draft") fresh.verification = { ...FRESH_VERIFICATION };
     mergedNodes.push(fresh);
   }
