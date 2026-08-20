@@ -67,7 +67,7 @@ import {
   computeArtifactContentHash,
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
-import { projectWithReport } from "../scripts/project-ledger.mjs";
+import { projectWithReport, EVIDENCE_FILE_NAME } from "../scripts/project-ledger.mjs";
 import { inspectPreviousArtifact } from "../scripts/write-artifact.mjs";
 import {
   computeRepoKeyForPath,
@@ -231,6 +231,19 @@ const NEGATIVE_CASES = [
   // "제외가 너무 넓어 전부 통과"와 구별되지 않고, negative만 두면 사용자
   // 입력 오탐(M-2가 실측한 것)이 회귀로 잡히지 않는다.
   { n: 20, dir: "20-gap-report-generated-english", mode: "lang", code: "FREETEXT_ENGLISH_DETECTED", label: "M-2 대조군: origin:\"generated\" 노드의 영문 free-text는 계속 FAIL" },
+  // 케이스 24~29 — **`skills/`가 생기기 전까지 대상 0건이던 검사들.**
+  // validate-plugin.mjs는 처음부터 SKILL.md frontmatter 4종·문서 경로 실재성·
+  // 슬래시 명령 접두사를 검사했지만, 이 레포에 `skills/`가 없어 그중 상당수가
+  // **한 번도 대상을 가져 본 적 없는 휴면 검사**였다(케이스 2·3·11만 최소
+  // 픽스처로 관측되고 있었다). 프롬프트 계층이 서면서 이 검사들이 처음으로
+  // 프로덕션 대상을 갖게 되므로, 각각이 실제로 FAIL을 내는 것을 여기 고정한다.
+  // "대상이 없어 통과"와 "검사해서 통과"는 exit 0이라는 같은 얼굴을 하고 있다.
+  { n: 24, dir: "24-skill-name-missing", mode: "plugin", code: "SKILL_NAME_MISSING", label: "SKILL.md frontmatter에 name 없음(name↔디렉터리 대조의 전제)" },
+  { n: 25, dir: "25-skill-description-missing", mode: "plugin", code: "SKILL_DESCRIPTION_MISSING", label: "SKILL.md frontmatter에 description 없음(Claude 라우팅 값 부재)" },
+  { n: 26, dir: "26-skill-frontmatter-missing", mode: "plugin", code: "SKILL_FRONTMATTER_MISSING", label: "SKILL.md에 frontmatter 블록 자체가 없음" },
+  { n: 27, dir: "27-skill-md-not-found", mode: "plugin", code: "SKILL_MD_NOT_FOUND", label: "스킬 디렉터리에 SKILL.md가 없음(README.md만 있음)" },
+  { n: 28, dir: "28-doc-path-not-found", mode: "plugin", code: "DOC_PATH_NOT_FOUND", label: "SKILL.md가 실재하지 않는 scripts/ 경로를 안내(프롬프트는 명령을 적으므로 경로 오타가 곧 실행 실패)" },
+  { n: 29, dir: "29-command-prefix-mismatch-in-skill", mode: "plugin", code: "COMMAND_PREFIX_MISMATCH", label: "AC-18: SKILL.md 안의 슬래시 명령 접두사 불일치(케이스 11의 docs/ 갈래와 짝)" },
   // 게이트 A-2 / 심사 C-4: verification 필드의 조건부 제약이 실제로 FAIL을
   // 내는지. status가 refuted인데 attempts=0 · reasonCode=null인 자기모순
   // 노드다(다른 절과 겹치지 않도록 basis=commit + evidence 비공허로 격리).
@@ -2641,6 +2654,138 @@ function runLedgerProjectionOracleSmoke() {
 // ---------------------------------------------------------------------------
 // 쓰기 경계 — 구현 7단계 (a) / AC-16 / AC-22
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 프롬프트 계층 계약 — 구현 7단계 ③ / 게이트 E-3의 열린 절반
+// ---------------------------------------------------------------------------
+
+/**
+ * **소스 스캔의 성격을 먼저 적는다 — 이 절의 단언은 전부 보조 방어다.**
+ *
+ * 프롬프트는 마크다운이라 계약을 어겨도 종료 코드가 나오지 않는다. 실제 집행은
+ * `write-artifact.mjs`(기입 주체·병합·스키마)와 `verify-evidence.mjs`(인용
+ * 무결성)가 하고, 여기서 보는 것은 **프롬프트가 그 집행 경로를 실제로 거치도록
+ * 쓰였는가** 하나뿐이다.
+ *
+ * 그럼에도 이 절이 필요한 이유는 게이트 E-3이 열려 있던 이유와 같다. 집행 코드가
+ * 있어도 프롬프트가 그것을 부르지 않으면 계약은 대상 0건이 된다 — 그리고 그
+ * 상태는 **모든 게이트가 녹색인 채로** 성립한다.
+ *
+ * **남는 구멍(감추지 않는다):** 명령 문자열이 문서에 있는지만 보므로, 프롬프트가
+ * 그 줄을 적어 두고 실행하지 말라고 덧붙여도 통과한다. 「실제로 호출했는가」는
+ * 계측 없이는 관측할 수 없다 — LP-1에서 실측한 것과 같은 한계다.
+ */
+function runSkillPromptContractSmoke() {
+  console.log("[프롬프트 계층 계약] 구현 7단계 ③ · 게이트 E-3: 스킬 프롬프트가 집행 경로를 거치는가");
+
+  const skillsDir = path.join(REPO_ROOT, "skills");
+  const promptFiles = [];
+  const scan = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) scan(full);
+      else if (entry.name.endsWith(".md")) promptFiles.push(full);
+    }
+  };
+  scan(skillsDir);
+
+  const read = (p) => fs.readFileSync(p, "utf8");
+  const rel = (p) => path.relative(REPO_ROOT, p).split(path.sep).join("/");
+  const allText = promptFiles.map(read).join("\n");
+
+  // ---- (SP-1) 대상이 0건이 아닌가 ----
+  //      **이 단언이 먼저 와야 한다.** 아래 금지 방향 단언들은 파일이 하나도
+  //      없으면 전부 공허하게 통과한다 — 게이트 E-3이 「대상 0건이라 열려 있다」고
+  //      기록했던 것이 정확히 그 상태다.
+  {
+    const ok = promptFiles.length >= 1;
+    if (!ok) console.log("    실제: skills/ 밑에 .md 프롬프트가 0건이다(아래 단언들이 전부 공허해진다).");
+    else console.log(`    대상: ${JSON.stringify(promptFiles.map(rel))}`);
+    report(ok, "(SP-1) skills/ 밑에 프롬프트 문서가 1건 이상 실재한다(금지 방향 단언들이 공허해지지 않는 전제)");
+  }
+
+  // ---- (SP-2) 게이트 E-3 허용 방향: 투영 명령의 호출 지점이 있는가 ----
+  //      **이름이 아니라 호출 지점을 요구한다.** 변이 M17이 실측한 형태다 —
+  //      파일명만 등장하는지 보면 프롬프트가 그 명령을 설명만 하고 부르지
+  //      않아도 통과한다. 프롬프트에서 「호출 지점」은 실행 가능한 명령
+  //      문자열이므로 `node scripts/project-ledger.mjs`까지 요구한다.
+  {
+    const callers = promptFiles.filter((p) => read(p).includes("node scripts/project-ledger.mjs"));
+    const ok = callers.length >= 1;
+    if (!ok) console.log("    실제: 투영 명령의 호출 지점이 프롬프트에 0건이다.");
+    report(ok, "(SP-2) 프롬프트가 `node scripts/project-ledger.mjs` 호출 지점을 담는다(게이트 E-3 허용 방향)");
+  }
+
+  // ---- (SP-3) 게이트 E-3 금지 방향: 원장 원본 파일명을 참조하지 않는가 ----
+  //      **닻이 정본 상수다.** 테스트에 "evidence.json"을 하드코딩하면 상수가
+  //      바뀔 때 스캔이 옛 이름을 계속 찾는다. 프롬프트가 원장 파일명을 직접
+  //      들고 있으면 투영을 건너뛰고 원본을 열 수 있고, 그 순간 §6의
+  //      프라이버시 경계가 프롬프트 조립 지점에서 무의미해진다.
+  {
+    const offenders = promptFiles.filter((p) => read(p).includes(EVIDENCE_FILE_NAME)).map(rel);
+    const ok = offenders.length === 0;
+    if (!ok) console.log(`    실제: 원장 파일명('${EVIDENCE_FILE_NAME}')을 담은 프롬프트 ${JSON.stringify(offenders)}`);
+    report(ok, `(SP-3) 프롬프트 어디에도 원장 원본 파일명('${EVIDENCE_FILE_NAME}') 리터럴이 없다(게이트 E-3 금지 방향)`);
+  }
+
+  // ---- (SP-4) 쓰기 경계를 거치는가 ----
+  //      프롬프트가 산출물을 직접 쓰라고 지시하면 (a) 자기 스키마 검증,
+  //      (b) 재생성 병합, (g) 기입 주체 검사가 전부 건너뛰어진다.
+  {
+    const ok = allText.includes("node scripts/write-artifact.mjs");
+    report(ok, "(SP-4) 프롬프트가 `node scripts/write-artifact.mjs` 호출 지점을 담는다(쓰기 경계를 거친다)");
+  }
+
+  // ---- (SP-5) 인용 무결성 검증을 강제하는가 — `--stage` 자기 선언 대응 ----
+  //      `--stage fact-checked`는 호출자가 넘기는 **라벨**이다. 오케스트레이션이
+  //      FactChecker를 띄우지 않고 그 값만 넘기면 쓰기 경계는 구별할 수 없다 —
+  //      구조가 `origin:"user"` 자기면제와 같다. 그 자칭을 기계로 반증하는 것은
+  //      인용 무결성 축뿐이므로, 프롬프트가 그것을 반드시 부르게 하고 그 사실을
+  //      여기서 관측한다. **이것도 집행이 아니라 보조 방어다**(위 절 주석 참조).
+  {
+    const ok = allText.includes("node scripts/verify-evidence.mjs");
+    if (!ok) console.log("    실제: 프롬프트에 인용 무결성 검증 호출이 없다 — --stage 자칭을 반증할 단계가 없다.");
+    report(ok, "(SP-5) 프롬프트가 `node scripts/verify-evidence.mjs` 호출 지점을 담는다(--stage 자기 선언을 반증하는 유일한 축)");
+  }
+
+  // ---- (SP-6) 생성 템플릿이 draft 금지 필드를 명시하는가 ----
+  //      집행은 쓰기 경계가 한다. 그럼에도 템플릿에 같은 문장을 요구하는 이유는,
+  //      금지를 모르는 템플릿은 매 실행마다 exit 1을 맞고 재작성 루프에 빠지기
+  //      때문이다 — 계약이 지켜지는 것과 파이프라인이 도는 것은 다른 문제다.
+  {
+    const writer = promptFiles.filter((p) => rel(p).includes("career-writer"));
+    const ok = writer.length === 1 && ["verification", "locked"].every((f) => read(writer[0]).includes(f));
+    if (!ok) console.log(`    실제: 생성 템플릿 ${JSON.stringify(writer.map(rel))}`);
+    report(ok, "(SP-6) 생성 템플릿이 draft 금지 필드(verification·locked)를 이름으로 명시한다(구현 7단계 (g)·게이트 B-7)");
+  }
+
+  // ---- (SP-7) 각 템플릿이 의도 모델 티어를 명시하는가(전역 규약) ----
+  //      세션 모델을 대량 서브에이전트에 그대로 상속시키지 않는다는 규약은
+  //      스펙 산문에만 있었다. 템플릿마다 티어가 적혀 있지 않으면 그 규약은
+  //      디스패치 시점에 아무 데도 없다.
+  {
+    const templates = promptFiles.filter((p) => rel(p).includes("/templates/"));
+    const missing = templates.filter((p) => {
+      const t = read(p);
+      return !(t.includes("티어") && t.includes("세션 모델"));
+    }).map(rel);
+    const ok = templates.length >= 1 && missing.length === 0;
+    if (!ok) console.log(`    실제: 템플릿 ${templates.length}건 중 티어·세션 모델 문구 누락 ${JSON.stringify(missing)}`);
+    report(ok, "(SP-7) 모든 템플릿이 의도 모델 티어와 세션 모델 상속 금지를 명시한다(전역 규약)");
+  }
+
+  // ---- (SP-8) 각 템플릿이 출력 언어를 명시하는가 ----
+  //      전역 규약: 영어 누수는 스타일 문제가 아니라 버그다. `--lang-check`가
+  //      사후에 FAIL을 내지만, 그때는 이미 산출물이 만들어진 뒤다.
+  {
+    const templates = promptFiles.filter((p) => rel(p).includes("/templates/"));
+    const missing = templates.filter((p) => !read(p).includes("한국어")).map(rel);
+    const ok = templates.length >= 1 && missing.length === 0;
+    if (!ok) console.log(`    실제: 출력 언어 미명시 ${JSON.stringify(missing)}`);
+    report(ok, "(SP-8) 모든 템플릿이 출력 언어(한국어)를 명시한다(영어 누수는 버그다)");
+  }
+}
 
 function runWriteArtifactOracleSmoke() {
   console.log("[쓰기 경계 오라클] 구현 7단계 (a)·AC-16·AC-22: 자기 검증·편집 감지·레지스트리");
@@ -5837,6 +5982,7 @@ function runCommonSections() {
   runSection("렌더 계약 오라클(구현 7단계·AC-13)", runRenderContractOracleSmoke);
   runSection("산출물 계약 오라클(구현 7단계 (a)(b)(g))", runArtifactContractOracleSmoke);
   runSection("원장 투영 오라클(구현 7단계 (f)·게이트 E-3)", runLedgerProjectionOracleSmoke);
+  runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);

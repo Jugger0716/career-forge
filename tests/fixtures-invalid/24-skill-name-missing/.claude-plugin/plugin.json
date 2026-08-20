@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "정상 plugin.json — 이 케이스는 SKILL.md frontmatter의 name 부재만 검사한다(케이스 24).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "MIT"
+}
