@@ -375,8 +375,18 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
         continue;
       }
 
-      // 규칙 4 — `origin`·`locked` 모두 prev의 값을 이어받는다. 스프레드
-      // **뒤**에 두어야 draft가 실은 값이 덮어써진다(게이트 B-7의 병합 측 가드).
+      // 규칙 4 — `origin`은 prev의 값을 이어받는다. 스프레드 **뒤**에 두어야
+      // draft가 실은 값이 덮어써진다(게이트 B-7의 병합 측 가드).
+      //
+      // **`locked`에 대한 서술을 정정한다(콜드 리뷰 지적).** 여기를 「locked도
+      // prev에서 이어받는다」고 적었지만, 이 줄에 도달하는 시점에는 바로 위
+      // 규칙 1의 early-return이 `prevNode.locked !== true`를 이미 보장하므로
+      // `prevNode.locked === true`는 **도달 가능한 모든 경로에서 false와 동치**다.
+      // 실제로 잠금을 이어받는(= true를 보존하는) 것은 규칙 1이다.
+      //
+      // **그래도 리터럴 false로 바꾸지 않는다.** 규칙 1의 early-return이 나중에
+      // 옮겨지거나 사라지면 이 표현식이 곧바로 짐을 진다 — 방어적 중복이다.
+      // 대신 「이 줄이 잠금을 이어받는다」고 읽지 않도록 여기 적어 둔다.
       const merged = { ...node, origin: prevNode.origin, locked: prevNode.locked === true };
 
       if (hasVerificationAxis) {
