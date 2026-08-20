@@ -63,12 +63,13 @@ import {
 import { renderLayer } from "../scripts/render-markdown.mjs";
 import {
   ARTIFACT_LAYERS,
+  AUTHORSHIP_STAGES,
   checkAuthorshipContract,
   computeArtifactContentHash,
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
 import { projectWithReport, EVIDENCE_FILE_NAME } from "../scripts/project-ledger.mjs";
-import { inspectPreviousArtifact } from "../scripts/write-artifact.mjs";
+import { inspectPreviousArtifact, updateRegistry } from "../scripts/write-artifact.mjs";
 import {
   computeRepoKeyForPath,
   getRepoToplevel,
@@ -2645,6 +2646,27 @@ function runLedgerProjectionOracleSmoke() {
         if (!ok6) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
         report(ok6, "(LP-10) 허용 방향: --in은 저장 경계 밖(os.tmpdir 직하)이어도 exit 0이다(읽기까지 막지 않는다)");
       }
+
+      // ---- (LP-11) --out 쓰기 실패가 종료 코드 계약 **안**에 있는가 ----
+      //      이 파일이 문서화한 종료 코드는 0과 2 두 갈래뿐인데, --out 쓰기만
+      //      try/catch 밖에 있어 경계 검사(LP-9)를 통과한 뒤 상위 디렉터리가 없으면
+      //      원시 Node 스택과 함께 **exit 1**로 죽었다 — 계약에 없는 세 번째 코드이고,
+      //      하필 write-artifact.mjs에서 exit 1은 「출력을 고쳐 다시 부른다」로 이미
+      //      점유된 값이라 같은 오케스트레이션이 두 스크립트를 부를 때 의미가 갈린다.
+      //      **경로를 경계 안에 두는 것이 핵심이다** — 경계 밖이면 LP-9가 먼저 잡아
+      //      쓰기 실패를 관측할 수 없다.
+      {
+        const missingParent = path.join(ledgerRoot, "no-such-dir", "p.json");
+        const r = spawnSync(
+          process.execPath,
+          [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--root", ledgerRoot, "--out", missingParent],
+          { encoding: "utf8" }
+        );
+        const ok7 = r.status === 2 && r.stderr.includes("[INPUT_ERROR]") && r.stderr.includes("--out") &&
+          !r.stderr.includes("    at ") && !fs.existsSync(missingParent);
+        if (!ok7) console.log(`    실제: status=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+        report(ok7, "(LP-11) 쓸 수 없는 --out은 [INPUT_ERROR] + exit 2다(원시 스택도, 계약 밖 exit 1도 아니다)");
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -3144,6 +3166,120 @@ function runWriteArtifactOracleSmoke() {
         unknown.existence === "unknown" && unknown.hold?.code === "PREV_ARTIFACT_UNREADABLE";
       if (!ok) console.log(`    실제: absent=${absent.existence} present=${present.existence} unknown=${unknown.existence}`);
       report(ok, "(WA-24) inspectPreviousArtifact는 absent/present/unknown 세 상태를 구분한다(읽기 실패를 '있음'으로 단정하지 않는다)");
+    }
+
+    // ---- (WA-25) updateRegistry가 실패를 예외가 아니라 반환값으로 보고하는가 ----
+    //      **exit 4 위장 경로다.** main()은 산출물을 이미 쓴 **뒤** updateRegistry를
+    //      부르고 `{ok}`로 분기한다. 그런데 그 안의 스키마 로드와 writeState가
+    //      try/catch 밖에 있어서, 던지면 Node 기본 처리로 **exit 1**이 된다 —
+    //      파일 헤더가 「'쓰지 않았다' 불변식을 깨는 유일한 코드」라고 못 박은 exit 4가
+    //      「아무것도 쓰지 않았다」는 exit 1로 위장되는 것이다. 호출자는 존재하는
+    //      산출물을 두고 draft를 고쳐 재시도하는 무의미한 루프에 들어간다.
+    //      **이 회차가 writeBackup에서 닫은 것과 같은 형태다**(콜드 리뷰 Correctness #9).
+    //
+    //      **왜 CLI가 아니라 export된 함수로 관측하는가.** 이 경로를 CLI에서
+    //      portable하게 유발할 방법이 없다 — 저장 루트 자체를 못 쓰게 만들면 산출물
+    //      쓰기가 **먼저** 실패하고, state.json만 못 쓰게 만드는 수단(읽기 전용 파일·
+    //      디렉터리 치환)은 OS마다 결과가 갈리거나 readState가 먼저 막아 이미 있는
+    //      early-return으로 빠진다. 반면 「이 함수는 던지지 않는다」는 계약은 CLI
+    //      보장을 **함의한다**: main()이 분기하는 값이 항상 `{ok, error}`이면 레지스트리
+    //      단계에서 raw 예외가 샐 수 없다. 트리거는 이름이 지나치게 긴 경로
+    //      세그먼트다(어느 OS에서든 mkdir이 던지고, readState는 ENOENT로 통과한다).
+    {
+      const bad = path.join(tmp, STATE_DIR_NAME, "n".repeat(300));
+      let threw = null;
+      let ret = null;
+      try {
+        ret = updateRegistry(bad, "career", path.join(bad, "career.json"), "0.1.0", "career-from-git", FIXED_AT);
+      } catch (e) {
+        threw = e.code ?? e.message;
+      }
+      // **사유 코드까지 단언하는 이유 — 이 단언이 공허해지는 유일한 길을 막는다.**
+      // `{ok:false}`만 보면 `readState`가 non-ENOENT 오류를 받아 **기존
+      // early-return**으로 빠져도 통과한다. 그러면 이번에 넣은 try/catch는 한 번도
+      // 실행되지 않는다. OS·파일시스템에 따라 긴 경로 세그먼트가 ENOENT가 아니라
+      // ENAMETOOLONG으로 먼저 보고될 수 있으므로 그 갈림은 실제로 가능하다.
+      // 새 가드만 쓰는 코드를 요구해 「어느 경로로 왔는가」를 고정한다.
+      const ok = threw === null && ret !== null && ret.ok === false &&
+        typeof ret.error === "string" && ret.error.includes("REGISTRY_UNEXPECTED_ERROR");
+      if (!ok) console.log(`    실제: threw=${threw} ret=${JSON.stringify(ret)}`);
+      report(ok, "(WA-25) updateRegistry는 쓰기 실패에서 던지지 않고 REGISTRY_UNEXPECTED_ERROR를 담은 {ok:false}를 돌린다(exit 4가 exit 1로 위장되지 않는다)");
+    }
+
+    // ---- (WA-27) 산출물 쓰기 실패가 계약 안의 종료 코드로 나오는가 ----
+    //      **이 파일이 스스로 「산출물이 디스크에 닿는 유일한 경로」라고 선언한
+    //      바로 그 호출이 비보호였다.** 계약·스키마 검사를 전부 통과한 뒤이므로
+    //      여기서의 실패는 draft 내용과 무관한 파일시스템 문제다(경계 안의 --root가
+    //      일반 파일 하위를 가리켜 ENOTDIR, 디스크 가득 참, 권한, 잠금). 던지게 두면
+    //      Node가 exit 1로 죽는데 이 파일의 exit 1은 「출력을 고쳐 다시 부른다」라서
+    //      호출자는 draft를 아무리 고쳐도 같은 예외를 반복한다.
+    //      실측: `.devcareer/<일반 파일>/nested`를 --root로 주면 store.mjs의
+    //      mkdirSync가 ENOTDIR로 던지고 원시 스택과 함께 exit 1이 났다.
+    {
+      const blockerParent = path.join(tmp, "wa27", STATE_DIR_NAME);
+      fs.mkdirSync(blockerParent, { recursive: true });
+      const blocker = path.join(blockerParent, "blocker");
+      fs.writeFileSync(blocker, "나는 디렉터리가 아니다", "utf8");
+      const root = path.join(blocker, "nested"); // 경계 검사는 통과한다(.devcareer 세그먼트가 있다)
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const ok = r.status === 3 && r.stderr.includes("ARTIFACT_WRITE_FAILED") &&
+        !r.stderr.includes("    at ") && !fs.existsSync(path.join(root, "career.json"));
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr.slice(0, 400)}`);
+      report(ok, "(WA-27) 산출물 쓰기 실패는 [HOLD] ARTIFACT_WRITE_FAILED + exit 3이다(원시 스택도, 오도하는 exit 1도 아니다)");
+    }
+
+    // ---- (WA-28) 계층 스키마를 읽지 못하는 설치 손상도 계약 안인가 ----
+    //      `loadSchema`의 readFileSync·JSON.parse가 비보호였다. **이번 회차가
+    //      updateRegistry 주석에서 직접 지목한 시나리오**(플러그인 설치가 손상돼
+    //      스키마 파일을 읽지 못함)가 같은 파일 안에 그대로 열려 있었다.
+    //
+    //      **왜 스크립트 사본을 만들어 관측하는가.** 이 경로를 유발하려면
+    //      `schemas/`를 훼손해야 하는데 레포의 그 디렉터리를 테스트가 건드리면
+    //      다른 단언이 오염된다. `scripts/`와 `schemas/`만 임시 디렉터리로 복사하면
+    //      복사본의 REPO_ROOT가 그 임시 디렉터리가 되므로(SCRIPT_DIR의 상위) 레포는
+    //      그대로 두고 손상된 설치를 재현할 수 있다.
+    //
+    //      **exit 4가 아니라 3인 이유.** 이 지점은 writeJsonAtomic보다 **앞**이라
+    //      산출물이 기록되지 않았다. exit 4는 「기록됐다」를 뜻하므로 거짓 보고가 된다.
+    {
+      const fake = path.join(tmp, "wa28-install");
+      fs.mkdirSync(fake, { recursive: true });
+      fs.cpSync(path.join(REPO_ROOT, "scripts"), path.join(fake, "scripts"), { recursive: true });
+      fs.cpSync(path.join(REPO_ROOT, "schemas"), path.join(fake, "schemas"), { recursive: true });
+      fs.rmSync(path.join(fake, "schemas", "career.schema.json"), { force: true });
+
+      const root = freshRoot("wa28-root");
+      const draftPath = path.join(tmp, "wa28-draft.json");
+      fs.writeFileSync(
+        draftPath,
+        JSON.stringify(makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })])),
+        "utf8"
+      );
+      const r = spawnSync(
+        process.execPath,
+        [path.join(fake, "scripts", "write-artifact.mjs"), "--layer", "career", "--draft", draftPath,
+          "--root", root, "--stage", "fact-checked", "--skill", "career-from-git", "--generated-at", FIXED_AT],
+        { encoding: "utf8" }
+      );
+      const stderr = r.stderr ?? "";
+      const ok = r.status === 3 && stderr.includes("LAYER_SCHEMA_UNREADABLE") &&
+        !stderr.includes("    at ") && !fs.existsSync(path.join(root, "career.json"));
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${stderr.slice(0, 400)}`);
+      report(ok, "(WA-28) 계층 스키마를 읽지 못하면 [HOLD] LAYER_SCHEMA_UNREADABLE + exit 3이고 산출물을 만들지 않는다");
+    }
+
+    // ---- (WA-26) 허용 방향: 정상 경로에서 {ok:true}이고 항목이 실제로 기재되는가 ----
+    //      금지 방향만 두면 "무조건 {ok:false}를 돌리는" 구현이 (WA-25)를 통과하고
+    //      모든 정상 쓰기가 exit 4가 된 것을 아무도 모른다.
+    {
+      const root = freshRoot("registry-ok");
+      const artifactPath = path.join(root, "career.json");
+      fs.writeFileSync(artifactPath, JSON.stringify({ schemaVersion: "0.1.0" }), "utf8");
+      const ret = updateRegistry(root, "career", artifactPath, "0.1.0", "career-from-git", FIXED_AT);
+      const state = readJsonOrNull(path.join(root, "state.json"));
+      const ok = ret.ok === true && ret.error === null && state?.artifacts?.career?.path === "career.json";
+      if (!ok) console.log(`    실제: ret=${JSON.stringify(ret)} state=${JSON.stringify(state)}`);
+      report(ok, "(WA-26) 허용 방향: 정상 루트에서는 {ok:true}이고 state.json 레지스트리에 항목이 기재된다");
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

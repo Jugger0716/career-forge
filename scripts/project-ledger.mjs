@@ -35,7 +35,7 @@
 //     픽스처 원장을 가리키는 정당한 용법이 있다. 경계가 지키는 것은 쓰기와
 //     저장 루트 해석이지 임의 파일 읽기가 아니다.
 //
-// 종료 코드: 0 = 투영 성공 / 2 = 입력 오류(파일 부재·JSON 파싱 실패·인자
+// 종료 코드: 0 = 투영 성공 / 2 = 입력 오류(파일 부재·JSON 파싱 실패·--out 쓰기 실패·인자
 // 오류). render-markdown.mjs·verify-evidence.mjs와 같은 "입력 오류는 결론을
 // 낼 수 없음 계열" 규약(콜드 리뷰 A-32)을 따른다.
 
@@ -124,7 +124,23 @@ function main() {
   const serialized = JSON.stringify(projected, null, 2) + "\n";
 
   if (opts.outPath) {
-    fs.writeFileSync(opts.outPath, serialized, "utf8");
+    // **쓰기 실패를 종료 코드 계약 안으로 들여놓는다(콜드 리뷰 Correctness).**
+    // 이 파일의 다른 모든 I/O는 failInput()을 거쳐 [INPUT_ERROR] + exit 2로
+    // 일관되게 실패하는데 이 한 줄만 감싸이지 않아, 상위 디렉터리가 없으면
+    // 원시 Node 스택과 함께 **exit 1**로 죽었다 — 헤더가 문서화한 0/2 두 갈래에
+    // 없는 값이고, 하필 write-artifact.mjs에서 exit 1은 「출력을 고쳐 다시
+    // 부른다」로 이미 점유돼 있어 같은 오케스트레이션이 두 스크립트를 부를 때
+    // 코드 1의 의미가 갈린다.
+    //
+    // **디렉터리를 대신 만들어 주지 않는다.** writeJsonAtomic은 저장 루트를
+    // mkdir하지만 여기서 같은 일을 하면 오타 난 --out이 조용히 새 디렉터리를
+    // 만들어 성공한 것처럼 보인다. 경계 검사가 통과시킨 경로라도 「없는 곳에
+    // 쓰라」는 지시는 사용자 실수일 가능성이 높으므로 시끄럽게 멈춘다.
+    try {
+      fs.writeFileSync(opts.outPath, serialized, "utf8");
+    } catch (e) {
+      failInput(`--out 경로에 쓸 수 없습니다: ${opts.outPath} (${e.code ?? e.message})`);
+    }
     console.error(`[project-ledger] 기록: ${opts.outPath}`);
   } else {
     process.stdout.write(serialized);
