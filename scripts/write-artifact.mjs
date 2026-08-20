@@ -44,8 +44,12 @@
 //   0 산출물 기록 + 레지스트리 갱신 완료.
 //   1 계약·스키마 위반 — **아무것도 쓰지 않았다.** 출력을 고쳐 다시 부른다.
 //   2 입력 오류(인자·파일 부재·JSON 파싱) — 쓰지 않았다.
-//   3 기존 산출물을 안전하게 덮어쓸 수 없다 — 쓰지 않았다. **사람 결정이
-//     필요하다**(사용자 편집 감지 등). 사유는 [HOLD] 줄의 코드로 나온다.
+//   3 안전하게 쓸 수 없다 — 산출물 파일을 기록하지 않았다. **사람 결정·확인이
+//     필요하다**: 사용자 편집 감지(PREV_ARTIFACT_EDITED), 이전 산출물 판독 불가
+//     (PREV_ARTIFACT_UNREADABLE / _HASH_MISSING), 백업 실패
+//     (PREV_ARTIFACT_BACKUP_FAILED), 파일시스템 쓰기 실패(ARTIFACT_WRITE_FAILED),
+//     플러그인 설치 손상(LAYER_SCHEMA_UNREADABLE). 사유는 [HOLD] 줄의 코드로 나온다.
+//     공통점은 「인자나 출력을 고쳐서 해소되지 않는다」이다 — 그래서 1·2가 아니다.
 //   4 산출물은 기록됐으나 state.json 레지스트리 갱신에 실패했다.
 //
 // **왜 3과 4를 2·1에 합치지 않는가.** exit 1·2·3은 전부 "쓰지 않았다"는
@@ -196,9 +200,40 @@ export function writeBackup(filePath) {
  * 레지스트리 갱신 사이에 프로세스가 죽었을 때 두 값이 갈린다. 그 갈림은
  * AC-22의 스테일 판정을 오탐·미탐 양쪽으로 무너뜨린다.
  *
- * @returns {{ok: boolean, error: string|null}}
+ * **이 함수는 던지지 않는다 — 실패는 전부 반환값이다(콜드 리뷰 Correctness).**
+ * 초판은 스키마 로드와 `writeState`가 try/catch 밖에 있었다. 그 둘이 던지면
+ * (디스크·권한·파일 잠금, 또는 플러그인 설치가 손상돼 `schemas/state.schema.json`을
+ * 읽지 못하는 경우) 예외가 `main()`까지 올라가 Node 기본 처리로 **exit 1**이 됐다.
+ * 그런데 이 지점은 산출물을 **이미 쓴 뒤**이므로 계약상 exit **4**여야 한다 —
+ * exit 1은 이 파일이 「아무것도 쓰지 않았다, 출력을 고쳐 다시 부른다」로 정의한
+ * 값이라, 호출자는 존재하는 산출물을 두고 draft를 고쳐 재시도하는 무의미한 루프에
+ * 들어간다. `--force` 백업 실패에서 닫은 것과 **같은 형태의 위장**이다.
+ *
+ * **집행을 호출 지점이 아니라 함수 안에 둔 이유.** 이 함수는 export돼 있고
+ * `main()` 말고 다른 호출자가 생길 수 있다. 호출 지점만 감싸면 「어떤 실패는
+ * `{ok:false}`, 어떤 실패는 예외」라는 두 얼굴의 계약이 남는다.
+ *
+ * @returns {{ok: boolean, error: string|null}} 예외를 던지지 않는다.
  */
 export function updateRegistry(root, layer, artifactPath, schemaVersion, skillName, nowIso) {
+  try {
+    return updateRegistryOrThrow(root, layer, artifactPath, schemaVersion, skillName, nowIso);
+  } catch (e) {
+    return {
+      ok: false,
+      // **사유 코드를 붙인다.** 위쪽 early-return(손상된 state.json 거부)도
+      // `{ok:false}`를 돌리므로, 코드가 없으면 「어느 경로로 실패했는가」를 호출자도
+      // 오라클도 구별할 수 없다 — 그러면 이 가드가 한 번도 실행되지 않아도
+      // 「{ok:false}가 나왔다」는 사실만으로 관측이 통과한다.
+      error:
+        `REGISTRY_UNEXPECTED_ERROR: 레지스트리 갱신 중 처리하지 못한 오류가 났습니다(${e.code ?? e.message}) — ` +
+        "state.json 경로의 권한·잠금 상태와 플러그인 설치(schemas/state.schema.json)를 확인하십시오.",
+    };
+  }
+}
+
+/** `updateRegistry`의 본체. **직접 부르지 마라** — 던질 수 있다. */
+function updateRegistryOrThrow(root, layer, artifactPath, schemaVersion, skillName, nowIso) {
   const { stateKey } = ARTIFACT_LAYERS[layer];
   const existing = readState(root);
 
@@ -330,7 +365,26 @@ function main() {
 
   // (a) — 쓰기 직전 자기 검증. 파일이 아니라 메모리 객체를 검증하므로
   // `--schema-check` CLI가 아니라 모듈을 직접 부른다(스펙 원문).
-  const schemaErrors = validateInstance(loadSchema(opts.layer), merged);
+  //
+  // **스키마 로드 실패를 미처리 예외로 두지 않는다.** `loadSchema`는
+  // readFileSync·JSON.parse를 감싸지 않으므로 플러그인 설치가 손상되면(스키마
+  // 파일 부재·훼손) 원시 스택과 함께 Node 기본 처리로 exit 1이 난다 —
+  // `updateRegistry` 주석이 지목한 바로 그 시나리오가 같은 파일 안에 열려
+  // 있었다. 출력을 고쳐도 해소되지 않으므로 exit 1은 거짓 안내다.
+  // **exit 4가 아니라 3인 이유**: 이 지점은 `writeJsonAtomic`보다 앞이라 산출물이
+  // 기록되지 않았고, exit 4는 「기록됐다」를 뜻한다.
+  let layerSchema;
+  try {
+    layerSchema = loadSchema(opts.layer);
+  } catch (e) {
+    console.error(
+      `[HOLD] LAYER_SCHEMA_UNREADABLE: 계층 스키마를 읽을 수 없습니다: schemas/${opts.layer}.schema.json ` +
+      `(${e.code ?? e.message}) — 플러그인 설치가 손상됐을 수 있습니다.`
+    );
+    console.error("[write-artifact] 아무것도 쓰지 않았습니다 — 인자나 출력으로 고칠 수 있는 문제가 아니므로 설치 상태를 확인하십시오.");
+    process.exit(3);
+  }
+  const schemaErrors = validateInstance(layerSchema, merged);
   if (schemaErrors.length > 0) {
     for (const e of schemaErrors) console.error(`[SCHEMA] ${e}`);
     console.error("[write-artifact] 스키마 위반으로 아무것도 쓰지 않았습니다(구현 7단계 (a)).");
@@ -358,7 +412,30 @@ function main() {
     console.error(`[write-artifact] 강행 — 덮어쓰기 직전 1세대를 보존했습니다: ${bakPath}`);
   }
 
-  writeJsonAtomic(root, fileName, merged);
+  // **이 파일이 「산출물이 디스크에 닿는 유일한 경로」라고 선언한 바로 그 호출이
+  // 비보호였다.** 여기까지 왔다면 계약·스키마 검사는 전부 통과했으므로 실패는
+  // draft 내용과 무관한 파일시스템 문제다 — 경계 안의 `--root`가 일반 파일 하위를
+  // 가리켜 ENOTDIR, 디스크 가득 참, 권한, 잠금. 던지게 두면 Node가 exit 1로 죽는데
+  // 이 파일의 exit 1은 「출력을 고쳐 다시 부른다」라서 호출자는 draft를 아무리
+  // 고쳐도 같은 예외를 반복한다(실측: `.devcareer/<일반 파일>/nested`를 --root로
+  // 주면 mkdirSync ENOTDIR 원시 스택 + exit 1).
+  //
+  // **exit 3인 이유.** 기계가 대신 결정할 수 있는 것이 없다 — `--force` 백업
+  // 실패를 같은 이유로 exit 3에 보냈다. **exit 4가 아니다**: 이 호출이 던졌다면
+  // 산출물 파일은 기록되지 않았다.
+  try {
+    writeJsonAtomic(root, fileName, merged);
+  } catch (e) {
+    console.error(
+      `[HOLD] ARTIFACT_WRITE_FAILED: 산출물을 쓰지 못했습니다: ${filePath} (${e.code ?? e.message}) — ` +
+      "저장 루트의 경로·권한·잠금 상태와 남은 디스크 공간을 확인하십시오."
+    );
+    console.error(
+      "[write-artifact] 산출물 파일은 기록되지 않았습니다(원자적 쓰기의 임시 파일이 남아 있을 수 있습니다) — " +
+      "출력이 아니라 환경 문제이므로 draft를 고쳐 재시도해도 같은 실패가 반복됩니다."
+    );
+    process.exit(3);
+  }
   console.error(`[write-artifact] 기록: ${filePath} (노드 ${merged.nodes.length}건)`);
 
   const registry = updateRegistry(root, opts.layer, filePath, merged.schemaVersion, opts.skill, nowIso);
