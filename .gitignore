@@ -1,6 +1,13 @@
 # Harness orchestrator working directory (ephemeral)
 .harness/
 
+# Harness 산출물 작업 디렉터리(/harness, /deep-review, /handoff 등이 쓴다).
+# 이 아래는 도구가 관리하는 회차 산출물이므로 커밋하지 않는다.
+# 남길 가치가 생긴 문서는 docs/ 아래로 **명시적으로 승격**한다
+# (docs/devcareer-prep-plugin/ · docs/handoff/). 추적되는 코드와 lint 스캔
+# 대상이 이 경로를 참조하면 새 클론에서 깨진다 — 스모크 (DH-1)이 막는다.
+docs/harness/
+
 # OS / editor
 .DS_Store
 Thumbs.db

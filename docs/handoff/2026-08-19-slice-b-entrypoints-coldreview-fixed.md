@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-19  **Project:** career-forge (devcareer-prep 플러그인)
 **Branch:** harness/devcareer-prep-plugin-2  **HEAD:** 7e88aa63cec13bcc6259768647f0b27094f28db7 — fix(step7): close the three defects a cold review found in the contract
-**Dirty:** 2 files (`docs/harness/handoff/2026-08-19-slice-b-c5-closed-render-contract.md`, `docs/harness/handoff/2026-08-19-slice-b-exceptions-closed.md` — 이전 핸드오프 2건, untracked)  **Upstream:** 없음 (원격 `origin` = github.com/Jugger0716/career-forge. 이 브랜치가 원격 `main`보다 **25커밋** 앞섬 — 푸시하지 않음)
+**Dirty:** 2 files (`docs/handoff/2026-08-19-slice-b-c5-closed-render-contract.md`, `docs/handoff/2026-08-19-slice-b-exceptions-closed.md` — 이전 핸드오프 2건, untracked)  **Upstream:** 없음 (원격 `origin` = github.com/Jugger0716/career-forge. 이 브랜치가 원격 `main`보다 **25커밋** 앞섬 — 푸시하지 않음)
 
 ## Goal
 
@@ -207,23 +207,23 @@ Claude Code 플러그인(`devcareer-prep`)을 구축한다. 핵심 가치는 **�
 
 ## Reading Order
 
-1. `docs/harness/handoff/2026-08-19-slice-b-entrypoints-coldreview-fixed.md` — 이 문서. 현재 위치와 남은 것.
+1. `docs/handoff/2026-08-19-slice-b-entrypoints-coldreview-fixed.md` — 이 문서. 현재 위치와 남은 것.
 2. `docs/harness/f029375/review_report.md` — 콜드 리뷰 라운드 1 전량 20건. **미반영 15건이 다음
    회차의 입력이다.** 「오케스트레이터 실측 기록」 절에 M-1·M-2·M-3의 재현 절차가 있다.
-3. `docs/harness/devcareer-prep-plugin/slice_b_spec_review.md` — 뒤쪽 **'착수 전 게이트 체크리스트'**.
+3. `docs/devcareer-prep-plugin/slice_b_spec_review.md` — 뒤쪽 **'착수 전 게이트 체크리스트'**.
    B-1·B-2·B-3·B-4·B-5·C-1·C-2·C-5·C-6·E-1·E-2가 `[x]`, **E-3이 `[~]`(절반)**, **B-7이 신규 미결**.
-4. `docs/harness/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할, 슬라이스 A 파일 수정
+4. `docs/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할, 슬라이스 A 파일 수정
    예외 5건(전부 소비됨), **T4 14건의 슬라이스 C 이연 결정**.
 5. `scripts/lib/artifact-contract.mjs` — 계약 정본. `checkAuthorshipContract`의 draft 절과
    `mergeArtifact`의 규칙 1~5 주석에 **M-1이 왜 생겼고 어떻게 닫혔는지**가 적혀 있다.
 6. `scripts/write-artifact.mjs` — 쓰기 경계. 파일 헤더의 **5분기 종료 코드 계약**과 그 이유를 보라.
 7. `scripts/project-ledger.mjs` — (f) 투영 진입점. 「왜 라이브러리 함수만으로는 부족한가」 절이
    프롬프트 회차의 E-3 작업 근거다.
-8. `docs/harness/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 131KB이므로
+8. `docs/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 131KB이므로
    통독하지 말고 `awk '/^\*\*7\. /,/^\*\*8\. /'` 같은 방식으로 필요한 단계만 잘라 읽어라.
 9. `tests/run-smoke.mjs`의 `runArtifactContractOracleSmoke`·`runLedgerProjectionOracleSmoke`·
    `runWriteArtifactOracleSmoke` — 절 단위 오라클 패턴. 5300줄이 넘으므로 함수 단위로 잘라 읽어라.
-10. `docs/harness/devcareer-prep-plugin/conventions.md` — 규약 문서(70줄). 이 레포엔 `CLAUDE.md`가
+10. `docs/devcareer-prep-plugin/conventions.md` — 규약 문서(70줄). 이 레포엔 `CLAUDE.md`가
     없다 — 필요하면 레포 루트 `CLAUDE.md`로 승격을 검토하라.
 
 ## Do NOT
@@ -278,4 +278,4 @@ Claude Code 플러그인(`devcareer-prep`)을 구축한다. 핵심 가치는 **�
 | devcareer-prep-plugin | slice-b-p0-skill-layer | in-progress | 7e88aa63cec13bcc6259768647f0b27094f28db7 | **구현 7단계의 결정적 부분 완료 + 콜드 리뷰 1라운드 반영.** 이전 회차들이 예외 1~5(게이트 B-1·B-2·C-1·C-2·C-5·C-6 + 스키마 external)와 렌더 계약(m-3·E-1·E-2)을 닫았고, **이 세션이 결정적 진입점 3종(신규 파일, 슬라이스 A 수정 0건)을 세운 뒤 콜드 리뷰 20건 중 3건(M-1 계약 3중 자기모순 / M-2 exit 4 미관측 / M-3 조용한 노드 삭제)을 실측 재현 후 반영했다.** 4게이트 녹색(lint 0 / **402** / 27 / 11). 변이 33종으로 절 단위 관측. **미착수: 구현 7단계 ③(스킬 프롬프트 2종)·범위 확정 대화·8~10단계.** **콜드 리뷰 미반영 15건**(Security 1 · Correctness 3 · Architecture 2 · Maintainability 5 · Testing 3 · suggestion 잔여)이 다음 회차 입력. **게이트 E-3 절반 열림 · B-7 신규 미결 · `--stage` 자기 선언 미결.** T4 14건은 슬라이스 C 이연 확정. 도그푸딩 레포 미확정. 원격 미푸시(25커밋). |
 
 ## Resume
-Run: `/handoff resume docs/harness/handoff/2026-08-19-slice-b-entrypoints-coldreview-fixed.md`
+Run: `/handoff resume docs/handoff/2026-08-19-slice-b-entrypoints-coldreview-fixed.md`

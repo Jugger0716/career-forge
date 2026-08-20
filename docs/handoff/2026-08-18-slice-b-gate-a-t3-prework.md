@@ -58,10 +58,10 @@ Claude Code 플러그인(`devcareer-prep`)을 구축한다. 핵심 가치는 **�
 ## In Progress
 
 Skill : harness
-Task : DevCareer Prep — Claude Code 플러그인 개발 (Git 히스토리 → 경력 기술서 → 지식 갭 분석 → 학습/코테 계획). SPEC.md 전문은 docs/harness/devcareer-prep-plugin/SPEC.md 참조.
+Task : DevCareer Prep — Claude Code 플러그인 개발 (Git 히스토리 → 경력 기술서 → 지식 갭 분석 → 학습/코테 계획). SPEC.md 전문은 docs/devcareer-prep-plugin/SPEC.md 참조.
 Phase : plan_done
 Mode : multi
-Docs : docs/harness/devcareer-prep-plugin/
+Docs : docs/devcareer-prep-plugin/
 
 **위 `Phase` 값은 이전 세션과 마찬가지로 현실과 어긋나 있다.** 슬라이스 A 구현이 끝나고 이 세션이
 게이트 작업까지 마쳤는데도 harness 위상 기계는 `plan_done`에 멈춰 있다 — 에픽 경로를 택했고
@@ -128,17 +128,17 @@ Docs : docs/harness/devcareer-prep-plugin/
 
 ## Reading Order
 
-1. `docs/harness/handoff/2026-08-18-slice-b-gate-a-t3-prework.md` — 이 문서. 현재 위치와 남은 것.
-2. `docs/harness/devcareer-prep-plugin/slice_b_spec_review.md` — **가장 중요.** 슬라이스 B 심사 16건과
+1. `docs/handoff/2026-08-18-slice-b-gate-a-t3-prework.md` — 이 문서. 현재 위치와 남은 것.
+2. `docs/devcareer-prep-plugin/slice_b_spec_review.md` — **가장 중요.** 슬라이스 B 심사 16건과
    맨 앞 '반영 현황' 절(코드로 닫힌 것 / 스펙에만 적힌 것 / 아직 열린 것의 구분, 그리고 내 첫 보고가
    왜 과대 진술이었는지의 정정). 뒤쪽 '착수 전 게이트 체크리스트'가 실행 가능한 부분이다.
-3. `docs/harness/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할, 슬라이스 B 실행 명령,
+3. `docs/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할, 슬라이스 B 실행 명령,
    그리고 **슬라이스 A 파일 수정 예외 3건**(이걸 모르면 구현자가 경계를 지키려고 사본을 만든다).
-4. `docs/harness/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 슬라이스 B는
+4. `docs/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 슬라이스 B는
    구현 7~10단계. 이 세션이 AC-6·8·9·12·13·14·16·19·21과 §6, 구현 7~10단계를 개정했다.
-5. `docs/harness/devcareer-prep-plugin/cold_review.md` — 콜드 리뷰 41건. T1·T2·P8·T3로 닫힌 것과
+5. `docs/devcareer-prep-plugin/cold_review.md` — 콜드 리뷰 41건. T1·T2·P8·T3로 닫힌 것과
    남은 T4를 구분해 읽어라.
-6. `docs/harness/devcareer-prep-plugin/plan_critic_findings.md` — round 6 critic. **맨 앞 carry-over
+6. `docs/devcareer-prep-plugin/plan_critic_findings.md` — round 6 critic. **맨 앞 carry-over
    체크리스트와 `unInspectedAreas` 목록이 핵심**이다.
 7. `schemas/career.schema.json` — `verification` 필드 계약과 조건절 3종. knowledge-map·gap-report도
    같은 형태로 복제돼 있다(세 파일을 함께 고쳐야 한다).
@@ -194,4 +194,4 @@ Docs : docs/harness/devcareer-prep-plugin/
 '미착수'가 없어서 어떤 값을 적어도 사실과 어긋난다. 착수 상태는 Next Steps 1번이 정본이다.
 
 ## Resume
-Run: `/handoff resume docs/harness/handoff/2026-08-18-slice-b-gate-a-t3-prework.md`
+Run: `/handoff resume docs/handoff/2026-08-18-slice-b-gate-a-t3-prework.md`

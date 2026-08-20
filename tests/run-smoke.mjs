@@ -1892,7 +1892,7 @@ function runRenderContractOracleSmoke() {
       ["schemas", "career.schema.json"],
       ["schemas", "knowledge-map.schema.json"],
       ["schemas", "gap-report.schema.json"],
-      ["docs", "harness", "devcareer-prep-plugin", "spec.md"],
+      ["docs", "devcareer-prep-plugin", "spec.md"],
     ];
     const missing = [];
     for (const parts of anchors) {
@@ -2985,6 +2985,89 @@ function runSkillPromptContractSmoke() {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// gitignore된 경로 참조 가드 — 새 클론에서만 드러나는 고장을 여기서 막는다
+// ---------------------------------------------------------------------------
+
+/**
+ * **무시되는 산출물 디렉터리를 추적 코드가 참조하면 새 클론에서만 깨진다.**
+ *
+ * 이 가드가 왜 필요한지는 실제로 있었던 일이다. harness 산출물 디렉터리를
+ * 무시하기로 하기 전, `scripts/lib/sampling-literal-drift.mjs`가 그 아래의
+ * `spec.md`에서 정본 `samplingMethod` 리터럴을 추출하고 있었고 (R-8)도 같은
+ * 파일에서 배지 리터럴을 읽었다. 그 경로를 무시 대상으로 두면 **개발자
+ * 워킹 트리에는 파일이 남아 있어 네 게이트가 전부 녹색인데 새 클론에서는 두
+ * 단언이 FAIL한다.** 로컬에서만 통과하는 검사는 검사가 아니다.
+ *
+ * **금지 접두사를 이 파일에 적지 않는다.** 여기에 리터럴을 쓰면 이 함수 자신이
+ * 위반 대상이 되고, 그것을 피하려고 「이 파일만 예외」를 두는 순간 이 레포가
+ * 계속 닫아 온 자기면제 통로가 하나 생긴다. 대신 **닻을 `.gitignore`에 둔다** —
+ * 리터럴의 정본은 거기이고, 무시 목록이 바뀌면 이 가드가 따라간다.
+ *
+ * **스캔 범위를 「죽은 경로가 실제로 게이트를 깨는 표면」으로 좁힌다.**
+ * `.mjs`(테스트·라이브러리가 파일을 연다), 루트 `README.md`와
+ * `skills/**`(validate-plugin의 `DOC_PATH_NOT_FOUND`가 스캔한다 — 그 검사는
+ * 로컬에 파일이 있으면 통과하므로 클론 전까지 침묵한다). `docs/` 아래 산문은
+ * 대상이 아니다: 지난 회차의 핸드오프가 그때 그 경로를 적어 둔 것은 기록이지
+ * 살아 있는 의존이 아니다.
+ */
+function runIgnoredPathReferenceSmoke() {
+  console.log("[gitignore 경로 참조 가드] 무시되는 산출물 경로를 추적 코드가 참조하면 새 클론에서 깨진다");
+
+  // 정본은 .gitignore다. `docs/` 아래를 무시하는 줄만 뽑는다.
+  const ignoreLines = fs.readFileSync(path.join(REPO_ROOT, ".gitignore"), "utf8").split("\n");
+  const ignoredDocPrefixes = ignoreLines
+    .map((l) => l.trim())
+    .filter((l) => !l.startsWith("#") && l.startsWith("docs" + "/") && l.endsWith("/"));
+  const PROMOTED_PREFIX = "docs/devcareer-prep-plugin/";
+
+  const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files"], { encoding: "utf8" });
+  const tracked = ls.status === 0 ? ls.stdout.trim().split("\n").filter(Boolean) : [];
+
+  // 스캔 대상: 죽은 경로가 게이트를 깨는 표면만.
+  const scanned = tracked.filter(
+    (f) => f.endsWith(".mjs") || f === "README.md" || (f.startsWith("skills/") && f.endsWith(".md"))
+  );
+  const readTracked = (f) => {
+    try { return fs.readFileSync(path.join(REPO_ROOT, f), "utf8"); } catch { return ""; }
+  };
+
+  // ---- (DH-1a) 대상이 0건이 아닌가 ----
+  //      아래 금지 방향은 **접두사 집합**이 비거나 **스캔 대상**이 비면 둘 다
+  //      공허하게 통과한다. git이 없거나 ls-files가 실패해도 여기서 떨어진다 —
+  //      조용히 건너뛰지 않는다.
+  {
+    const ok = ls.status === 0 && scanned.length >= 5 && ignoredDocPrefixes.length >= 1;
+    if (!ok) console.log(`    실제: git exit=${ls.status} 스캔 대상 ${scanned.length}건 무시 접두사 ${JSON.stringify(ignoredDocPrefixes)}`);
+    report(ok, "(DH-1a) .gitignore가 docs 하위 무시 접두사를 갖고 추적되는 스캔 대상이 실재한다(금지 방향이 공허해지지 않는 전제)");
+  }
+
+  // ---- (DH-1b) 금지 방향: 무시되는 경로를 참조하지 않는가 ----
+  {
+    const offenders = [];
+    for (const f of scanned) {
+      const text = readTracked(f);
+      const hit = ignoredDocPrefixes.find((p) => text.includes(p));
+      if (hit !== undefined) offenders.push(`${f} → ${hit}`);
+    }
+    const ok = offenders.length === 0;
+    if (!ok) console.log(`    실제: 무시되는 경로를 참조하는 추적 파일 ${JSON.stringify(offenders)}`);
+    report(ok, `(DH-1b) 추적되는 코드·lint 스캔 대상 어디에도 무시 접두사(${ignoredDocPrefixes.join(", ")}) 참조가 없다(새 클론에서만 깨지는 고장 차단)`);
+  }
+
+  // ---- (DH-1c) 허용 방향: 승격된 경로는 참조해도 되는가 ----
+  //      금지 방향만 두면 「`docs/` 전체를 금지」로 넓어져도 아무것도 깨지지
+  //      않는다. 그러면 spec.md를 닻으로 쓰는 드리프트 가드를 아예 만들 수
+  //      없게 된다 — 이 가드가 지키려는 것과 정반대다. 승격된 경로를 실제로
+  //      참조하는 파일이 있고 그것이 위반으로 잡히지 않는 것을 함께 본다.
+  {
+    const users = scanned.filter((f) => readTracked(f).includes(PROMOTED_PREFIX));
+    const ok = users.length >= 1;
+    if (!ok) console.log(`    실제: '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 0건이다(spec.md 닻이 사라졌는가?)`);
+    report(ok, `(DH-1c) 허용 방향: 승격된 '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 1건 이상이고 위반이 아니다`);
   }
 }
 
@@ -6100,7 +6183,7 @@ function runSamplingLiteralDriftSmoke() {
     try {
       fs.mkdirSync(path.join(tmpRoot, "schemas"), { recursive: true });
       fs.mkdirSync(path.join(tmpRoot, "fixtures", "golden"), { recursive: true });
-      fs.mkdirSync(path.join(tmpRoot, "docs", "harness", "devcareer-prep-plugin"), { recursive: true });
+      fs.mkdirSync(path.join(tmpRoot, "docs", "devcareer-prep-plugin"), { recursive: true });
 
       const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "evidence.schema.json"), "utf8"));
       const desc = schema.$defs.coverage.properties.samplingMethod.description;
@@ -6121,8 +6204,8 @@ function runSamplingLiteralDriftSmoke() {
         path.join(tmpRoot, "fixtures", "golden", "compute-sampling-golden.mjs")
       );
       fs.copyFileSync(
-        path.join(REPO_ROOT, "docs", "harness", "devcareer-prep-plugin", "spec.md"),
-        path.join(tmpRoot, "docs", "harness", "devcareer-prep-plugin", "spec.md")
+        path.join(REPO_ROOT, "docs", "devcareer-prep-plugin", "spec.md"),
+        path.join(tmpRoot, "docs", "devcareer-prep-plugin", "spec.md")
       );
 
       const result = checkSamplingMethodLiteralDrift(tmpRoot);
@@ -6150,7 +6233,7 @@ function runSamplingLiteralDriftSmoke() {
         result.ok === false &&
         result.missing.includes("schemas/evidence.schema.json") &&
         result.missing.includes("fixtures/golden/compute-sampling-golden.mjs") &&
-        result.missing.includes("docs/harness/devcareer-prep-plugin/spec.md");
+        result.missing.includes("docs/devcareer-prep-plugin/spec.md");
       if (!ok) console.log(`    실제: ${JSON.stringify(result)}`);
       report(ok, "FAIL 관측(missing): 스키마·골든 스크립트·spec.md 세 파일이 모두 없으면(빈 루트) 조용히 통과하지 않고 missing으로 보고");
     } finally {
@@ -6298,6 +6381,7 @@ function runCommonSections() {
   runSection("산출물 계약 오라클(구현 7단계 (a)(b)(g))", runArtifactContractOracleSmoke);
   runSection("원장 투영 오라클(구현 7단계 (f)·게이트 E-3)", runLedgerProjectionOracleSmoke);
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
+  runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);

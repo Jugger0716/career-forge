@@ -1,7 +1,7 @@
 // scripts/lib/sampling-literal-drift.mjs
 //
 // 콜드 리뷰 A-19 대응: 정본 `samplingMethod` 리터럴은 네 곳에 물리적으로
-// 존재한다 — (1) docs/harness/devcareer-prep-plugin/spec.md 구현 5단계
+// 존재한다 — (1) docs/devcareer-prep-plugin/spec.md 구현 5단계
 // 본문, (2) schemas/evidence.schema.json의 coverage.samplingMethod
 // description, (3) scripts/lib/sampling.mjs의
 // CANONICAL_SAMPLING_METHOD_LITERAL, (4) fixtures/golden/compute-sampling-
@@ -23,7 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CANONICAL_SAMPLING_METHOD_LITERAL } from "./sampling.mjs";
 
-export const SPEC_MD_REL = "docs/harness/devcareer-prep-plugin/spec.md";
+export const SPEC_MD_REL = "docs/devcareer-prep-plugin/spec.md";
 export const EVIDENCE_SCHEMA_REL = "schemas/evidence.schema.json";
 export const GOLDEN_SCRIPT_REL = "fixtures/golden/compute-sampling-golden.mjs";
 export const SAMPLING_LIB_REL = "scripts/lib/sampling.mjs";
@@ -78,7 +78,7 @@ export function extractLiteralFromSchema(repoRoot) {
 }
 
 /**
- * docs/harness/devcareer-prep-plugin/spec.md 구현 5단계 본문에서 정본
+ * docs/devcareer-prep-plugin/spec.md 구현 5단계 본문에서 정본
  * 리터럴을 추출한다.
  *
  * @param {string} repoRoot

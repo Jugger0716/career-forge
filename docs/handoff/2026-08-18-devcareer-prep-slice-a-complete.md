@@ -34,7 +34,7 @@ Skill : harness
 Task : DevCareer Prep — Claude Code 플러그인 개발 (Git 히스토리 → 경력 기술서 → 지식 갭 분석 → 학습/코테 계획)
 Phase : plan_done
 Mode : multi
-Docs : docs/harness/devcareer-prep-plugin/
+Docs : docs/devcareer-prep-plugin/
 
 **위 `Phase` 값은 현실과 어긋나 있다.** 슬라이스 A 구현이 끝났는데도 harness 위상 기계는
 `plan_done`에 멈춰 있다 — 에픽 경로를 택했고, §Step 8의 epic-exit(`.harness/` 삭제)을 실행하지
@@ -100,11 +100,11 @@ Docs : docs/harness/devcareer-prep-plugin/
 
 ## Reading Order
 
-1. `docs/harness/handoff/2026-08-18-devcareer-prep-slice-a-complete.md` — 이 문서. 현재 위치와 남은 것.
-2. `docs/harness/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할과 각 슬라이스의 실행 명령.
-3. `docs/harness/devcareer-prep-plugin/cold_review.md` — 콜드 리뷰 41건. `confidenceBasis`별로 섹션이 나뉘어 있다. T1·T2·P8로 닫힌 것과 남은 T3·T4를 구분해 읽어라.
-4. `docs/harness/devcareer-prep-plugin/plan_critic_findings.md` — round 6 critic 리포트. **맨 앞 carry-over 체크리스트와 `unInspectedAreas` 목록이 핵심**이다. 슬라이스 B가 미검사 영역임을 여기서 확인하라.
-5. `docs/harness/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 슬라이스 B는 구현 7~10단계.
+1. `docs/handoff/2026-08-18-devcareer-prep-slice-a-complete.md` — 이 문서. 현재 위치와 남은 것.
+2. `docs/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할과 각 슬라이스의 실행 명령.
+3. `docs/devcareer-prep-plugin/cold_review.md` — 콜드 리뷰 41건. `confidenceBasis`별로 섹션이 나뉘어 있다. T1·T2·P8로 닫힌 것과 남은 T3·T4를 구분해 읽어라.
+4. `docs/devcareer-prep-plugin/plan_critic_findings.md` — round 6 critic 리포트. **맨 앞 carry-over 체크리스트와 `unInspectedAreas` 목록이 핵심**이다. 슬라이스 B가 미검사 영역임을 여기서 확인하라.
+5. `docs/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 슬라이스 B는 구현 7~10단계.
 6. `scripts/collect-git-facts.mjs` + `scripts/lib/git.mjs` — 증거 원장을 만드는 주체. 슬라이스 B의 스킬은 이 산출물을 **소비만** 한다.
 7. `scripts/verify-evidence.mjs` — 인용 무결성 집행 코드. 스킬이 만든 산출물이 이것을 통과해야 한다.
 8. `README.md` — 현재 무엇이 되고 무엇이 안 되는지(스킬 계층 부재를 명시하고 있다).
@@ -129,4 +129,4 @@ Docs : docs/harness/devcareer-prep-plugin/
 | devcareer-prep-plugin | slice-a-deterministic-foundation | done | 97675e7b1a9204aa722584d9917d9cde07db89de | 구현 1~6단계 + 콜드 리뷰 T1·T2·P8 반영. 4게이트 녹색(lint 0 / 201 / 19 / 11). T3(설계 재검토 — 타인 커밋 PII, 성능 O(N))·T4(Minor 약 16건) 미반영. 원격 미푸시. |
 
 ## Resume
-Run: `/handoff resume docs/harness/handoff/2026-08-18-devcareer-prep-slice-a-complete.md`
+Run: `/handoff resume docs/handoff/2026-08-18-devcareer-prep-slice-a-complete.md`
