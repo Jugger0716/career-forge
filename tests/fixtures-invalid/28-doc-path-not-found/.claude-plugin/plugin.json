@@ -1,0 +1,9 @@
+{
+  "name": "devcareer-prep",
+  "version": "0.1.0",
+  "description": "정상 plugin.json — 이 케이스는 SKILL.md가 참조하는 상대 경로의 실재성만 검사한다(케이스 28).",
+  "author": {
+    "name": "Jugger"
+  },
+  "license": "MIT"
+}
