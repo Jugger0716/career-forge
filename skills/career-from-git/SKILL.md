@@ -113,12 +113,18 @@ node scripts/write-artifact.mjs --layer career --draft <draft.json> \
 | 0 | 기록 + 레지스트리 갱신 완료 | 다음 단계 |
 | 1 | 계약·스키마 위반 — 아무것도 쓰지 않음 | 출력을 고쳐 다시 부른다 |
 | 2 | 입력 오류(인자·파일·경계) — 쓰지 않음 | 인자를 고친다 |
-| 3 | 안전하게 덮어쓸 수 없음 — 쓰지 않음 | **사용자에게 묻는다**(아래 참조) |
+| 3 | 안전하게 쓸 수 없음 — 산출물을 쓰지 않음 | **사용자에게 보여 주고 판단을 받는다**(아래 참조) |
 | 4 | 산출물은 기록됐으나 레지스트리 갱신 실패 | 재실행 전에 상태 파일 확인 |
 
 **exit 3을 `--force`로 자동 재시도하지 마라.** 그것은 사용자가 손으로 고친
 내용을 덮어쓰는 결정이고, 기계가 대신할 수 없다. 보류 사유 코드를 그대로
 사용자에게 보여 주고 판단을 받아라. 강행하면 `.bak` 1세대만 남는다.
+
+**exit 3에는 `--force`로 해소되지 않는 사유도 있다.** `[HOLD]` 코드를 보고
+구별하라 — `ARTIFACT_WRITE_FAILED`(파일시스템 쓰기 실패)와
+`LAYER_SCHEMA_UNREADABLE`(플러그인 설치 손상)은 사용자 편집과 무관하며,
+`--force`를 붙이면 같은 실패를 반복할 뿐이다. 저장 루트의 권한·경로·디스크
+공간이나 설치 상태를 확인하라고 보고하는 것이 맞다.
 
 ### 5. FactChecker 디스패치 (상위 티어) — 2단 팩트체크
 
@@ -141,9 +147,15 @@ node scripts/write-artifact.mjs --layer career --draft <판정 실린 JSON> \
 
 ```sh
 node scripts/verify-evidence.mjs --repo <레포 경로> \
+  --identity <선택된 이메일> [--identity ...] \
   --evidence <원장 경로> --artifact career=<저장 루트>/career.json \
   --sources references/sources.json
 ```
+
+**저자를 반드시 넘겨라.** `--identity`(또는 `--config`)가 없으면 이 스크립트는
+검증 축에 도달하기 **전에** `selectedIdentities가 비어 있습니다`로 exit 2한다 —
+즉 아래에서 설명하는 반증이 **한 번도 실행되지 않은 채** 「검증했다」고 말하게
+된다. 값은 0단계에서 사용자가 고른 이메일 그대로다.
 
 **왜 필수인가.** `--stage fact-checked`는 호출자가 넘기는 **라벨**이다.
 오케스트레이션이 FactChecker를 실제로 띄우지 않고 이 값만 넘기면 쓰기 경계는
@@ -152,9 +164,15 @@ node scripts/verify-evidence.mjs --repo <레포 경로> \
 저자의 것이면 여기서 FAIL이 나고, 산출물이 로드됐는데 인용이 한 건도 없으면
 `INCONCLUSIVE`가 난다.
 
-exit 1(FAIL)이나 exit 2(INCONCLUSIVE)면 **사용자에게 보고하고 멈춘다.**
+exit 1(FAIL)이나 exit 2면 **사용자에게 보고하고 멈춘다.**
 "검증은 돌렸다"고 말하면서 결과를 무시하는 것이 이 파이프라인에서 가장 나쁜
 실패다.
+
+**exit 2를 INCONCLUSIVE로 단정하지 마라 — 입력 오류도 같은 코드로 나온다.**
+이 스크립트는 `[INPUT_ERROR]`(인자·파일 문제)와 `[INCONCLUSIVE]`(검증을 완결하지
+못함)를 **둘 다 exit 2**로 낸다. 구별은 stderr 접두사로 한다. 「증거가 부족해
+결론을 못 냈다」와 「내가 인자를 잘못 줬다」는 사용자에게 전혀 다른 이야기이므로,
+접두사를 보지 않고 보고하면 그럴듯하지만 틀린 이유를 전달하게 된다.
 
 ### 8. 마스킹 우회 검사
 
