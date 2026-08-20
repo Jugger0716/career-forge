@@ -3,7 +3,7 @@
 > **출처 고지**: 이 레포는 이번 세션에서 `git init`된 **빈 레포**다 (`.gitignore` 1개 커밋만 존재).
 > 따라서 코드베이스 스캔으로 도출된 관례는 **하나도 없다**. 아래 내용은 전부
 > (a) 사용자 전역 `~/.claude/CLAUDE.md`, (b) 사용자 제공 SPEC 원문
-> (`docs/harness/devcareer-prep-plugin/SPEC_INPUT.md`) 에서 온 **선언된 제약**이며,
+> (`docs/devcareer-prep-plugin/SPEC_INPUT.md`) 에서 온 **선언된 제약**이며,
 > 관찰된 기존 패턴이 아니다. Planner는 이를 "지켜야 할 규칙"으로 취급하되
 > "이미 존재하는 코드 패턴"으로 오인하면 안 된다.
 
@@ -68,3 +68,31 @@
     이는 `.claude-plugin/plugin.json`의 위치를 좌우하므로 스펙 확정 게이트에서 반드시 결정해야 한다.
 - **public 레포**이므로 처음부터 공개를 전제한다: 개인 식별 정보, 로컬 절대경로, 실제 커밋 해시가 담긴
   개인 경력 데이터(`.devcareer/`)는 커밋 대상이 아니며 `.gitignore`에 포함되어야 한다.
+
+## 9. 문서 위치 규약 (2026-08-20 확정 — harness 산출물 vs 프로젝트 기억)
+
+- **`docs/harness/`는 gitignore된다.** `/harness`·`/deep-review`·`/handoff`가 쓰는 **도구 작업
+  디렉터리**이며, 회차 산출물이 기본으로 커밋되는 것은 잘못된 기본값이다.
+- **남길 가치가 있는 문서는 `docs/` 아래로 명시적으로 승격한다.** 현재 위치:
+  - `docs/devcareer-prep-plugin/` — 실행 스펙 정본(`spec.md`), 이 규약 문서, 슬라이스 분할
+    (`slice_plan.md`), 착수 전 게이트 체크리스트(`slice_b_spec_review.md`), 심사 기록
+    (`plan_critic_findings.md`·`cold_review.md`), 스펙 입력(`SPEC_INPUT.md`).
+  - `docs/handoff/` — 세션 핸드오프. **Progress Ledger가 여기 있고 그것이 에픽 연속성의 유일한
+    장치**이므로 반드시 추적한다.
+- **`spec.md`는 산문이 아니라 기계가 읽는 파일이다.** `samplingMethod` 정본 리터럴과 근거 배지
+  리터럴의 드리프트 가드가 이 파일을 **모듈 밖 닻**으로 삼아 텍스트에서 추출한다. 옮기거나
+  이름을 바꿀 때는 `scripts/lib/sampling-literal-drift.mjs`의 `SPEC_MD_REL`과 `tests/run-smoke.mjs`의
+  경로 조립 지점을 함께 고쳐야 한다.
+- **추적되는 코드·lint 스캔 대상이 `docs/harness/` 아래를 참조하면 안 된다.** 워킹 트리에는
+  파일이 남아 있어 네 게이트가 녹색인데 **새 클론에서만 FAIL**하는 고장이 나기 때문이다.
+  스모크 (DH-1)이 막으며, 금지 접두사의 정본은 `.gitignore`다.
+
+### 이 결정이 바꾼 도구 동작 (감추지 않는다)
+
+- **`/handoff resume`에 경로를 직접 줘라.** 경로 없는 `resume`과 `list`는 `docs/harness/handoff/`를
+  보므로 승격된 핸드오프를 찾지 못한다. `/handoff generate`도 여전히 그 아래에 쓰므로, 남길
+  핸드오프는 `docs/handoff/`로 옮겨 커밋한다.
+- **콜드 리뷰 리포트는 로컬 전용이다.** `docs/harness/<대상 slug>/review_report.md`는 추적하지
+  않는다 — 옮기면 `/deep-review`의 라운드 자동 감지가 같은 대상을 라운드 1로 다시 인식한다.
+  **대가**: 새 클론에는 리포트 전문이 없다. 남는 것은 핸드오프 본문의 미반영 항목 요약이며,
+  백로그로서 실제로 쓰이는 것은 그쪽이다.

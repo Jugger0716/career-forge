@@ -1,6 +1,6 @@
 # fixtures/golden/ — 생성 근거 (이월 게이트 B-3)
 
-> 대상: `docs/harness/devcareer-prep-plugin/spec.md` 구현 4단계(Phase 0-D).
+> 대상: `docs/devcareer-prep-plugin/spec.md` 구현 4단계(Phase 0-D).
 > 이 문서는 "골든 JSON만 커밋하는 것을 금지한다"는 스펙 요구의 필수 동반
 > 산출물이다 — 골든이 어떻게 나왔는지에 대한 독립적 근거 없이는, 잘못
 > 구현된 수집기의 출력을 그대로 골든으로 커밋해도 AC-21의 (a)(b)(c)와

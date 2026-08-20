@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-19  **Project:** career-forge (devcareer-prep 플러그인)
 **Branch:** harness/devcareer-prep-plugin-2  **HEAD:** 2645ee944343a47de335e4a2fde27f47ddde4643 — feat(render): put the markdown contract under test before any prompt exists
-**Dirty:** 1 file (`docs/harness/handoff/2026-08-19-slice-b-exceptions-closed.md` — 직전 핸드오프, untracked)  **Upstream:** 없음 (원격 `origin` = github.com/Jugger0716/career-forge. 이 브랜치가 원격 `main`보다 **22커밋** 앞섬 — 푸시하지 않음)
+**Dirty:** 1 file (`docs/handoff/2026-08-19-slice-b-exceptions-closed.md` — 직전 핸드오프, untracked)  **Upstream:** 없음 (원격 `origin` = github.com/Jugger0716/career-forge. 이 브랜치가 원격 `main`보다 **22커밋** 앞섬 — 푸시하지 않음)
 
 ## Goal
 
@@ -151,13 +151,13 @@ machine-verifiable"을 보고할 것이다. 그것이 정상이다.
 
 ## Reading Order
 
-1. `docs/harness/handoff/2026-08-19-slice-b-c5-closed-render-contract.md` — 이 문서. 현재 위치와 남은 것.
-2. `docs/harness/devcareer-prep-plugin/slice_b_spec_review.md` — 뒤쪽 **'착수 전 게이트 체크리스트'**가
+1. `docs/handoff/2026-08-19-slice-b-c5-closed-render-contract.md` — 이 문서. 현재 위치와 남은 것.
+2. `docs/devcareer-prep-plugin/slice_b_spec_review.md` — 뒤쪽 **'착수 전 게이트 체크리스트'**가
    가장 실행 가능한 부분이다. B-1·B-2·C-1·C-2·**C-5·C-6·E-1·E-2**가 `[x]`이고 각각 무엇으로
    닫혔는지, **E-3이 왜 열려 있는지**가 적혀 있다.
-3. `docs/harness/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할과 **슬라이스 A 파일 수정
+3. `docs/devcareer-prep-plugin/slice_plan.md` — 3슬라이스 분할과 **슬라이스 A 파일 수정
    예외 5건**(5번이 이 세션에서 추가됐고 T4 범위를 좁힌 근거가 함께 있다). **5건은 모두 소비됐다.**
-4. `docs/harness/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 다음 작업은
+4. `docs/devcareer-prep-plugin/spec.md` — 실행 스펙 정본(22 AC / 12 구현단계). 다음 작업은
    구현 7단계 ③이며 (a)~(g) 중 (a)(b)(g)가 아직 코드가 없다. 이 파일은 131KB이므로 통독하지 말고
    `awk '/^\*\*7\. /,/^- 검증 영향/'` 같은 방식으로 필요한 단계만 잘라 읽어라.
 5. `scripts/lib/render-contract.mjs` — 렌더 계약의 정본. `RENDER_REQUIRED_ELEMENTS`가 **데이터**라
@@ -169,9 +169,9 @@ machine-verifiable"을 보고할 것이다. 그것이 정상이다.
 8. `tests/run-smoke.mjs`의 `runRenderContractOracleSmoke`·`runCitationCoverageOracleSmoke` —
    절 단위 오라클 패턴. **새 제약을 넣을 때 이 표들에 행을 추가하는 것이 가장 싼 관측 방법이다.**
    이 파일은 4300줄이 넘으므로 함수 단위로 잘라 읽어라.
-9. `docs/harness/devcareer-prep-plugin/plan_critic_findings.md`의 「미검사 영역」 표(158행 부근) —
+9. `docs/devcareer-prep-plugin/plan_critic_findings.md`의 「미검사 영역」 표(158행 부근) —
    구현 7~12단계가 6라운드 내내 정면 검사 0회였다는 기록.
-10. `docs/harness/devcareer-prep-plugin/conventions.md` — 규약 문서(70줄). 이 레포엔 `CLAUDE.md`가
+10. `docs/devcareer-prep-plugin/conventions.md` — 규약 문서(70줄). 이 레포엔 `CLAUDE.md`가
     없다 — 필요하면 레포 루트 `CLAUDE.md`로 승격을 검토하라.
 
 ## Do NOT
@@ -223,4 +223,4 @@ machine-verifiable"을 보고할 것이다. 그것이 정상이다.
 | devcareer-prep-plugin | slice-b-p0-skill-layer | in-progress | 2645ee944343a47de335e4a2fde27f47ddde4643 | **구현 7단계의 결정적 부분까지 완료.** 이전 세션이 예외 1~4(게이트 B-1·B-2·C-1·C-2 + 스키마 external)를 닫았고, **이 세션이 예외 5번(게이트 C-5 「인용 0건 = PASS」 fail-open + T4의 A-32·A-34)과 렌더 계약(m-3, 게이트 E-1·E-2)을 닫았다.** 4게이트 녹색(lint 0 / **345** / 27 / 11). 변이 12종으로 절 단위 관측. **미착수: 구현 7단계 ③(스킬 프롬프트 2종)·7단계 (a)(b)(g)·8~10단계.** **게이트 E-3이 열려 있다** — `projectLedgerForSkills`는 호출자가 0곳이라 소스 스캔 단언이 없고, `skills/career-from-git/` 작성 시 반드시 넣어야 §6 보조 방어가 선언으로 남지 않는다. C-5는 산출물 단위 판정이라 부분 커버리지(99 insufficient + 1 external)를 PASS로 낸다. **T4 14건 미반영**, 도그푸딩 레포 미확정, (f)축 잔여 위험 그대로. 원격 미푸시(22커밋). |
 
 ## Resume
-Run: `/handoff resume docs/harness/handoff/2026-08-19-slice-b-c5-closed-render-contract.md`
+Run: `/handoff resume docs/handoff/2026-08-19-slice-b-c5-closed-render-contract.md`

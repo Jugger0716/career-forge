@@ -6,9 +6,9 @@
 
 | Slice | Goal | In scope | AC ids | Depends on | Command |
 |---|---|---|---|---|---|
-| `slice-a-deterministic-foundation` | 결정적 기반 — 명명·라이선스 정본, JSON Schema 세트, validate-plugin.mjs(Layer 1 하네스), 결정적 픽스처 생성기, collect-git-facts.mjs(L0 수집기), verify-evidence.mjs(인용 무결성). LLM이 전혀 개입하지 않는 순수 스크립트·스키마 계층이며 단독으로 기계 검증 가능하다. | 구현 단계 1~6 · `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `package.json`, `LICENSE`, `README.md`, `.gitattributes`, … 외 23개 | AC-1, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-11, AC-14, AC-15, AC-17, AC-18, AC-19, AC-21 | — | `/harness "slice-a-deterministic-foundation" --output-dir docs/harness/devcareer-prep-plugin` |
-| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 표에 적힌 건만 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/harness/devcareer-prep-plugin` |
-| `slice-c-extension-and-release` | 확장·공개 — /devcareer-prep:prep-plan(Phase 3), README·아키텍처 다이어그램·예제·한계 고지, 오픈소스 공개 준비. 앞 두 슬라이스가 "쓸 만해"진 뒤에만 착수한다. | 구현 단계 11~12 · `skills/prep-plan/SKILL.md`, `skills/prep-plan/templates/curriculum-designer.md`, `schemas/plan.schema.json`, `README.md`, `examples/`, `docs/harness/devcareer-prep-plugin/`, … 외 1개 | AC-14, AC-18, AC-19 | `slice-b-p0-skill-layer` | `/harness "slice-c-extension-and-release" --output-dir docs/harness/devcareer-prep-plugin` |
+| `slice-a-deterministic-foundation` | 결정적 기반 — 명명·라이선스 정본, JSON Schema 세트, validate-plugin.mjs(Layer 1 하네스), 결정적 픽스처 생성기, collect-git-facts.mjs(L0 수집기), verify-evidence.mjs(인용 무결성). LLM이 전혀 개입하지 않는 순수 스크립트·스키마 계층이며 단독으로 기계 검증 가능하다. | 구현 단계 1~6 · `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `package.json`, `LICENSE`, `README.md`, `.gitattributes`, … 외 23개 | AC-1, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-11, AC-14, AC-15, AC-17, AC-18, AC-19, AC-21 | — | `/harness "slice-a-deterministic-foundation" --output-dir docs/devcareer-prep-plugin` |
+| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 표에 적힌 건만 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/devcareer-prep-plugin` |
+| `slice-c-extension-and-release` | 확장·공개 — /devcareer-prep:prep-plan(Phase 3), README·아키텍처 다이어그램·예제·한계 고지, 오픈소스 공개 준비. 앞 두 슬라이스가 "쓸 만해"진 뒤에만 착수한다. | 구현 단계 11~12 · `skills/prep-plan/SKILL.md`, `skills/prep-plan/templates/curriculum-designer.md`, `schemas/plan.schema.json`, `README.md`, `examples/`, `docs/devcareer-prep-plugin/`, … 외 1개 | AC-14, AC-18, AC-19 | `slice-b-p0-skill-layer` | `/harness "slice-c-extension-and-release" --output-dir docs/devcareer-prep-plugin` |
 
 ## 슬라이스 A 파일 수정 예외 (slice-b-p0-skill-layer)
 
@@ -98,7 +98,7 @@
 > 축소)를 반영한 것이다. 이는 슬라이스 B **착수 전** 스펙·계약 개정이며 위 예외 표와는 별개다.
 > 슬라이스 A의 Progress Ledger 행(`done`)이 가리키는 커밋 이후의 변경이므로, 그 행의 근거 커밋만
 > 보고 현재 상태를 판단하지 마라. 그 Ledger는 이 파일이 아니라
-> `docs/harness/handoff/2026-08-18-devcareer-prep-slice-a-complete.md`에 있고, 핸드오프 문서는
+> `docs/handoff/2026-08-18-devcareer-prep-slice-a-complete.md`에 있고, 핸드오프 문서는
 > 시점 기록이라 갱신되지 않는다(HEAD·게이트 수치가 그 시점 값 그대로 남는다) — 최신 상태는
 > `git log`와 `slice_b_spec_review.md`의 '반영 현황' 절을 보라.
 

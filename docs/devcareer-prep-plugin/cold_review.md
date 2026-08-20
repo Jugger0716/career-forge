@@ -2,7 +2,7 @@
 
 > **이 리뷰는 앵커 없이(anchor-free) 수행됐다.**
 > 5개 렌즈(정확성 / 구조·유지보수성 / 견고성·리소스 / 보안·프라이버시 / 계약 일관성)의 리뷰어와 적대적 반증 검증자 모두
-> `docs/harness/devcareer-prep-plugin/`의 `spec.md`·`plan_critic_findings.md`·`slice_plan.md`·`SPEC_INPUT.md`와 `.harness/`를 **열지 않았다**.
+> `docs/devcareer-prep-plugin/`의 `spec.md`·`plan_critic_findings.md`·`slice_plan.md`·`SPEC_INPUT.md`와 `.harness/`를 **열지 않았다**.
 > 즉 이 리포트의 모든 지적은 "코드·스키마·README·테스트만 읽고, 실제로 실행해 재현한 것"에 근거하며,
 > **설계 문서에서 이미 의도적으로 결정했거나 후속 구현 단계(skills 계층)의 몫으로 미룬 사항을 결함으로 오인한 항목이 섞여 있을 수 있다.**
 >

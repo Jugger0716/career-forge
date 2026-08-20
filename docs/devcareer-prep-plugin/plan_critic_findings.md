@@ -1,6 +1,6 @@
 # Plan Critic 리포트 (round 6 — 최종 / 구현 이월 게이트 명세) — DevCareer Prep 실행 스펙
 
-> 대상: `docs/harness/devcareer-prep-plugin/spec.md` (round 5 지적 4건을 최종 Edit로 반영한 개정본)
+> 대상: `docs/devcareer-prep-plugin/spec.md` (round 5 지적 4건을 최종 Edit로 반영한 개정본)
 > 방법: round 5 지적 4건의 반영 확인 → **AC 자기참조 절단 감사**(축소 확인 패스)
 > **이 문서의 성격이 바뀌었다.** 사용자가 결과와 무관하게 round 6으로 스펙 정제를 종료하고 구현으로 넘어가기로 결정했으므로,
 > 이 리포트는 「다음 라운드 지시서」가 아니라 **구현자가 착수 전·중에 참조하는 게이트 명세**다. 남은 지적은 「고쳐서 다시 리뷰받을 것」이 아니라

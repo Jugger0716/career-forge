@@ -1,7 +1,7 @@
 # fixtures/ — 결정적 골든 픽스처 생성기 (구현 4단계, Phase 0-D)
 
-대상 스펙: `docs/harness/devcareer-prep-plugin/spec.md` "구현 단계 4. Phase 0-D".
-이월 게이트: `docs/harness/devcareer-prep-plugin/plan_critic_findings.md` 게이트 B(B-1~B-6).
+대상 스펙: `docs/devcareer-prep-plugin/spec.md` "구현 단계 4. Phase 0-D".
+이월 게이트: `docs/devcareer-prep-plugin/plan_critic_findings.md` 게이트 B(B-1~B-6).
 
 `scripts/collect-git-facts.mjs`(L0 수집기)와 `scripts/lib/git.mjs`는 이 레포에
 이미 구현돼 있다. 이 디렉터리는 그 수집기가 입력으로 삼을 **"실제 git 레포"만

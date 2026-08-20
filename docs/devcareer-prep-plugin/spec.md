@@ -226,7 +226,7 @@ MVP P0 = `/devcareer-prep:career-from-git` + `/devcareer-prep:skill-gap`(자가�
 
 **10. Phase 1 종료 직후 도그푸딩. 200커밋 이상 다중 저자 실레포로 `/devcareer-prep:career-from-git` → `/devcareer-prep:skill-gap` 전체 파이프라인을 실행하고, 정상 종료·커버리지 기재·인용 실존율·저자 혼입 0건을 확인한다. 사람 판정('실제로 쓸 수 있다', '우선순위가 공감된다')은 기계 게이트와 분리해 별도 기록한다. 설치 후 라우팅 오발동 테스트도 이 시점에 수행하며, 이때 실제 노출되는 명령 접두사가 `devcareer-prep:`인지 육안 확인한다. **이 단계에는 선행 조건이 둘 있다.** (a) **§6의 제외 커밋 PII 정책이 반영돼 있어야 한다** — 도그푸딩은 실제 동료가 커밋한 레포에서 돌리는 것이므로, 이 단계가 타인 PII가 픽스처가 아니라 실물로 처음 흐르는 지점이다. (b) **대상 레포를 착수 전에 확정해 이 자리에 이름·커밋 수·저자 수·공개 여부로 기재한다 — 현재 미확정이다.** 리스크 절이 '지금 확보해'라고 적었으나 확보 여부를 기록한 문서가 없고, 거명된 후보 둘은 각각 결격 사유가 함께 적혀 있다(문서 비중 과다 / 사용자 커밋 9건). 미확정 상태로 이 단계에 도달하면 단계가 통째로 막힌다.**
 
-- 파일: `docs/harness/devcareer-prep-plugin/`, `examples/`
+- 파일: `docs/devcareer-prep-plugin/`, `examples/`
 - 검증 영향: 실레포 기준 회귀 확인. 대형 히스토리에서의 샘플링·예산 상한 동작 실증(정확성 판정은 AC-21의 300커밋 픽스처가 담당) (AC-18 후반부, AC-20).
 
 **11. Phase 3: `/devcareer-prep:prep-plan` 구현. plan.json 스키마 추가, CurriculumDesigner 템플릿이 gap-report.json ID만 참조해 우선순위 학습 계획과 코딩테스트 문제를 생성한다. 생성 문제는 정답 코드 + 테스트 케이스를 함께 만들고 가능하면 실제 실행으로 자가 검증하며, 실행 불가한 개념 문제는 출처 링크 필수 또는 '미검증' 배지. 문제 산출물의 신뢰 등급을 경력 기술서와 명시적으로 분리 표기.**
@@ -236,7 +236,7 @@ MVP P0 = `/devcareer-prep:career-from-git` + `/devcareer-prep:skill-gap`(자가�
 
 **12. 오픈소스 공개 준비. README에 설치 방법·아키텍처 다이어그램·데모, 픽스처 기반 예제만 examples/에 포함(실제 레포의 커밋 해시·저자 이메일 노출 금지), 한계 고지 섹션(커밋 이력≠기여도 — 코드 리뷰·설계 논의·페어·장애 대응은 git에 남지 않음), 프라이버시·NDA 경고. validate-plugin에 examples/ PII 패턴 검사 추가.**
 
-- 파일: `README.md`, `examples/`, `docs/harness/devcareer-prep-plugin/`, `scripts/validate-plugin.mjs`
+- 파일: `README.md`, `examples/`, `docs/devcareer-prep-plugin/`, `scripts/validate-plugin.mjs`
 - 검증 영향: validate-plugin에 PII 검사 항목 추가로 공개 직전 재작업 방지. README의 명령 표기가 접두사 검사(AC-18)를 통과하는지 재확인.
 
 ### 테스트 전략
