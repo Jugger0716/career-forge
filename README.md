@@ -6,18 +6,18 @@ Git 커밋 히스토리를 **결정적 스크립트**로 수집해 만든 "증�
 사실 원천으로 삼고, 그 위에 경력 기술서 → 기술 지식맵 → 학습 갭 리포트를 단방향 계층으로 쌓는
 Claude Code 플러그인이다. 모든 인용의 실재성은 LLM이 아니라 스크립트가 검증한다.
 
-> **현재 상태: 구현 진행 중 (Phase 0 — 결정적 하네스 완료, 스킬 계층 착수 전).**
+> **현재 상태: 구현 진행 중 (Phase 1 — 결정적 하네스 완료, 경력 계층 스킬 착수).**
 > **된 것**: L0 수집기(`scripts/collect-git-facts.mjs`)·인용 검증기
 > (`scripts/verify-evidence.mjs`)·Layer 1 기계 검증(`scripts/validate-plugin.mjs`)과
-> 7개 JSON Schema(`schemas/`)가 모두 구현·배선돼 있고, `npm run lint`와 `npm test`가
-> 로컬에서 그대로 통과한다(아래 "빠른 시작"의 명령을 그대로 복사해 실행하면 재현된다).
-> **안 된 것**: 사용자가 `/devcareer-prep:career-from-git` 같은 슬래시 명령으로 부르는
-> *skills/* 계층(LLM이 위 스크립트를 호출해 실제로 경력 기술서·지식맵·갭 리포트를
-> 만드는 부분)과 그 결과를 마크다운으로 렌더링하는 *scripts/render-markdown.mjs*는
-> 아직 이 레포에 없다(아래 표에서 이탤릭으로 표시한 경로는 아직 존재하지 않는
-> 계획된 경로다). 즉 지금은 **CLI 도구 3개 + 검증 하네스는 있고, 그걸 사용자
-> 대화형으로 감싸는 스킬은 없는** 상태다. 아래 "지금 무엇이 되고 무엇이 안 되는가"에
-> 파일 단위로 정리했다.
+> 7개 JSON Schema(`schemas/`)에 더해, 산출물 쓰기 경계(`scripts/write-artifact.mjs`)·
+> 원장 투영(`scripts/project-ledger.mjs`)·마크다운 렌더(`scripts/render-markdown.mjs`)와
+> 경력 계층 스킬(`skills/career-from-git/`)이 구현·배선돼 있다. `npm run lint`와
+> `npm test`가 로컬에서 그대로 통과한다(아래 "빠른 시작"의 명령을 그대로 복사해 실행하면
+> 재현된다).
+> **안 된 것**: 지식맵·갭 리포트·학습 계획 계층의 스킬(*skills/skill-gap/*,
+> *skills/prep-plan/*)은 아직 없고, 오염 주입 테스트 스위트와 실제 레포 도그푸딩도
+> 남아 있다(아래 표에서 이탤릭으로 표시한 경로는 아직 존재하지 않는 계획된 경로다).
+> 아래 "지금 무엇이 되고 무엇이 안 되는가"에 파일 단위로 정리했다.
 
 ## 설치
 
@@ -66,9 +66,13 @@ claude --plugin-dir /path/to/career-forge
 | `scripts/verify-evidence.mjs` (인용 무결성 검증기) | **구현됨** | L1+ 산출물의 모든 인용을 원장·git과 대조해 검증한다. LLM 호출 0회. |
 | `scripts/validate-plugin.mjs` (Layer 1 기계 검증 하네스) | **구현됨** | `npm run lint`가 호출한다 — plugin.json 필드, 스키마 파싱, 문서 내 상대경로 실재성, 명명·라이선스 일관성, 워킹 트리 CR 가드. |
 | `tests/run-smoke.mjs` (스모크·negative·골든 테스트) | **구현됨** | `npm test`가 기본 → `--negative` → `--golden` 순서로 호출한다. |
-| *scripts/render-markdown.mjs* (JSON → 사용자 대면 `.md` 렌더러) | **미구현** | 아키텍처가 전제하는 "정본은 JSON, 마크다운은 렌더 뷰"의 렌더 단계 자체가 아직 없다. |
-| *skills/career-from-git/*, *skills/skill-gap/*, *skills/prep-plan/* (슬래시 명령) | **미구현** | 위 세 스크립트를 호출해 `career.json`/`knowledge-map.json`/`gap-report.json`을 실제로 만드는 LLM 오케스트레이션 계층. 디렉터리 자체가 이 레포에 없다. |
-| *references/sources.json*, *examples/* | **미구현** | 스킬 계층과 함께 만들어질 예정. |
+| `scripts/render-markdown.mjs` (JSON → 사용자 대면 `.md` 렌더러) | **구현됨** | 배지·커버리지 수치·절단 고지를 `scripts/lib/render-contract.mjs`의 계약대로 렌더한다. 배지는 `verification`에서만 파생한다. |
+| `scripts/write-artifact.mjs` (산출물이 디스크에 닿는 유일한 경로) | **구현됨** | 기입 주체 검사 → 재생성 병합 → 쓰기 직전 자기 스키마 검증 → 원자적 쓰기 → 레지스트리 갱신. 5분기 종료 코드. |
+| `scripts/project-ledger.mjs` (원장 → LLM 컨텍스트 투영) | **구현됨** | 범위 밖 커밋을 뺀 투영만 프롬프트에 들어간다. |
+| `skills/career-from-git/` (슬래시 명령) | **구현됨** | 범위 확정 대화 → 수집 → 투영 → 생성 → 2단 팩트체크 → 인용 검증 → 렌더까지의 오케스트레이션 절차와 템플릿 2종. |
+| *skills/skill-gap/*, *skills/prep-plan/* (슬래시 명령) | **미구현** | 지식맵·갭 리포트·학습 계획 계층. 디렉터리 자체가 이 레포에 없다. |
+| `references/sources.json` | **구현됨** | `basis: external` 노드의 URL allow-list. `scripts/verify-evidence.mjs`가 대조한다. |
+| *examples/* | **미구현** | 공개 준비 단계에서 만들어질 예정. |
 
 요약하면: **"git 히스토리를 결정적으로 수집하고, 그 수집 결과를 인용하는 산출물의
 진위를 스크립트로 검증한다"는 이 프로젝트의 핵심 계약은 이미 코드로 존재하고 테스트로
@@ -149,13 +153,12 @@ additionalProperties 등을 강제한다. 레포 전체를 검사하려면 인�
 ## 명령 (슬래시 명령 — 미구현)
 
 정본 슬래시 명령 접두사는 `.claude-plugin/plugin.json`의 `name`(`devcareer-prep`)에서
-자동 파생되므로 항상 `/devcareer-prep:`이다. 아래 네 명령은 모두 **아직 구현되지 않았다**
-(*skills/* 디렉터리 자체가 이 레포에 없다) — 지금 바로 쓸 수 있는 것은 위 "빠른 시작"의
-CLI 3종이다.
+자동 파생되므로 항상 `/devcareer-prep:`이다. 아래 네 명령 중 **구현된 것은
+`/devcareer-prep:career-from-git` 하나**이고 나머지 셋은 아직 없다.
 
 | 명령 | 범위 | 상태 |
 |---|---|---|
-| `/devcareer-prep:career-from-git` | P0 (MVP) | 계획됨 — 미구현 |
+| `/devcareer-prep:career-from-git` | P0 (MVP) | **구현됨** |
 | `/devcareer-prep:skill-gap` | P0 (MVP, 자가진단 입력만) | 계획됨 — 미구현 |
 | `/devcareer-prep:prep-plan` | Phase 3 | 계획됨 — 미구현 |
 | `/devcareer-prep:grade` | P2 (MVP 제외) | 범위 밖 |
