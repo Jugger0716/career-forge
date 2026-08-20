@@ -2771,15 +2771,68 @@ function runSkillPromptContractSmoke() {
     report(ok, "(SP-5) 프롬프트가 `node scripts/verify-evidence.mjs` 호출 지점을 담는다(--stage 자기 선언을 반증하는 유일한 축)");
   }
 
-  // ---- (SP-6) 생성 템플릿이 draft 금지 필드를 명시하는가 ----
+  // ---- (SP-6a·6b·6c) 템플릿 역할 선언과 역할별 요구 ----
   //      집행은 쓰기 경계가 한다. 그럼에도 템플릿에 같은 문장을 요구하는 이유는,
   //      금지를 모르는 템플릿은 매 실행마다 exit 1을 맞고 재작성 루프에 빠지기
   //      때문이다 — 계약이 지켜지는 것과 파이프라인이 도는 것은 다른 문제다.
+  //
+  //      **초판(SP-6)은 대상을 `career-writer` 파일명으로 하드코딩했다.** 그러면
+  //      구현 8단계가 KnowledgeMapper·GapAnalyzer 템플릿을 들고 들어와도 이 절은
+  //      그것들을 보지 않는다 — SP-1이 막으려던 「대상 0건이라 공허하게 통과」의
+  //      **'새 대상만 조용히 빠지는' 변종**이다. 게다가 바로 위 (SP-3) 주석이
+  //      「테스트에 파일명을 하드코딩하지 마라」고 적어 둔 원칙을 같은 함수 안에서
+  //      스스로 어기고 있었다.
+  //
+  //      **그렇다고 `/templates/` 전체에 같은 요구를 걸 수는 없다.** 판정 템플릿의
+  //      출력은 `verification`을 **실어야** 하므로 draft 금지 문구를 요구하면
+  //      오탐이 된다. 그래서 템플릿이 **자기 역할을 선언**하게 하고 역할별로 다른
+  //      것을 묻는다. 역할 문자열에 붙는 단계 이름의 닻은 이 파일이 아니라
+  //      `artifact-contract.mjs`의 `AUTHORSHIP_STAGES`다 — 단계 이름이 바뀌면
+  //      스캔이 따라간다.
+  //
+  //      **자기 선언이라는 점을 감추지 않는다.** 템플릿이 스스로 「판정」이라고
+  //      적어 생성 쪽 요구를 피할 수 있다. 다만 그 거짓말의 대가는 즉시 나온다 —
+  //      생성 출력이 `verification`·`locked`를 실으면 쓰기 경계가 exit 1로
+  //      거부한다. 이 축은 여전히 **보조 방어**이고 집행은 write-artifact.mjs다.
+  const [STAGE_DRAFT, STAGE_FACT_CHECKED] = AUTHORSHIP_STAGES;
+  const ROLE_WRITER = "역할: 생성";
+  const ROLE_CHECKER = "역할: 판정";
+  const allTemplates = promptFiles.filter((p) => rel(p).includes("/templates/"));
+  const roleOf = (p) => {
+    const t = read(p);
+    const w = t.includes(ROLE_WRITER);
+    const c = t.includes(ROLE_CHECKER);
+    if (w && !c) return "writer";
+    if (c && !w) return "checker";
+    return null; // 미선언 또는 양쪽 선언(모호) — 둘 다 분류 실패로 떨어뜨린다.
+  };
+
   {
-    const writer = promptFiles.filter((p) => rel(p).includes("career-writer"));
-    const ok = writer.length === 1 && ["verification", "locked"].every((f) => read(writer[0]).includes(f));
-    if (!ok) console.log(`    실제: 생성 템플릿 ${JSON.stringify(writer.map(rel))}`);
-    report(ok, "(SP-6) 생성 템플릿이 draft 금지 필드(verification·locked)를 이름으로 명시한다(구현 7단계 (g)·게이트 B-7)");
+    const unclassified = allTemplates.filter((p) => roleOf(p) === null).map(rel);
+    const ok = allTemplates.length >= 1 && unclassified.length === 0;
+    if (!ok) console.log(`    실제: 템플릿 ${allTemplates.length}건 중 역할 미선언·중복선언 ${JSON.stringify(unclassified)}`);
+    report(ok, `(SP-6a) 모든 템플릿이 '${ROLE_WRITER}'/'${ROLE_CHECKER}' 중 하나만 선언한다(역할별 요구를 걸기 위한 전제 — 대상 존재 포함)`);
+  }
+
+  {
+    const writers = allTemplates.filter((p) => roleOf(p) === "writer");
+    const missing = writers.filter((p) => !["verification", "locked"].every((f) => read(p).includes(f))).map(rel);
+    const ok = writers.length >= 1 && missing.length === 0;
+    if (!ok) console.log(`    실제: 생성 템플릿 ${writers.length}건 중 금지 필드 미명시 ${JSON.stringify(missing)}`);
+    report(ok, "(SP-6b) 생성 역할 템플릿 **전부**가 draft 금지 필드(verification·locked)를 이름으로 명시한다(구현 7단계 (g)·게이트 B-7)");
+  }
+
+  {
+    // 허용 방향 겸 오탐 방지. 두 역할이 **서로 다른 단계**를 적는지 본다 —
+    // 양쪽 다 "verification을 언급하는가"만 물으면 두 역할이 구별되지 않는다
+    // (변이 S6이 WA-22·WA-23에서 실측한 형태와 같다).
+    const writers = allTemplates.filter((p) => roleOf(p) === "writer");
+    const checkers = allTemplates.filter((p) => roleOf(p) === "checker");
+    const badWriter = writers.filter((p) => !read(p).includes(`--stage ${STAGE_DRAFT}`)).map(rel);
+    const badChecker = checkers.filter((p) => !read(p).includes(`--stage ${STAGE_FACT_CHECKED}`)).map(rel);
+    const ok = writers.length >= 1 && checkers.length >= 1 && badWriter.length === 0 && badChecker.length === 0;
+    if (!ok) console.log(`    실제: 생성(${writers.length})에서 '--stage ${STAGE_DRAFT}' 누락 ${JSON.stringify(badWriter)} / 판정(${checkers.length})에서 '--stage ${STAGE_FACT_CHECKED}' 누락 ${JSON.stringify(badChecker)}`);
+    report(ok, `(SP-6c) 두 역할이 각자 쓰기 경계에 들어가는 단계(--stage ${STAGE_DRAFT} / --stage ${STAGE_FACT_CHECKED})를 명시한다(허용 방향 — 닻은 AUTHORSHIP_STAGES)`);
   }
 
   // ---- (SP-7) 각 템플릿이 의도 모델 티어를 명시하는가(전역 규약) ----
@@ -2806,6 +2859,117 @@ function runSkillPromptContractSmoke() {
     const ok = templates.length >= 1 && missing.length === 0;
     if (!ok) console.log(`    실제: 출력 언어 미명시 ${JSON.stringify(missing)}`);
     report(ok, "(SP-8) 모든 템플릿이 출력 언어(한국어)를 명시한다(영어 누수는 버그다)");
+  }
+
+  // ---- (SP-9) 인용 검증 호출이 저자 지정 플래그를 동반하는가 ----
+  //      **이 단언이 왜 생겼는지 적어 둔다.** (SP-5)는 `node scripts/verify-evidence.mjs`
+  //      문자열이 프롬프트 어딘가에 있는지만 봤고, 그래서 SKILL.md 7단계가
+  //      `--identity`도 `--config`도 없이 적혀 있던 것을 놓쳤다. 그 명령을 문자
+  //      그대로 실행하면 verify-evidence.mjs는 인용 검증에 도달하기 **전에**
+  //      `selectedIdentities가 비어 있습니다`로 exit 2한다 — 게이트 E-4가
+  //      「자칭을 반증하는 유일한 축」이라고 못 박은 단계가 **한 번도 실행되지
+  //      않은 채** 네 게이트가 모두 녹색이었다.
+  //
+  //      **호출 지점의 정의를 좁힌다.** (SP-5)는 "문자열이 있는가"였는데 여기서는
+  //      "그 명령이 들어 있는 **코드 블록**이 저자 지정 플래그를 함께 담는가"를
+  //      묻는다. 명령은 줄바꿈으로 이어지므로 줄 단위가 아니라 블록 단위여야 한다.
+  const VERIFIER_CMD = "node scripts/verify-evidence.mjs";
+  const fencedBlocks = (text) => {
+    const blocks = [];
+    let cur = null;
+    for (const line of text.split("\n")) {
+      if (/^\s*```/.test(line)) {
+        if (cur === null) cur = [];
+        else { blocks.push(cur.join("\n")); cur = null; }
+        continue;
+      }
+      if (cur !== null) cur.push(line);
+    }
+    return blocks;
+  };
+  const verifierBlocks = promptFiles.flatMap((p) =>
+    fencedBlocks(read(p)).filter((b) => b.includes(VERIFIER_CMD)).map((b) => ({ file: rel(p), block: b }))
+  );
+  {
+    const offenders = verifierBlocks
+      .filter(({ block }) => !(block.includes("--identity") || block.includes("--config")))
+      .map(({ file }) => file);
+    const ok = verifierBlocks.length >= 1 && offenders.length === 0;
+    if (!ok) console.log(`    실제: 인용 검증 호출 블록 ${verifierBlocks.length}건 중 저자 지정 플래그 누락 ${JSON.stringify(offenders)}`);
+    report(ok, "(SP-9) 인용 검증 호출 블록이 --identity 또는 --config를 동반한다(없으면 검증 축에 도달하기 전에 exit 2)");
+  }
+
+  // ---- (SP-10) 그 명령이 **실제로 인자 검증을 통과하는가** ----
+  //      **SP 계열이 소스 스캔이라는 한계를 이 한 축에서만은 넘는다.** SP-9는
+  //      여전히 "플래그가 적혀 있는가"까지만 보므로, 플래그 이름이 바뀌거나
+  //      조합이 무효가 되면 다시 초록으로 통과한다. 여기서는 프롬프트에서 명령을
+  //      **추출해 실제로 실행**하고, 검증 축이 돌았다는 증거(`citations:` 보고 줄)를
+  //      확인한다. 인자가 모자라면 그 줄이 나오기 전에 죽는다.
+  //
+  //      **치환 규칙(둘 다 드리프트 가드다).** `<...>` 자리표시자는 아래 표로만
+  //      치환하고, 표에 없는 자리표시자가 남으면 **FAIL**이다 — SKILL.md가
+  //      자리표시자 이름을 바꾸면 조용히 통과하는 대신 여기서 터진다.
+  //      `[...]`는 이 레포 명령 표기의 **선택 인자**이므로 통째로 버린다(1단계의
+  //      `[--ref all]`과 같은 표기다).
+  //
+  //      **닫지 못한 것.** 이 축은 인용 검증 호출만 실행한다. 나머지 단계(1·2·4·6·8·9)를
+  //      같은 방식으로 돌리려면 각 단계의 선행 상태가 필요하고, 그것은 사실상
+  //      프롬프트에서 파생한 엔드투엔드 스위트다 — 별도 회차의 일로 남긴다.
+  //      **그때까지 그 단계들의 인자 완비성은 미관측이다**(7단계와 같은 결함이
+  //      다른 단계에 있어도 지금은 아무것도 빨개지지 않는다).
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sp10-"));
+    try {
+      const rootDir = path.join(tmp, STATE_DIR_NAME);
+      fs.mkdirSync(rootDir, { recursive: true });
+      const evidencePath = path.join(rootDir, EVIDENCE_FILE_NAME);
+      fs.writeFileSync(evidencePath, JSON.stringify({ schemaVersion: "0.1.0", commits: [] }), "utf8");
+      // 계층별 산출물 자리를 **표에서 파생해** 만든다. 하드코딩하면 구현 8단계가
+      // knowledge-map 호출 블록을 들고 들어올 때 이 절이 조용히 깨진다.
+      for (const { fileName } of Object.values(ARTIFACT_LAYERS)) {
+        fs.writeFileSync(path.join(rootDir, fileName), JSON.stringify({ schemaVersion: "0.1.0", nodes: [] }), "utf8");
+      }
+
+      const SUBST = {
+        "<레포 경로>": REPO_ROOT,
+        "<선택된 이메일>": "sp10@example.com",
+        "<원장 경로>": evidencePath,
+        "<저장 루트>": rootDir,
+      };
+
+      // **블록이 몇 개든 전부 돌린다.** 초판은 `verifierBlocks.length === 1`을
+      // 요구했는데, 그러면 두 번째 스킬이 자기 검증 호출을 들고 오는 순간 이 절이
+      // 「블록이 2개」라는 이유로 FAIL한다 — 새 호출을 검사하는 것이 아니라 검사
+      // 자체가 고장 나는 형태다. (SP-6b)와 같은 「대상 전부」 모양으로 맞춘다.
+      const failures = [];
+      for (const { file, block } of verifierBlocks) {
+        let cmd = block.split("\\\n").join(" ").split("\n").join(" ");
+        cmd = cmd.replace(/\[[^\]]*\]/g, " ");
+        for (const [ph, val] of Object.entries(SUBST)) cmd = cmd.split(ph).join(val);
+        const leftover = cmd.match(/<[^>]*>/g) ?? [];
+        if (leftover.length > 0) {
+          failures.push(`${file}: 치환표에 없는 자리표시자 ${JSON.stringify(leftover)}`);
+          continue;
+        }
+        // 스크립트 경로 **뒤**부터가 인자다. 토큰 위치를 세지 않고 경로 토큰을
+        // 찾아 자른다 — 앞에 `node` 말고 다른 것이 붙어도 따라간다.
+        const tokens = cmd.trim().split(/\s+/);
+        const argv = tokens.slice(tokens.indexOf("scripts/verify-evidence.mjs") + 1);
+        const ran = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "verify-evidence.mjs"), ...argv], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+        });
+        const out = `${ran.stdout ?? ""}${ran.stderr ?? ""}`;
+        if (!out.includes("[verify-evidence] citations:")) {
+          failures.push(`${file}: 검증 축에 도달하지 못했다 — ${out.slice(0, 200).split("\n").join(" ")}`);
+        }
+      }
+      const ok = verifierBlocks.length >= 1 && failures.length === 0;
+      if (!ok) console.log(`    실제: 호출 블록 ${verifierBlocks.length}건 / 실패 ${JSON.stringify(failures)}`);
+      report(ok, "(SP-10) 프롬프트에서 추출한 인용 검증 명령을 **전부** 실제로 실행하면 인자 검증을 통과해 검증 축까지 도달한다");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   }
 }
 
