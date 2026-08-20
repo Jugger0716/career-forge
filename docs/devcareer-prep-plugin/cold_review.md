@@ -134,7 +134,7 @@
 
 - **위치**: `scripts/collect-git-facts.mjs:417-472`(`parseArgs` — 모든 `argv[++i]` 무검증, default 절은 경고 후 계속 진행), `:446`(`Number(argv[++i])`), `:92`(`selectedIdentities.includes(commit.authorEmail)` 정확 문자열 비교), `:484-495`(main 게이트 — repo 누락·identity 개수 0만 검사), `:519-524`(`traversed===0`만 안내), `scripts/verify-evidence.mjs:497-544`(동일 패턴)
 - **실패 시나리오**(모두 실측, 전부 exit 0):
-  - `--identity Leejg@Aptner.com`(도메인 대소문자만 다름) → `traversed=9 total=0 analyzed=0 reason=none`, `evidence.json` 정상 기록. 소문자로 주면 `total=8`이므로 원인은 대소문자 하나다. 상위 계층은 이 "정상" 원장으로 근거 0건 기술서를 만들고, 사용자는 왜 자기 커밋이 안 잡히는지 단서가 없다.
+  - `--identity dev@Example.com`(도메인 대소문자만 다름 — 실측은 사용자 본인 이메일로 했고, public 레포 공개 시 주소만 가렸다) → `traversed=9 total=0 analyzed=0 reason=none`, `evidence.json` 정상 기록. 소문자로 주면 `total=8`이므로 원인은 대소문자 하나다. 상위 계층은 이 "정상" 원장으로 근거 0건 기술서를 만들고, 사용자는 왜 자기 커밋이 안 잡히는지 단서가 없다.
   - `--out`(값 누락, 마지막 인자) → falsy 폴백으로 `~/.devcareer/<repo-key>/evidence.json`에 기록. 셸 스크립트에서 `--out "$OUT_DIR"`의 변수가 비면 흔히 발생하며, `.gitignore` 주석이 "개인 경력 데이터·실제 커밋 해시·PII"라고 명시한 그 데이터가 사용자가 의도하지 않은(백업·동기화 대상일 수 있는) 위치에 남는다.
   - `--identity`(값 누락) → `[undefined]`/다음 플래그 문자열이 값으로 채택되어 `length===0` 게이트를 통과, `coverage.exclusions.selectedIdentities: [null]`이 기록된 빈 원장 + 성공 메시지.
   - `--max-commits abc` → `[오류] 수집 실패: 샘플링 불변식 위반: 선택 수(0) != K(NaN)` — 실패하지만 메시지가 원인을 전혀 지목하지 않는다(`-3`도 동일).
