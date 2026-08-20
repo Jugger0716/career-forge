@@ -2433,9 +2433,24 @@ function runArtifactContractOracleSmoke() {
     report(ok, "(AC-38) 허용 방향: locked를 담지 않은 출력은 두 단계 모두 위반 0건이다(게이트 B-7)");
   }
 
-  // ---- (AC-39) 병합이 기존 노드의 locked를 prev에서 이어받는가 ----
+  // ---- (AC-39) 병합이 prev의 잠금을 보존하고 비잠금은 false로 채우는가 ----
   //      스키마가 locked를 required로 두므로 **누군가는 채워야** 한다. 기입
   //      주체가 생성 출력이 아니라면 남는 것은 병합뿐이다(verification과 동형).
+  //
+  //      **초판 서술을 정정한다(콜드 리뷰 지적).** 이 단언을 「병합이 locked를
+  //      prev에서 **이어받는다**」로 적었는데, 아래 (a) 서브케이스가 겨냥한
+  //      `locked: prevNode.locked === true`는 그 자리에 도달하는 시점에 이미
+  //      `prevNode.locked !== true`임이 규칙 1의 early-return으로 보장돼 있어
+  //      **도달 가능한 모든 경로에서 리터럴 false와 동치**다. 그 줄을
+  //      `locked: false`로 바꿔도 스위트 전체가 그대로 통과하는 것을 변이로
+  //      실측했다. 즉 (a)는 「이어받기」를 관측하지 못한다 — 관측하는 것은
+  //      「비잠금 노드는 false로 나온다」이고, 진짜 이어받기(true 보존)는
+  //      규칙 1이 하며 (b) 서브케이스와 (AC-41)이 본다.
+  //
+  //      **그럼에도 프로덕션 쪽을 리터럴 false로 단순화하지 않는다.** 지금의
+  //      중복 표현식은 규칙 1의 early-return이 나중에 옮겨지거나 사라져도
+  //      올바르게 동작하는 방어적 중복이다. 리터럴로 바꾸면 그 리팩터링에서
+  //      조용한 잠금 유실이 생긴다.
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", locked: true, text: "사용자 원문." })]);
     // 잠긴 노드는 규칙 1이 prev를 통째로 이기므로, 이어받기는 **비잠금** 노드로 본다.
@@ -2445,7 +2460,7 @@ function runArtifactContractOracleSmoke() {
     const b = mergeArtifact("career", prev, makeCareerInstance([makeFactCheckedNode({ id: "car:001", text: "사용자 원문." })]), { stage: "fact-checked" }).merged;
     const ok = a.nodes[0].locked === false && b.nodes[0].locked === true;
     if (!ok) console.log(`    실제: 비잠금=${a.nodes[0].locked} 잠금=${b.nodes[0].locked}`);
-    report(ok, "(AC-39) 병합은 기존 노드의 locked를 prev에서 이어받는다(스키마 required를 병합이 채운다 — 게이트 B-7)");
+    report(ok, "(AC-39) 병합은 prev의 잠금을 보존하고(b) 비잠금 노드는 false로 채운다(a) — 스키마 required를 병합이 채운다(게이트 B-7)");
   }
 
   // ---- (AC-40) 신규 노드는 locked:false를 받는가 ----
