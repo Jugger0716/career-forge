@@ -31,8 +31,13 @@
 //                  `not-attempted → attempts const 0`과 재시도 이어받기 요구를
 //                  동시에 만족시킬 수 없게 만들어 attempts>=1인 노드의 draft
 //                  재작성을 네 갈래 모두 exit 1로 봉쇄했다.
+//   --root         저장 루트. **경로에 `.devcareer` 세그먼트가 있어야 한다**
+//                  (콜드 리뷰 Security #11) — 없으면 [INPUT_ERROR] + exit 2다.
+//                  `--draft`에는 이 제약이 없다(임시 위치의 읽기 대상이다).
 //   --force        사용자 편집이 감지된 산출물을 덮어쓴다. 덮어쓰기 직전
-//                  <파일명>.bak 1세대를 남긴다(AC-16).
+//                  <파일명>.bak 1세대를 남긴다(AC-16). **백업에 실패하면
+//                  강행하지 않고 exit 3으로 멈춘다** — 복구 수단 없는 덮어쓰기를
+//                  하지 않기 위해서다(콜드 리뷰 Correctness #9).
 //   --generated-at generatedAt을 고정한다(픽스처 재현용). 생략 시 현재 시각.
 //
 // 종료 코드(5분기 — 각각 호출자가 취할 조치가 다르다):
@@ -61,7 +66,7 @@ import {
   mergeArtifact,
 } from "./lib/artifact-contract.mjs";
 import { validateInstance } from "./lib/schema-validate.mjs";
-import { readState, toStorageRelative, writeJsonAtomic, writeState } from "./lib/store.mjs";
+import { checkStorageBoundary, readState, toStorageRelative, writeJsonAtomic, writeState } from "./lib/store.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -90,18 +95,42 @@ function loadSchema(layer) {
  * 세 가지 모두 보류 사유다. 셋 다 "덮어쓰면 사용자 데이터가 사라질 수
  * 있는데 그 여부를 기계가 알 수 없는" 상태이므로, 조용히 진행하지 않는다.
  *
- * @returns {{found: boolean, prev: object|null, hold: {code: string, message: string}|null}}
+ * **`existence`가 boolean이 아닌 이유(콜드 리뷰 Correctness #9).** 초판은
+ * `found: boolean`이었고 ENOENT가 아닌 모든 읽기 오류(EACCES·EPERM·EISDIR)
+ * 에서 `found: true`를 돌려줬다 — 실제로는 **파일이 있는지조차 확인하지
+ * 못한** 상태인데 "있다"고 단정한 것이다. 그 거짓말이 `main()`으로 흘러
+ * `--force` 강행 시 `writeBackup`을 부르고, 읽기가 실패한 바로 그 이유로
+ * 복사도 실패해 미처리 예외로 죽었다. Node의 미처리 예외 종료 코드가 1이라
+ * 그 크래시는 **문서화된 exit 1('출력을 고쳐 다시 부른다')로 위장**되어
+ * 호출자를 무의미한 재시도 루프로 유도했다. 세 상태를 구분하면 강행 로직이
+ * '읽힘'과 '읽기 실패'를 혼동하지 않는다.
+ *
+ * @returns {{existence: "absent"|"present"|"unknown", prev: object|null, hold: {code: string, message: string}|null}}
  */
 export function inspectPreviousArtifact(layer, filePath) {
+  // `--force` 강행이 어떤 결과를 낳는지는 두 UNREADABLE 경로에서만 비대칭
+  // 하게 빠져 있었다(콜드 리뷰 Correctness #7). PREV_ARTIFACT_EDITED는
+  // '.bak 1세대를 남긴다'까지 안내하는데, prev를 못 읽는 이쪽은 강행하면
+  // **병합할 대상 자체가 없어** locked 노드까지 전부 draft로 대체된다 —
+  // 더 파괴적인 쪽이 경고가 없었다.
+  const FORCE_WARNING =
+    " --force로 강행하면 병합할 이전 산출물이 없어 locked 노드를 포함한 기존 내용 전체가 이번 출력으로 대체되며, " +
+    "복구 수단은 .bak 1세대뿐입니다.";
+
   let text;
   try {
     text = fs.readFileSync(filePath, "utf8");
   } catch (e) {
-    if (e && e.code === "ENOENT") return { found: false, prev: null, hold: null };
+    if (e && e.code === "ENOENT") return { existence: "absent", prev: null, hold: null };
     return {
-      found: true,
+      existence: "unknown",
       prev: null,
-      hold: { code: "PREV_ARTIFACT_UNREADABLE", message: `기존 산출물을 읽을 수 없습니다: ${filePath} (${e.message})` },
+      hold: {
+        code: "PREV_ARTIFACT_UNREADABLE",
+        message:
+          `기존 산출물을 읽을 수 없어 존재 여부조차 확인하지 못했습니다: ${filePath} (${e.code ?? e.message}).` +
+          FORCE_WARNING,
+      },
     };
   }
 
@@ -110,9 +139,12 @@ export function inspectPreviousArtifact(layer, filePath) {
     prev = JSON.parse(text);
   } catch (e) {
     return {
-      found: true,
+      existence: "present",
       prev: null,
-      hold: { code: "PREV_ARTIFACT_UNREADABLE", message: `기존 산출물의 JSON 파싱에 실패했습니다: ${filePath} — ${e.message}` },
+      hold: {
+        code: "PREV_ARTIFACT_UNREADABLE",
+        message: `기존 산출물의 JSON 파싱에 실패했습니다: ${filePath} — ${e.message}.` + FORCE_WARNING,
+      },
     };
   }
 
@@ -120,7 +152,7 @@ export function inspectPreviousArtifact(layer, filePath) {
     // 부재를 "편집 없음"으로 읽지 않는다(fail-closed) — 해시가 없으면
     // 편집 여부를 판정할 수단 자체가 없다.
     return {
-      found: true,
+      existence: "present",
       prev,
       hold: {
         code: "PREV_ARTIFACT_HASH_MISSING",
@@ -132,7 +164,7 @@ export function inspectPreviousArtifact(layer, filePath) {
   const recomputed = computeArtifactContentHash(layer, prev);
   if (recomputed !== prev.contentHash) {
     return {
-      found: true,
+      existence: "present",
       prev,
       hold: {
         code: "PREV_ARTIFACT_EDITED",
@@ -143,7 +175,7 @@ export function inspectPreviousArtifact(layer, filePath) {
     };
   }
 
-  return { found: true, prev, hold: null };
+  return { existence: "present", prev, hold: null };
 }
 
 /**
@@ -261,6 +293,18 @@ function main() {
 
   const { fileName } = ARTIFACT_LAYERS[opts.layer];
   const root = path.resolve(opts.root);
+
+  // **쓰기 경계에 경계 검증이 없던 것을 닫는다(콜드 리뷰 Security #11).**
+  // 이 파일이 유일한 쓰기 경로라고 선언해 두고 그 경로가 받는 --root만
+  // 무검증이면 선언이 무의미하다. `--draft`는 검사하지 않는다 — 그것은
+  // 오케스트레이션이 임시 위치에 만드는 **읽기** 대상이고, 저장 경계 안에
+  // 있어야 할 이유가 없다. 경계가 지키는 것은 **쓰기 대상**이다.
+  const boundary = checkStorageBoundary(root);
+  if (boundary !== null) {
+    console.error(`[INPUT_ERROR] --root가 저장 경계 밖입니다 — ${boundary}`);
+    process.exit(2);
+  }
+
   const filePath = path.join(root, fileName);
 
   const inspected = inspectPreviousArtifact(opts.layer, filePath);
@@ -293,8 +337,24 @@ function main() {
     process.exit(1);
   }
 
-  if (inspected.hold !== null && opts.force && inspected.found) {
-    const bakPath = writeBackup(filePath);
+  if (inspected.hold !== null && opts.force && inspected.existence !== "absent") {
+    // **백업 실패를 미처리 예외로 두지 않는다(콜드 리뷰 Correctness #9).**
+    // existence가 "unknown"인 경로는 애초에 읽기가 실패한 경우이고, 같은
+    // 이유로 copyFileSync도 실패한다. 던지게 두면 Node가 exit 1로 죽어
+    // 「출력을 고쳐 다시 부르라」는 exit 1 계약으로 위장되는데, 실제로 필요한
+    // 조치는 사람의 확인이다. 이 지점은 writeJsonAtomic보다 **앞**이므로
+    // 여기서 멈추면 "쓰지 않았다" 불변식이 그대로 유지된다.
+    let bakPath;
+    try {
+      bakPath = writeBackup(filePath);
+    } catch (e) {
+      console.error(
+        `[HOLD] PREV_ARTIFACT_BACKUP_FAILED: 덮어쓰기 직전 .bak을 남기지 못했습니다: ${filePath} (${e.code ?? e.message}) — ` +
+        "백업 없이 강행하면 기존 내용의 복구 수단이 사라지므로 진행하지 않았습니다."
+      );
+      console.error("[write-artifact] 아무것도 쓰지 않았습니다 — 사람 확인이 필요합니다(파일 권한·잠금 상태를 확인하십시오).");
+      process.exit(3);
+    }
     console.error(`[write-artifact] 강행 — 덮어쓰기 직전 1세대를 보존했습니다: ${bakPath}`);
   }
 

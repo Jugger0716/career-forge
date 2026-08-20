@@ -68,6 +68,7 @@ import {
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
 import { projectWithReport } from "../scripts/project-ledger.mjs";
+import { inspectPreviousArtifact } from "../scripts/write-artifact.mjs";
 import {
   computeRepoKeyForPath,
   getRepoToplevel,
@@ -79,6 +80,8 @@ import {
   readConfig,
   writeConfig,
   projectLedgerForSkills,
+  checkStorageBoundary,
+  STATE_DIR_NAME,
 } from "../scripts/lib/store.mjs";
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
@@ -1089,6 +1092,22 @@ function runStoreIoContractSmoke() {
       report(cfgMissing.found === false, "readConfig: 파일 부재는 found=false(예외 아님)");
       writeConfig(root, { schemaVersion: "0.1.0" });
       report(readConfig(root).value.schemaVersion === "0.1.0", "writeConfig → readConfig 왕복이 값을 보존한다");
+    }
+
+    // ---- 저장 경계 판정(콜드 리뷰 Security #11) ----
+    {
+      const inside = path.join(tmpRoot, STATE_DIR_NAME, "career.json");
+      report(checkStorageBoundary(inside) === null, `checkStorageBoundary: ${STATE_DIR_NAME} 세그먼트가 있으면 위반 없음(허용 방향)`);
+
+      const outside = path.join(tmpRoot, "somewhere", "career.json");
+      const v = checkStorageBoundary(outside);
+      report(typeof v === "string" && v.includes(STATE_DIR_NAME), "checkStorageBoundary: 경계 밖 경로는 위반 메시지를 낸다(금지 방향)");
+
+      // **부분 일치를 통과시키지 않는가.** 문자열 포함으로 구현하면
+      // `.devcareer-old`·`my.devcareerX` 같은 이름이 통과한다 — allow-list 대조를
+      // 문자열 prefix로 쓰지 말라는 이 레포의 규약과 같은 형태의 실수다.
+      const lookalike = path.join(tmpRoot, `${STATE_DIR_NAME}-old`, "career.json");
+      report(checkStorageBoundary(lookalike) !== null, "checkStorageBoundary: 이름이 비슷한 세그먼트(.devcareer-old)는 통과시키지 않는다(세그먼트 정확 일치)");
     }
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -2557,6 +2576,62 @@ function runLedgerProjectionOracleSmoke() {
       const ok2 = bad.status === 2 && bad.stderr.includes("[INPUT_ERROR]");
       if (!ok2) console.log(`    실제: status=${bad.status} stderr=${bad.stderr}`);
       report(ok2, "(LP-5) 입력 파일 부재는 [INPUT_ERROR] + exit 2다(A-32 규약과 같은 계열)");
+
+      // ---- (LP-7) --root 사용법이 실제로 도는가(콜드 리뷰 Testing #3) ----
+      //      사용법 주석은 --in과 --root를 동등한 두 사용법으로 문서화하는데
+      //      초판 스위트는 --in만 실행했다. --root는 `path.join(root,
+      //      EVIDENCE_FILE_NAME)`이라는 **고유 결합 로직**을 갖고, 그 상수는
+      //      생산자 collect-git-facts.mjs의 리터럴과 갈라져 있어 드리프트를
+      //      잡을 오라클이 전혀 없었다. **프롬프트 계층이 이 경로를 쓰기
+      //      시작하므로 이제 프로덕션 경로다.**
+      const ledgerRoot = path.join(tmp, "root-mode", STATE_DIR_NAME);
+      fs.mkdirSync(ledgerRoot, { recursive: true });
+      fs.writeFileSync(path.join(ledgerRoot, "evidence.json"), JSON.stringify(ledger), "utf8");
+      {
+        const r = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--root", ledgerRoot], { encoding: "utf8" });
+        let out = null;
+        try { out = JSON.parse(r.stdout); } catch { /* 파싱 실패는 아래에서 FAIL로 떨어진다 */ }
+        const ok3 = r.status === 0 && out?.commits?.length === 2 && r.stderr.includes("제외 1건");
+        if (!ok3) console.log(`    실제: status=${r.status} stdout길이=${r.stdout.length} stderr=${r.stderr}`);
+        report(ok3, "(LP-7) --root 사용법이 저장 루트 밑 evidence.json을 찾아 투영한다(콜드 리뷰 Testing #3)");
+      }
+
+      // ---- (LP-8) --out이 실제로 파일을 쓰는가 ----
+      {
+        const outPath = path.join(ledgerRoot, "ledger-projection.json");
+        const r = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--root", ledgerRoot, "--out", outPath], { encoding: "utf8" });
+        const written = fs.existsSync(outPath) ? JSON.parse(fs.readFileSync(outPath, "utf8")) : null;
+        const ok4 = r.status === 0 && written?.commits?.length === 2 && r.stdout === "" && r.stderr.includes(outPath);
+        if (!ok4) console.log(`    실제: status=${r.status} 파일=${fs.existsSync(outPath)} stdout길이=${r.stdout.length}`);
+        report(ok4, "(LP-8) --out은 지정 경로에 투영을 쓰고 stdout으로는 아무것도 내지 않는다(콜드 리뷰 Testing #3)");
+      }
+
+      // ---- (LP-9) 금지 방향: --root·--out이 저장 경계 밖이면 거부하는가 ----
+      //      콜드 리뷰 Security #11. 이 스크립트도 원장을 읽고 투영을 쓰므로
+      //      쓰기 경계 규약을 함께 진다.
+      {
+        const outsideRoot = path.join(tmp, "outside-root");
+        fs.mkdirSync(outsideRoot, { recursive: true });
+        fs.writeFileSync(path.join(outsideRoot, "evidence.json"), JSON.stringify(ledger), "utf8");
+        const r1 = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--root", outsideRoot], { encoding: "utf8" });
+        const r2 = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--in", inPath, "--out", path.join(outsideRoot, "p.json")], { encoding: "utf8" });
+        const ok5 = r1.status === 2 && r1.stderr.includes("[INPUT_ERROR]") && r1.stderr.includes("--root") &&
+          r2.status === 2 && r2.stderr.includes("--out") && !fs.existsSync(path.join(outsideRoot, "p.json"));
+        if (!ok5) console.log(`    실제: root=${r1.status}/${r1.stderr.trim()} out=${r2.status}/${r2.stderr.trim()}`);
+        report(ok5, "(LP-9) 저장 경계 밖 --root·--out은 [INPUT_ERROR] + exit 2이고 파일을 쓰지 않는다(콜드 리뷰 Security #11)");
+      }
+
+      // ---- (LP-10) 허용 방향: --in은 경계 밖이어도 통과하는가 ----
+      //      금지 방향만 두면 "모든 경로를 막는" 검사가 (LP-9)를 통과하고,
+      //      픽스처 원장을 --in으로 읽는 정당한 용법이 죽은 것을 아무도 모른다.
+      //      경계가 지키는 것은 **쓰기와 저장 루트 해석**이지 임의 파일 읽기가
+      //      아니라는 결정이 여기 고정된다.
+      {
+        const r = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "project-ledger.mjs"), "--in", inPath], { encoding: "utf8" });
+        const ok6 = r.status === 0;
+        if (!ok6) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+        report(ok6, "(LP-10) 허용 방향: --in은 저장 경계 밖(os.tmpdir 직하)이어도 exit 0이다(읽기까지 막지 않는다)");
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -2590,8 +2665,13 @@ function runWriteArtifactOracleSmoke() {
       { encoding: "utf8" }
     );
   };
+  // **저장 경계를 우회하지 않고 만족시킨다(콜드 리뷰 Security #11).**
+  // 리뷰는 환경변수나 `--allow-root` 같은 테스트용 우회 수단을 함께 설계하라고
+  // 제안했지만, 그 우회는 오케스트레이션이 조립할 수 있는 값이므로 이 프로젝트가
+  // 계속 닫아 온 자기면제 통로와 같은 형태가 된다. 임시 루트가 진짜 불변식을
+  // 만족하게 하면(`…/<tag>/.devcareer`) 우회 자체가 필요 없다.
   const freshRoot = (tag) => {
-    const r = path.join(tmp, tag);
+    const r = path.join(tmp, tag, STATE_DIR_NAME);
     fs.mkdirSync(r, { recursive: true });
     return r;
   };
@@ -2835,6 +2915,90 @@ function runWriteArtifactOracleSmoke() {
       const ok = r.status === 0 && written?.nodes?.[0]?.locked === false;
       if (!ok) console.log(`    실제: status=${r.status} locked=${JSON.stringify(written?.nodes?.[0]?.locked)} stderr=${r.stderr}`);
       report(ok, "(WA-19) 허용 방향: locked를 담지 않은 출력은 exit 0으로 기록되고 병합이 locked:false를 채운다(게이트 B-7)");
+    }
+
+    // ---- (WA-20) 저장 경계 밖 --root를 거부하는가(콜드 리뷰 Security #11) ----
+    //      이 파일이 유일한 쓰기 경계라고 선언해 두고 그 경계가 받는 --root만
+    //      무검증이면 선언이 무의미하다. `tmp` 자체는 `.devcareer` 세그먼트가
+    //      없으므로 그대로 경계 밖 루트다.
+    {
+      const outside = path.join(tmp, "outside-boundary");
+      fs.mkdirSync(outside, { recursive: true });
+      const r = runWriter(outside, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const ok = r.status === 2 && r.stderr.includes("[INPUT_ERROR]") && !fs.existsSync(path.join(outside, "career.json"));
+      if (!ok) console.log(`    실제: status=${r.status} 파일생성=${fs.existsSync(path.join(outside, "career.json"))} stderr=${r.stderr}`);
+      report(ok, "(WA-20) 저장 경계 밖 --root는 [INPUT_ERROR] + exit 2이고 산출물을 만들지 않는다(콜드 리뷰 Security #11)");
+    }
+
+    // ---- (WA-21) 깨진 prev의 보류 메시지가 --force 결과를 경고하는가 ----
+    //      **콜드 리뷰 Correctness #7.** PREV_ARTIFACT_EDITED는 '.bak 1세대'까지
+    //      안내하는데 UNREADABLE 쪽은 강행 결과를 한 줄도 언급하지 않았다 —
+    //      더 파괴적인 쪽(병합할 prev가 없어 locked까지 전부 대체된다)이 경고가
+    //      없는 비대칭이었다. 이 단언은 그 경로를 **실행**해 메시지를 읽는다
+    //      (콜드 리뷰 Testing #8의 '깨진 JSON 경로 미검증'이 이 관측의 전제라
+    //      함께 닫힌다 — 메시지를 보려면 그 경로를 돌려야 한다).
+    {
+      const root = freshRoot("unreadable-json");
+      fs.writeFileSync(path.join(root, "career.json"), "{broken", "utf8");
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const ok = r.status === 3 && r.stderr.includes("PREV_ARTIFACT_UNREADABLE") &&
+        r.stderr.includes("--force") && r.stderr.includes("locked") &&
+        readTextOrNull(path.join(root, "career.json")) === "{broken";
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-21) 깨진 prev는 exit 3이고 보류 메시지가 --force 강행 시 locked 전멸을 경고한다(콜드 리뷰 Correctness #7)");
+    }
+
+    // ---- (WA-22) 읽기 실패를 '존재 확인됨'으로 오분류하지 않는가 ----
+    //      **콜드 리뷰 Correctness #9의 앞 절반.** career.json 자리에 디렉터리를
+    //      두면 readFileSync가 EISDIR로 실패한다 — 파일이 있는지조차 확인하지
+    //      못한 상태다. 초판은 이것을 found:true로 단정했다.
+    {
+      const root = freshRoot("unreadable-eisdir");
+      fs.mkdirSync(path.join(root, "career.json"), { recursive: true });
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const ok = r.status === 3 && r.stderr.includes("PREV_ARTIFACT_UNREADABLE") && r.stderr.includes("존재 여부");
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-22) 읽기 실패(EISDIR)는 '존재 여부 미확인'으로 보고되고 exit 3이다(콜드 리뷰 Correctness #9)");
+    }
+
+    // ---- (WA-23) 백업 실패가 exit 1로 위장되지 않는가 ----
+    //      **콜드 리뷰 Correctness #9의 본체.** 읽기가 실패한 바로 그 이유로
+    //      copyFileSync도 실패하는데 try/catch가 없어 미처리 예외로 죽었고,
+    //      Node의 종료 코드가 1이라 그 크래시가 **문서화된 exit 1**('출력을
+    //      고쳐 다시 부른다')로 위장돼 호출자를 무의미한 재시도로 유도했다.
+    //      **status !== 1을 함께 단언하는 것이 이 관측의 핵심**이다 — exit 3만
+    //      보면 위장이 되살아나도 그것이 3이 아니라는 사실만 알 뿐이다.
+    {
+      const root = freshRoot("backup-fail");
+      fs.mkdirSync(path.join(root, "career.json"), { recursive: true });
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]), ["--force"]);
+      const ok = r.status === 3 && r.status !== 1 && r.stderr.includes("PREV_ARTIFACT_BACKUP_FAILED") &&
+        !fs.existsSync(path.join(root, "career.json.bak"));
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(ok, "(WA-23) --force 백업 실패는 exit 3(사람 확인)이고 exit 1로 위장되지 않는다(콜드 리뷰 Correctness #9)");
+    }
+
+    // ---- (WA-24) existence 3상태가 실제로 갈리는가 ----
+    //      **이 단언이 없으면 3상태가 사실상 2상태다.** WA-22·WA-23은 메시지와
+    //      종료 코드만 보는데, "unknown"을 "present"로 되돌려도 둘 다 녹색이다
+    //      (양쪽 다 `!== "absent"`라 강행 분기가 같기 때문이다). 반환값을 직접
+    //      읽어 세 갈래를 고정한다 — export된 함수이므로 직접 부를 수 있다.
+    {
+      const root = freshRoot("existence-tri");
+      const absent = inspectPreviousArtifact("career", path.join(root, "career.json"));
+
+      runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const present = inspectPreviousArtifact("career", path.join(root, "career.json"));
+
+      const unknownRoot = freshRoot("existence-unknown");
+      fs.mkdirSync(path.join(unknownRoot, "career.json"), { recursive: true });
+      const unknown = inspectPreviousArtifact("career", path.join(unknownRoot, "career.json"));
+
+      const ok = absent.existence === "absent" && absent.hold === null &&
+        present.existence === "present" && present.hold === null &&
+        unknown.existence === "unknown" && unknown.hold?.code === "PREV_ARTIFACT_UNREADABLE";
+      if (!ok) console.log(`    실제: absent=${absent.existence} present=${present.existence} unknown=${unknown.existence}`);
+      report(ok, "(WA-24) inspectPreviousArtifact는 absent/present/unknown 세 상태를 구분한다(읽기 실패를 '있음'으로 단정하지 않는다)");
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

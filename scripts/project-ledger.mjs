@@ -29,6 +29,12 @@
 //     --out 생략 시 stdout으로 출력한다. 제외 건수는 항상 stderr로 보고한다
 //     (stdout을 파이프로 받는 호출자가 리포트 줄을 JSON으로 오해하지 않도록).
 //
+//     **`--root`와 `--out`은 저장 경계 안이어야 한다**(콜드 리뷰 Security #11):
+//     경로에 `.devcareer` 세그먼트가 없으면 [INPUT_ERROR] + exit 2다.
+//     `--in`은 검사하지 않는다 — 그것은 호출자가 지정한 **읽기** 대상이고
+//     픽스처 원장을 가리키는 정당한 용법이 있다. 경계가 지키는 것은 쓰기와
+//     저장 루트 해석이지 임의 파일 읽기가 아니다.
+//
 // 종료 코드: 0 = 투영 성공 / 2 = 입력 오류(파일 부재·JSON 파싱 실패·인자
 // 오류). render-markdown.mjs·verify-evidence.mjs와 같은 "입력 오류는 결론을
 // 낼 수 없음 계열" 규약(콜드 리뷰 A-32)을 따른다.
@@ -37,7 +43,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { projectLedgerForSkills } from "./lib/store.mjs";
+import { checkStorageBoundary, projectLedgerForSkills } from "./lib/store.mjs";
 
 /** 원장 파일 이름 정본. 저장 루트 아래에 이 이름으로 놓인다(§9·AC-15). */
 export const EVIDENCE_FILE_NAME = "evidence.json";
@@ -89,6 +95,13 @@ function main() {
 
   if (!opts.inPath && !opts.root) {
     failInput("사용법: node scripts/project-ledger.mjs (--in <evidence.json> | --root <저장 루트>) [--out <path>]");
+  }
+
+  // 저장 경계(콜드 리뷰 Security #11). --in은 대상이 아니다 — 위 사용법 주석 참조.
+  for (const [flag, value] of [["--root", opts.root], ["--out", opts.outPath]]) {
+    if (!value) continue;
+    const violation = checkStorageBoundary(value);
+    if (violation !== null) failInput(`${flag}이(가) 저장 경계 밖입니다 — ${violation}`);
   }
 
   const target = opts.inPath ?? path.join(opts.root, EVIDENCE_FILE_NAME);

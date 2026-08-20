@@ -32,6 +32,46 @@ import { runGit } from "./git.mjs";
 /** §9: 디렉터리 이름 상수(정본). 저장 루트 값이 아니라 이름 하나다. */
 export const STATE_DIR_NAME = ".devcareer";
 
+/**
+ * **쓰기 경로가 저장 경계 안인지 확인한다(콜드 리뷰 Security #11).**
+ *
+ * 이 레포는 「마크다운 프롬프트가 계약을 우회하거나 잘못된 값을 조립할 수
+ * 있다」를 명시적 위협 모델로 채택하고 `write-artifact.mjs`를 유일한 쓰기
+ * 경계로 선언했다. 그런데 그 경계가 받는 `--root`·`--out`에는 아무 검증도
+ * 없어서, 오케스트레이션이 잘못된 값을 조립하면 임의 경로에 JSON을 쓰고
+ * 기존 파일을 `.bak`으로 복제하고 `state.json`을 새로 만들었다.
+ *
+ * **판정 기준을 `resolveStorageRoot`와의 일치가 아니라 경로 세그먼트로 잡은
+ * 이유.** 저 함수는 git 레포를 요구하고 `<repo-key>` 4단계 산출을 돌린다 —
+ * 쓰기 한 번마다 그 비용을 치를 이유가 없고, 무엇보다 픽스처 레포·다중
+ * 저장 모드에서 "신뢰 루트"가 하나로 정해지지 않는다. 두 저장 모드가 실제로
+ * 공유하는 구조적 성질은 하나다: **경로에 `.devcareer` 세그먼트가 있다**
+ * (`~/.devcareer/<repo-key>/` · `<repo>/.devcareer/`). 그것만 본다.
+ *
+ * **테스트용 우회 수단을 두지 않았다.** 콜드 리뷰는 환경변수나 `--allow-root`
+ * 를 함께 설계하라고 제안했지만, 그 우회는 오케스트레이션이 조립할 수 있는
+ * 값이므로 이 프로젝트가 계속 닫아 온 자기면제 통로와 같은 형태가 된다.
+ * 대신 **스모크 테스트가 진짜 불변식을 만족하는 임시 루트를 쓰도록 고쳤다** —
+ * `os.tmpdir()/…/.devcareer`. 우회가 필요 없으면 우회를 만들지 않는다.
+ *
+ * **이것이 막지 못하는 것(감추지 않는다).** `~/.devcareer` 밑이기만 하면 어느
+ * 하위 경로든 통과하고, 사용자가 `.devcareer`라는 이름의 디렉터리를 아무 데나
+ * 만들어도 통과한다. 막는 것은 "저장 경계와 아무 상관 없는 경로에 쓰기"이지
+ * "경계 안에서의 오배치"가 아니다.
+ *
+ * @param {string} targetPath 검사할 절대/상대 경로
+ * @returns {string|null} 위반 메시지(위반이면) 또는 null
+ */
+export function checkStorageBoundary(targetPath) {
+  const resolved = path.resolve(targetPath);
+  const segments = resolved.split(/[\\/]+/);
+  if (segments.includes(STATE_DIR_NAME)) return null;
+  return (
+    `경로에 '${STATE_DIR_NAME}' 세그먼트가 없어 저장 경계 밖입니다: ${resolved} — ` +
+    "산출물 쓰기는 저장 루트(`~/.devcareer/<repo-key>/` 또는 `<repo>/.devcareer/`) 안에서만 이뤄집니다."
+  );
+}
+
 // 콜드 리뷰 A-21 대응: §7 고정 프리픽스와 (exit code, stderr) 3분류가
 // 예전에는 이 파일에 별도로(GIT_FIXED_PREFIX_ARGS 재정의 + execFileSync
 // 직접 호출) 존재해, git.mjs가 §7 정본으로 diff.renames 등을 추가해도
