@@ -310,7 +310,7 @@ let abortedSections = 0;
  * 지연 판독으로 바꾼 것이 그 부류를 줄이는 작업이었고, 여기서 더 좁힐 수단은 없다.
  */
 const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
-  default: 445,
+  default: 446, // (DH-1d) 신설로 445 → 446. 이 가드가 실제로 그 +1을 잡아 값을 고치게 했다.
   negative: 33,
   golden: 11,
 });
@@ -3067,9 +3067,18 @@ function runIgnoredPathReferenceSmoke() {
   const scanned = tracked.filter(
     (f) => f.endsWith(".mjs") || f === "README.md" || (f.startsWith("skills/") && f.endsWith(".md"))
   );
-  const readTracked = (f) => {
-    try { return fs.readFileSync(path.join(REPO_ROOT, f), "utf8"); } catch { return ""; }
-  };
+  // 스캔 대상을 **한 번만** 판독해 보관한다(초판은 DH-1b와 DH-1c가 각자 전량을 다시 읽어
+  // 같은 파일을 두 번 열었다). 판독 실패는 **빈 문자열로 강등하지 않고** 목록에 남긴다 —
+  // 그 강등이 아래 (DH-1d) 주석이 적은 거짓 초록의 원인이었다.
+  const texts = new Map();
+  const readFailures = [];
+  for (const f of scanned) {
+    try {
+      texts.set(f, fs.readFileSync(path.join(REPO_ROOT, f), "utf8"));
+    } catch (e) {
+      readFailures.push(`${f}(${e.code ?? e.message})`);
+    }
+  }
 
   // ---- (DH-1a) 대상이 0건이 아닌가 ----
   //      아래 금지 방향은 **접두사 집합**이 비거나 **스캔 대상**이 비면 둘 다
@@ -3081,11 +3090,33 @@ function runIgnoredPathReferenceSmoke() {
     report(ok, "(DH-1a) .gitignore가 docs 하위 무시 접두사를 갖고 추적되는 스캔 대상이 실재한다(금지 방향이 공허해지지 않는 전제)");
   }
 
+  // ---- (DH-1d) 스캔 대상을 전부 판독했는가 ----
+  //      **이 섹션의 거짓 초록이 여기 있었다.** 초판은 판독 실패를
+  //      `catch { return "" }`로 빈 문자열로 강등했다. 그러면 읽히지 않은 추적 파일이
+  //      아래 금지 방향 스캔에서 **위반 0건으로 집계**되어 조용히 PASS한다 — 「이 파일에는
+  //      무시 경로 참조가 없다」와 「이 파일을 못 읽었다」의 결과가 같아진다.
+  //      하필 이 가드는 「워킹 트리는 녹색인데 새 클론에서만 깨진다」를 막으려고 만든 것인데,
+  //      **같은 방식으로 스스로 무력화되고 있었다.**
+  //
+  //      DH-1a와 같은 성격의 전제 단언이다 — 대상이 존재하는가(DH-1a)와 그 대상을 실제로
+  //      읽었는가(DH-1d)가 둘 다 서야 금지 방향이 비공허해진다. 두 전제를 한 단언에 묶지
+  //      않는 이유는 「어느 경로로 실패했는가」를 고정하기 위해서다.
+  //
+  //      **추적돼 있으나 워킹 트리에 없는 파일도 여기서 떨어진다.** 그 경우 DH-1b의 주장은
+  //      그 파일에 대해 증명되지 않았으므로 fail-closed가 맞다 — 「없으니 깨끗하다」로 읽지 않는다.
+  {
+    const ok = readFailures.length === 0;
+    if (!ok) console.log(`    실제: 판독 실패 ${JSON.stringify(readFailures)}`);
+    report(
+      ok,
+      `(DH-1d) 스캔 대상 ${scanned.length}건을 전부 판독했다(판독 실패를 빈 문자열로 강등하지 않는다)`
+    );
+  }
+
   // ---- (DH-1b) 금지 방향: 무시되는 경로를 참조하지 않는가 ----
   {
     const offenders = [];
-    for (const f of scanned) {
-      const text = readTracked(f);
+    for (const [f, text] of texts) {
       const hit = ignoredDocPrefixes.find((p) => text.includes(p));
       if (hit !== undefined) offenders.push(`${f} → ${hit}`);
     }
@@ -3100,7 +3131,7 @@ function runIgnoredPathReferenceSmoke() {
   //      없게 된다 — 이 가드가 지키려는 것과 정반대다. 승격된 경로를 실제로
   //      참조하는 파일이 있고 그것이 위반으로 잡히지 않는 것을 함께 본다.
   {
-    const users = scanned.filter((f) => readTracked(f).includes(PROMOTED_PREFIX));
+    const users = [...texts.entries()].filter(([, t]) => t.includes(PROMOTED_PREFIX)).map(([f]) => f);
     const ok = users.length >= 1;
     if (!ok) console.log(`    실제: '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 0건이다(spec.md 닻이 사라졌는가?)`);
     report(ok, `(DH-1c) 허용 방향: 승격된 '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 1건 이상이고 위반이 아니다`);
