@@ -4605,12 +4605,46 @@ function runEvidenceInvariantSmoke() {
 // 관측한다(자기충족 검사 금지 — 절대 규칙).
 // ---------------------------------------------------------------------------
 
-const EVIDENCE_SCHEMA = JSON.parse(
-  fs.readFileSync(path.join(REPO_ROOT, "schemas", "evidence.schema.json"), "utf8")
-);
+/**
+ * `schemas/evidence.schema.json`을 판독한다.
+ *
+ * **최상위에서 즉시 판독하지 않는 이유.** 초판은 이 자리에서 바로
+ * `JSON.parse(fs.readFileSync(...))`를 했고, 그러면 파일이 없거나 깨졌을 때 예외가
+ * **import 시점**에 터져 프로세스가 죽는다 — 스위트가 「결과:」 줄도 없이 **단언 0건**으로
+ * 끝난다. 섹션이 예외로 중단되는 것보다 **한 단계 더 나쁘다**: 중단은 최소한
+ * `runSection`이 FAIL 1건으로 집계해 로그에 남지만, 이쪽은 아무 흔적도 남지 않는다.
+ *
+ * 실측(2026-08-21): 이 스키마를 지운 격리 사본에서 스모크가 raw Node 스택과 함께 exit 1로
+ * 죽었고 445개 단언 중 아무것도 실행되지 않았다. 이 레포의 완료 조건이 「파일·필드 부재를
+ * 예외가 아니라 각 단언의 FAIL로 떨어뜨려라」를 요구하므로 규칙 위반이었다.
+ *
+ * 경로는 정본 상수 `EVIDENCE_SCHEMA_REL`로 조립한다 — 세그먼트를 손으로 적으면 스키마가
+ * 옮겨질 때 이 판독만 조용히 옛 경로를 본다(같은 회차에 드리프트 가드 쪽에서 고친 것과 같은 형태).
+ *
+ * @returns {{schema: object|null, error: string|null}} **예외를 던지지 않는다.**
+ */
+function loadEvidenceSchema() {
+  try {
+    return {
+      schema: JSON.parse(fs.readFileSync(path.join(REPO_ROOT, EVIDENCE_SCHEMA_REL), "utf8")),
+      error: null,
+    };
+  } catch (e) {
+    return { schema: null, error: `${EVIDENCE_SCHEMA_REL} 판독 실패(${e.code ?? e.message})` };
+  }
+}
 
 function runEvidenceSchemaCheckSmoke() {
   console.log("[evidence.schema.json 구조 검증 스모크(A-13)] 실제 수집기 출력 → 실제 스키마로 구조 검증");
+
+  // 스키마 판독 실패를 예외로 두지 않고 **이 섹션의 단언 8건 각각을 FAIL로** 떨어뜨린다.
+  // **단언 총량이 변하지 않는 것이 요점이다** — 총량이 줄면 「무엇이 사라졌는가」를 아무도
+  // 보지 않는다(총량 바닥 가드가 아직 없다). 아래 세 판독 지점은 스키마가 null이면
+  // `validateInstance`를 부르지 않고 사유 문자열 하나를 오류 목록으로 삼아, 각 단언이
+  // **자기 라벨을 달고** FAIL하게 한다. 라벨을 실패 경로에 복제하지 않는 이유는 그것이
+  // 곧 드리프트가 되기 때문이다 — 라벨의 정본은 각 단언 한 곳뿐이다.
+  const { schema: EVIDENCE_SCHEMA, error: schemaError } = loadEvidenceSchema();
+  if (schemaError) console.log(`    실제: ${schemaError}`);
 
   const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-evidence-schema-"));
   try {
@@ -4651,7 +4685,9 @@ function runEvidenceSchemaCheckSmoke() {
     ]) {
       const evidence = collect(dir, opts);
       const warnings = [];
-      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", warnings);
+      const errors = EVIDENCE_SCHEMA === null
+        ? [schemaError]
+        : validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", warnings);
       if (errors.length > 0) {
         for (const e of errors) console.log(`    실제 오류(${label}): ${e}`);
       }
@@ -4666,7 +4702,9 @@ function runEvidenceSchemaCheckSmoke() {
     {
       const evidence = structuredClone(collect(dirs.multiAuthor, {}));
       delete evidence.commits[0].shortHash;
-      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
+      const errors = EVIDENCE_SCHEMA === null
+        ? [schemaError]
+        : validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
       const ok = errors.some((e) => e.includes("shortHash"));
       if (!ok) console.log(`    실제: ${JSON.stringify(errors)}`);
       report(ok, "판별력 증명: commits[0].shortHash 삭제 → validateInstance가 required 위반을 잡음(A-13)");
@@ -4676,7 +4714,9 @@ function runEvidenceSchemaCheckSmoke() {
     {
       const evidence = structuredClone(collect(dirs.multiAuthor, {}));
       evidence.strayFieldMutation = "unexpected";
-      const errors = validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
+      const errors = EVIDENCE_SCHEMA === null
+        ? [schemaError]
+        : validateInstance(EVIDENCE_SCHEMA, evidence, EVIDENCE_SCHEMA, "$", []);
       const ok = errors.some((e) => e.includes("strayFieldMutation"));
       if (!ok) console.log(`    실제: ${JSON.stringify(errors)}`);
       report(ok, "판별력 증명: 스키마 밖 최상위 필드 추가 → validateInstance가 additionalProperties 위반을 잡음(A-13)");
