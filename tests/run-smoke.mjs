@@ -284,6 +284,37 @@ const UNKNOWN_LICENSE_SKIP_CASE = {
 let failed = 0;
 let passed = 0;
 
+/**
+ * `runSection`/`runSectionAsync`가 예외를 잡아 중단시킨 섹션 수.
+ *
+ * 라벨 문자열을 나중에 grep하는 방식으로 세지 않는다 — 라벨 문구가 바뀌면 조용히 0이 되고,
+ * 그것이 이 가드가 막으려는 실패와 정확히 같은 모양이다.
+ */
+let abortedSections = 0;
+
+/**
+ * 모드별 단언 수의 정본. **최종 가드 2건은 제외한 수다.**
+ *
+ * 가드가 자기 자신을 세면 순환이 된다(세는 시점에 아직 보고되지 않았다). 그래서 기준을
+ * 가드 앞으로 잡고, 「결과:」 줄의 수는 여기 적힌 값 + 2가 된다(녹색일 때 447 / 35 / 13).
+ *
+ * **왜 하한이 아니라 정확 일치인가.** 하한(`>=`)은 「단언 3건을 추가하고 2건을 잃어 순증 +1」인
+ * 변경을 통과시킨다. 이 레포에서 실제로 났던 사고가 그 형태에 가깝다 — 445에서 444로 줄었고
+ * 아무도 보지 않았다. 정확 일치는 단언 수가 바뀔 때마다 이 값을 함께 고치게 만드는데, 그것은
+ * 비용이 아니라 의도다: 이 레포는 이미 매 회차 총량 변화를 보고서에 적어 왔고(433 → 445 등),
+ * 그 육안 대조가 실패한 것이 이 가드를 만든 이유다.
+ *
+ * **이 가드가 막지 못하는 것(감추지 않는다).** `main()` 밖으로 예외가 새면 `main().catch`가
+ * `[중단]`을 찍고 exit 1로 죽으며 이 가드는 **아예 실행되지 않는다.** 즉 「프로세스가 죽는」
+ * 실패는 여전히 프로세스 밖에서만 관측된다(종료 코드와 「결과:」 줄의 부재). 모듈 최상위 판독을
+ * 지연 판독으로 바꾼 것이 그 부류를 줄이는 작업이었고, 여기서 더 좁힐 수단은 없다.
+ */
+const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
+  default: 445,
+  negative: 33,
+  golden: 11,
+});
+
 function report(ok, label) {
   if (ok) {
     passed += 1;
@@ -6447,6 +6478,7 @@ function runSection(label, fn) {
   try {
     fn();
   } catch (e) {
+    abortedSections += 1;
     console.log(`  [중단] 섹션 "${label}" 실행 중 예외 발생: ${e.stack ?? e.message}`);
     report(false, `섹션 "${label}"이 예외로 중단됨(${e.message})`);
   }
@@ -6456,9 +6488,61 @@ async function runSectionAsync(label, fn) {
   try {
     await fn();
   } catch (e) {
+    abortedSections += 1;
     console.log(`  [중단] 섹션 "${label}" 실행 중 예외 발생: ${e.stack ?? e.message}`);
     report(false, `섹션 "${label}"이 예외로 중단됨(${e.message})`);
   }
+}
+
+/**
+ * 모드의 마지막에 스위트 자체의 성질 2건을 단언하고 「결과:」를 찍은 뒤 종료한다.
+ *
+ * **왜 이 둘이 필요한가.** 지금까지 총량은 `console.log`로 출력만 됐고 어디서도 단언되지
+ * 않았다(실측: 이 파일에 기대 총량 리터럴이 0건이었다). 그래서 섹션이 예외로 중단돼 단언
+ * 여러 건이 **실행조차 되지 않아도** 「결과: N PASS / 0 FAIL」이 초록으로 보였고, 줄어든
+ * 총량을 사람이 눈으로 대조해야만 알아챌 수 있었다. 그 육안 대조는 실제로 실패했다.
+ *
+ * **두 가드의 관계 — 실측으로 좁힌 것이다. 「서로를 감시한다」고 읽지 마라.**
+ * 초판 주석이 그렇게 적었는데 변이로 **반증됐다**(2026-08-21):
+ *
+ * - **총량 가드는 「카운터가 무력화된 중단 가드」를 받쳐 준다.** `abortedSections += 1`을 지우고
+ *   섹션을 강제 중단시키면 중단 가드는 **공허하게 PASS**하지만, 그 섹션의 단언이 사라졌으므로
+ *   총량 가드가 FAIL한다(실측 443 PASS / 2 FAIL). 이것이 둘 사이의 **실재하는** 안전망이다.
+ * - **총량 가드는 「삭제된 중단 가드」를 보지 못한다.** 중단 가드 한 줄을 지우면 총량 가드는
+ *   그대로 PASS한다(실측 446 PASS / **0 FAIL**). 아래에서 `observed`를 가드 실행 **전**에
+ *   잡으므로 가드 자신의 개수는 `observed`에 들어가지 않는다 — 즉 가드를 지우는 변경은
+ *   이 축이 아니라 리뷰가 잡아야 한다. 그 한계를 메우려고 「가드를 세는 가드」를 두지는 않는다:
+ *   메타 가드는 끝없이 재귀하고, 이 레포의 관례는 막지 못하는 것을 정확히 적어 두는 쪽이다.
+ *
+ * 정확 일치를 하한(`>=`)으로 완화하는 변이는 무변이 트리에서 **아무것도 깨지 않는다**(실측
+ * 447 PASS / 0 FAIL) — 하한의 약점은 「단언을 3건 늘리고 2건 잃어 순증 +1」인 변경에서만
+ * 드러나므로, 그 완화를 되돌릴 근거가 게이트에 남지 않는다는 점도 함께 기록한다.
+ *
+ * @param {"default"|"negative"|"golden"} mode
+ */
+function finishMode(mode) {
+  // 가드 자신을 세기 **전**의 총량. 아래 두 report() 호출이 이 수를 바꾸므로 먼저 잡는다.
+  const observed = passed + failed;
+  const expected = EXPECTED_ASSERTIONS_BEFORE_GUARDS[mode];
+
+  if (abortedSections !== 0) {
+    console.log(`    실제: 예외로 중단된 섹션 ${abortedSections}건 — 그 섹션의 단언은 실행되지 않았다`);
+  }
+  report(abortedSections === 0, `스위트 가드: 예외로 중단된 섹션 0건(모드 ${mode})`);
+
+  if (observed !== expected) {
+    const delta = observed - expected;
+    console.log(
+      `    실제: 단언 ${observed}건(기대 ${expected}건, ${delta > 0 ? "+" : ""}${delta}) — ` +
+      (delta < 0
+        ? "단언이 사라졌다. 섹션 중단이나 조기 return을 먼저 보라."
+        : "단언이 늘었다. 의도한 추가라면 EXPECTED_ASSERTIONS_BEFORE_GUARDS를 함께 고쳐라.")
+    );
+  }
+  report(observed === expected, `스위트 가드: 단언 총량 ${expected}건(모드 ${mode}, 가드 2건 제외)`);
+
+  console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
+  process.exit(failed === 0 ? 0 : 1);
 }
 
 // A-36 대응: 아래 19개 runSection 호출("공통 섹션")은 이전에는 기본 모드와
@@ -6523,23 +6607,20 @@ async function main() {
   // 함께 돈다.
   if (golden) {
     runSection("골든 게이트", runGoldenGate);
-    console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
-    process.exit(failed === 0 ? 0 : 1);
+    finishMode("golden");
   }
 
   if (negative) {
     // A-36: 공통 섹션은 기본 모드가 이미 실행하므로 여기서는 재실행하지
     // 않는다 — negative 스위트 고유의 단언만 돈다.
     await runSectionAsync("negative 스위트", runNegativeSuite);
-    console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
-    process.exit(failed === 0 ? 0 : 1);
+    finishMode("negative");
   }
 
   runCommonSections();
   await runSectionAsync("기본 스모크", runDefaultSmoke);
 
-  console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
-  process.exit(failed === 0 ? 0 : 1);
+  finishMode("default");
 }
 
 main().catch((e) => {
