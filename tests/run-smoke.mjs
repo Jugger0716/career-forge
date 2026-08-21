@@ -117,7 +117,12 @@ import {
   checkContentHashInvariant,
 } from "../scripts/lib/invariants.mjs";
 import { computeEvidenceContentHash } from "../scripts/lib/content-hash.mjs";
-import { checkSamplingMethodLiteralDrift } from "../scripts/lib/sampling-literal-drift.mjs";
+import {
+  checkSamplingMethodLiteralDrift,
+  EVIDENCE_SCHEMA_REL,
+  GOLDEN_SCRIPT_REL,
+  SPEC_MD_REL,
+} from "../scripts/lib/sampling-literal-drift.mjs";
 import {
   OWNER_EMAIL,
   ALICE_EMAIL,
@@ -6181,38 +6186,96 @@ function runSamplingLiteralDriftSmoke() {
   {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sampling-drift-"));
     try {
-      fs.mkdirSync(path.join(tmpRoot, "schemas"), { recursive: true });
-      fs.mkdirSync(path.join(tmpRoot, "fixtures", "golden"), { recursive: true });
-      fs.mkdirSync(path.join(tmpRoot, "docs", "devcareer-prep-plugin"), { recursive: true });
+      // **재현 전제의 부재를 예외로 두지 않는다 — 각 단언의 FAIL로 떨어뜨린다.**
+      // 이 블록은 실제 레포 파일 세 개(스키마·골든 스크립트·spec.md)를 읽어
+      // 임시 사본을 조립한다. 초판은 그 읽기를 맨몸 `readFileSync`·
+      // `copyFileSync`로 했고, 그중 하나라도 없으면 예외가 `runSection`까지
+      // 올라가 **섹션 전체가 [중단]**됐다 — 아래 두 단언이 각각 FAIL로 떨어지는
+      // 대신 "섹션이 예외로 중단됨" 한 줄만 남아 **어느 축이 무너졌는지 읽을
+      // 수 없다.** (실측: `spec.md`를 지운 격리 사본에서 이 섹션이 spec.md를
+      // 복사하는 `copyFileSync`의 ENOENT로 중단됐다 — 그 회차의 FAIL 4건 중
+      // 하나가 「섹션이 예외로 중단됨」이었다.) 이 레포의 완료 조건이 「파일·필드
+      // 부재를 예외가 아니라 각 단언의 FAIL로 떨어뜨려라」를 요구하므로
+      // 규칙 위반이었다.
+      //
+      // **사유를 두 단언 전량에 싣지 않고, 그 파일에 의존하는 단언에만 싣는다.**
+      // 전량에 실으면 어느 파일이 없었는지가 다시 뭉뚱그려져 「어느 경로로
+      // 실패했는가를 고정하라」를 반대쪽에서 어긴다. 사전 확인은 스키마
+      // 하나에만 의존하고, 드리프트 대조는 세 파일 전부에 의존한다.
+      //
+      // **경로는 가드가 쓰는 정본 상수로 조립한다.** 세그먼트를 손으로 적으면
+      // `spec.md`가 옮겨질 때 이 사본만 조용히 옛 경로를 보고, 가드는 새 경로를
+      // 봐서 둘 다 값을 얻지 못하는데도 대조가 초록이 될 수 있다.
+      const readFailures = new Map();
+      const readRepoText = (rel) => {
+        try {
+          return fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+        } catch (e) {
+          readFailures.set(rel, e.code ?? e.message);
+          return null;
+        }
+      };
+      const blameFor = (rels) =>
+        rels.filter((rel) => readFailures.has(rel)).map((rel) => `${rel}(${readFailures.get(rel)})`).join(", ");
 
-      const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "evidence.schema.json"), "utf8"));
-      const desc = schema.$defs.coverage.properties.samplingMethod.description;
+      const schemaText = readRepoText(EVIDENCE_SCHEMA_REL);
+      const goldenText = readRepoText(GOLDEN_SCRIPT_REL);
+      const specText = readRepoText(SPEC_MD_REL);
+
+      // 스키마의 파싱 실패·형태 변화도 예외가 아니라 사유다 — description이
+      // 사라지거나 문자열이 아니게 되면 아래 `desc.replace`가 TypeError로 터진다.
+      let schema = null;
+      let desc = null;
+      if (schemaText !== null) {
+        try {
+          schema = JSON.parse(schemaText);
+        } catch (e) {
+          readFailures.set(EVIDENCE_SCHEMA_REL, `JSON 파싱 실패: ${e.message}`);
+        }
+        if (schema !== null) {
+          const raw = schema?.$defs?.coverage?.properties?.samplingMethod?.description;
+          if (typeof raw === "string") desc = raw;
+          else readFailures.set(EVIDENCE_SCHEMA_REL, "coverage.samplingMethod.description이 문자열이 아님");
+        }
+      }
+
       // 정본 리터럴의 마지막 글자 하나만 바꾼다(예: "bucket" → "buckeu") —
       // 사람이 실수로 오타를 낸 것과 같은 형태의 드리프트.
-      schema.$defs.coverage.properties.samplingMethod.description = desc.replace(
-        "carry-to-next-bucket`", "carry-to-next-buckeu`"
-      );
+      const mutatedDesc = desc === null ? null : desc.replace("carry-to-next-bucket`", "carry-to-next-buckeu`");
+      const schemaBlame = blameFor([EVIDENCE_SCHEMA_REL]);
+      if (schemaBlame) console.log(`    실제: 스키마 판독 실패 — ${schemaBlame}`);
       report(
-        schema.$defs.coverage.properties.samplingMethod.description !== desc,
+        mutatedDesc !== null && mutatedDesc !== desc,
         "사전 확인: 임시 스키마 사본의 samplingMethod description이 실제로 1글자 변조됨(재현 전제 성립)"
       );
-      fs.writeFileSync(path.join(tmpRoot, "schemas", "evidence.schema.json"), JSON.stringify(schema, null, 2), "utf8");
 
-      // 골든 스크립트·spec.md는 실제 레포 파일을 그대로 복사한다(원본 값 유지).
-      fs.copyFileSync(
-        path.join(REPO_ROOT, "fixtures", "golden", "compute-sampling-golden.mjs"),
-        path.join(tmpRoot, "fixtures", "golden", "compute-sampling-golden.mjs")
-      );
-      fs.copyFileSync(
-        path.join(REPO_ROOT, "docs", "devcareer-prep-plugin", "spec.md"),
-        path.join(tmpRoot, "docs", "devcareer-prep-plugin", "spec.md")
-      );
+      // 세 파일 중 하나라도 판독하지 못했으면 드리프트 대조는 **성립하지 않는다.**
+      // 그 상태에서 그냥 대조하면 결함이 있는 사본으로도 `ok`가 참이 될 수 있다
+      // (예: spec.md만 없으면 present 세 곳 중 스키마가 여전히 어긋나 mismatches에
+      // 잡힌다) — 즉 불완전한 픽스처 위에서 통과하는 검사가 된다.
+      let driftOk = false;
+      const fixtureBlame = blameFor([EVIDENCE_SCHEMA_REL, GOLDEN_SCRIPT_REL, SPEC_MD_REL]);
+      if (fixtureBlame) {
+        console.log(`    실제: 재현 전제 불성립 — 레포 파일 판독 실패: ${fixtureBlame}`);
+      } else {
+        // 스키마만 변조본으로 쓰고, 골든 스크립트·spec.md는 원문 그대로 쓴다.
+        schema.$defs.coverage.properties.samplingMethod.description = mutatedDesc;
+        for (const [rel, text] of [
+          [EVIDENCE_SCHEMA_REL, JSON.stringify(schema, null, 2)],
+          [GOLDEN_SCRIPT_REL, goldenText],
+          [SPEC_MD_REL, specText],
+        ]) {
+          const dest = path.join(tmpRoot, rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, text, "utf8");
+        }
 
-      const result = checkSamplingMethodLiteralDrift(tmpRoot);
-      const ok = result.ok === false && result.mismatches.includes("schemas/evidence.schema.json");
-      if (!ok) console.log(`    실제: ok=${result.ok} mismatches=${JSON.stringify(result.mismatches)} missing=${JSON.stringify(result.missing)}`);
+        const result = checkSamplingMethodLiteralDrift(tmpRoot);
+        driftOk = result.ok === false && result.mismatches.includes(EVIDENCE_SCHEMA_REL);
+        if (!driftOk) console.log(`    실제: ok=${result.ok} mismatches=${JSON.stringify(result.mismatches)} missing=${JSON.stringify(result.missing)}`);
+      }
       report(
-        ok,
+        driftOk,
         "FAIL 관측: 스키마 description의 정본 리터럴만 1글자 바꾸면(sampling.mjs·골든 스크립트·spec.md는 그대로) " +
         "checkSamplingMethodLiteralDrift가 'schemas/evidence.schema.json'을 드리프트로 지목함"
       );
