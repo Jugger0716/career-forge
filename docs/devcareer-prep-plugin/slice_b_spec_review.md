@@ -539,9 +539,24 @@ AC-10("모든 산출물 헤더에 커버리지 메타데이터 … 기재율 100
 
       **다만 이 축의 검사 대상은 아직 만들어질 수 없다 — 스키마 결정이 남아 있다.** 상세는
       아래 「게이트 C-2 후속 — external basis의 표현 불가 문제」 절.
-- [ ] C-3. `--contamination`의 실행 모델(스킬 실행 주체 / 채점 주체 / 3회의 대상)을 스펙에
+> **체크박스 정정(2026-08-21).** C-3·C-4는 게이트 A 회차와 같은 종류의 잔류다 — 요구된 스펙
+> 문장은 `spec.md` 구현 9단계에 이미 들어가 있는데 이 문서의 표시만 `[ ]`로 남아 있었다.
+> 이번 회차에 `spec.md` 원문을 대조한 뒤 표시를 맞췄다. **「미완」으로 읽고 다시 하면 이미
+> 한 일을 두 번 한다.** 상세는 문서 끝 「정정 기록 (2026-08-21)」 절.
+> (오염 스위트 자체의 구축은 별개다 — `tests/contamination/`도 `--contamination`도 아직 없고,
+> 그것은 AC-8의 몫이지 이 두 체크박스의 몫이 아니다.)
+
+- [x] C-3. `--contamination`의 실행 모델(스킬 실행 주체 / 채점 주체 / 3회의 대상)을 스펙에
       명문화 — **C-1**
-- [ ] C-4. 40건의 기반 픽스처·원장 지정 — **m-4**
+      **확인(2026-08-21)**: `spec.md` 구현 9단계가 「스킬 실행 3회는 **사람이 수행**해 산출물을
+      `tests/contamination/runs/<run-id>/`에 남기고, `--contamination`은 그것을 읽어 **채점만**
+      한다」를 적고, AC-8이 실행 주체·채점 주체·3회의 대상을 (i)~(v)로 못 박는다.
+- [x] C-4. 40건의 기반 픽스처·원장 지정 — **m-4**
+      **확인(2026-08-21)**: 같은 구현 9단계 문단이 「40건은 300커밋 픽스처(봇·타 저자·머지 커밋을
+      포함하도록 구성된 것) 위에서 수집한 원장을 대상으로 주입한다」로 지정했다. 그 픽스처는
+      `fixtures/make-fixture.mjs`의 `buildLarge300`(traversed 300·봇 20·타 저자 30·머지 5 선언 +
+      `verifyLarge300Composition` 자기 검증)으로 실재한다. **남은 공백**: 40건 원장의 수집 옵션
+      (선택 identity 집합·머지 포함 여부)은 (17) 케이스처럼 못 박혀 있지 않다 — 별개 항목이다.
 - [x] C-5. `verify-evidence`의 `citations.total === 0` → `INCONCLUSIVE` 변경을 T3 반영과 함께
       처리 — **C-3**(콜드 리뷰 B-1과 동일 지점)
       **닫힘(2026-08-19)** — `slice_plan.md` 예외 5번. 판정은 `status`가 `INCONCLUSIVE`이고
@@ -716,9 +731,21 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 
 ## □ 게이트 D — 도그푸딩 (구현 10단계 착수 전, 그러나 **결정은 지금**)
 
+> **체크박스 정정(2026-08-21).** D-2는 이미 충족돼 있었다 — 근거는 각 줄에 적었다.
+> **게이트 D가 열려 있는 이유는 D-1 하나다.** 상세는 문서 끝 「정정 기록 (2026-08-21)」 절.
+
 - [ ] D-1. 대상 레포 확정·기록(이름·커밋 수·저자 수·공개 여부) — **M-8**
-- [ ] D-2. **T3(타인 커밋 PII) 설계 재검토를 구현 10단계보다 앞에 완료**하고 `spec.md` §6을
+      **미확정(2026-08-21).** 대상 레포는 **사용자가 직접 지정한다**(결정 D1). 후보 조사를
+      에이전트에 위임하지 않으며, **이름을 추측으로 채우지 않는다.** 또한 결정 D2에 따라
+      **실물 PII가 흐르기 전에 원격을 private으로 전환하는 것이 이 항목의 선행 조건**이다.
+- [x] D-2. **T3(타인 커밋 PII) 설계 재검토를 구현 10단계보다 앞에 완료**하고 `spec.md` §6을
       개정 — **M-8**. 도그푸딩은 실제 동료 PII가 처음으로 실물로 흐르는 지점이다.
+      **확인(2026-08-21)**: §6이 (i) 제외 커밋의 원장 전량 등재 유지, (ii) `authorEmail`·
+      `subject`·`coAuthors`의 기록 시점 축소 + 스키마 조건부 강제, (iii) 원장→LLM 컨텍스트
+      경계 축소(`projectLedgerForSkills` 투영), (iv) 잔여 위험(`files[].path`·`authorDate`)
+      공개, (v) AC-11 deny-list 미채택 사유를 담는다. M-8 수정안 ③이 재검토의 산출물을 §6 개정
+      자체로 규정했으므로 별도 검토 문서는 요건이 아니다. 관측은 스모크 T3 단언 7건 +
+      (LP-2)(LP-3) + `--negative` 케이스 (22). **이 확인은 D2(private 전환)를 대체하지 않는다.**
 
 ---
 
@@ -747,3 +774,186 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
   오탐되지 않는다(`tests/fixtures-valid/career.json`이 이 경로를 positive로 덮고 있다).
 - **`config.schema.json`이 §4의 P0 예산 단일 축을 지키고 있다.** `budget`에 `maxCommits`
   하나뿐이고 샘플링 비율 상수가 파라미터로 노출돼 있지 않다.
+
+---
+
+## 정정 기록 (2026-08-21) — 문서가 코드와 어긋난 곳
+
+이 문서와 핸드오프가 「아직 남았다」고 적은 항목 중 **이미 코드로 닫힌 것**을 실측으로 가려낸 회차의 기록이다. 목적은 하나다 — **미완으로 읽고 다시 손대면 이미 한 일을 두 번 한다.** 문서와 코드가 갈릴 때 정본은 코드다(게이트 A 「체크박스 정정(2026-08-20)」과 같은 규율).
+
+이 회차의 실측 기준: `node tests/run-smoke.mjs` 기본 445 PASS / 0 FAIL, `--negative` 33 PASS / 0 FAIL, `--golden` 11 PASS / 0 FAIL, `node scripts/validate-plugin.mjs` PASS(전부 exit 0). 아래 「근거」의 파일:행은 이 시점의 워킹 트리 기준이다.
+
+> **핸드오프 원문은 고치지 않는다.** `docs/handoff/**`는 시점 기록이므로 사후에 손대지 않는다 — 핸드오프가 적은 내용 중 낡은 것은 이 절에 정정으로 남기고, 최신 상태는 항상 이 절과 `git log`가 정본이다.
+
+---
+
+### 이 시점에 실제로 열려 있는 것 (코드를 열지 않고 읽는 요약)
+
+- **D-1. 도그푸딩 대상 레포 미확정** — 게이트 D가 열려 있는 유일한 이유다(이 문서 「반영 현황」의 열린 항목 목록가 열린 항목을 「M-8(b)」로만 적은 것과 일치, `spec.md:227`도 「현재 미확정」).
+- **`schemas/plan.schema.json:173`의 `const: "insufficient"`** — 슬라이스 A 파일 수정 예외 4번 ②의 미완 집행분(아래 정정 5).
+- **AC-8(오염 스위트 3회)·AC-20(도그푸딩)·AC-22(실제 skill-gap 실행)** — 실측으로 확실히 미완이다. `tests/contamination/` 디렉터리, `run-smoke.mjs`의 `--contamination` 플래그, `skills/skill-gap/` 모두 아직 없다. 이 셋의 체크박스는 맞다.
+- **`scripts/verify-evidence.mjs`가 `checkEvidenceInvariants`를 호출하지 않는다** — `:120`이 `checkContentHashInvariant`만 import하며, AC-6 (iii) 불변식의 유일한 배선 지점은 `scripts/validate-plugin.mjs:845`(`--schema-check`)다. 별건으로 `cold_review.md:163`(A-20)에 기록돼 있고 아직 열려 있다.
+- **`parentRefs: []`가 `minItems: 1` 위반을 실제로 내는지 관측하는 픽스처가 0건** — 이 문서 부록이 「슬라이스 B로 남긴다」고 적은 그 픽스처가 슬라이스 B가 이만큼 진행된 지금도 없다.
+- **m-1(`state.artifacts.evidence`를 쓰는 주체 없음)**, **AC-11 deny-list 스캔 미채택(§6에 미해결로 기록)**, **M-6 두 번째 수정안(슬라이스 C 이연)** — 이 문서 「반영 현황」의 열린 항목 목록의 나머지 열린 항목은 이번 실측에서도 그대로 열려 있다.
+
+---
+
+### A. 확정 정정 — 오케스트레이터 실측분 (재확인 불필요)
+
+**1. 「exit 4 분기는 CLI 레벨에서 관측할 수 없어 함수 계약으로 대체했다」 (f029375 Major #3)**
+
+- **문서가 적은 것**: 핸드오프가 「CLI 레벨 관측은 portable하게 만들 수 없어 함수 계약으로 대체했으므로 완전히 닫혔다고 보지 마라」고 적었다.
+- **실제**: 리뷰가 제안한 테스트가 그대로 존재한다. 손상된 `state.json`을 심고 `r.status === 4` + stderr `[REGISTRY]` 접두 + `career.json` 기록됨 + `state.json` 원문(`{broken`) 보존, 네 가지를 CLI 레벨에서 한 번에 단언한다. **닫혔다.**
+- **근거**: `tests/run-smoke.mjs:3265-3272` (WA-15).
+
+**2. 「nodes 비배열 fail-open이 남아 있다」 (f029375 Major #1)**
+
+- **문서가 적은 것**: draft의 `nodes`가 배열이 아닐 때 조용히 통과하는 통로가 남아 있다.
+- **실제**: 두 지점 모두 `NODES_NOT_ARRAY`로 거부한다 — 계약 검사 진입부와 병합 함수 입구 양쪽이다. **닫혔다.**
+- **근거**: `scripts/lib/artifact-contract.mjs:161`(계약 검사), `:317`(`mergeArtifact` 입구 — 「규칙 5 — 강등하지 않는다」 주석과 함께).
+
+**3. 게이트 C-3 — 「`--contamination` 실행 모델을 스펙에 명문화해야 한다」**
+
+- **문서가 적은 것**: 이 문서 게이트 C의 C-3 체크박스(정정 전)의 C-3 체크박스가 `[ ]`이고, 핸드오프 Next Step 4도 「9단계 착수 전 C-1을 명문화하라」로 남아 있다.
+- **실제**: `spec.md`가 이미 명문화했다 — 구현 9단계가 「스킬 실행 3회는 **사람이 수행**해 산출물을 `tests/contamination/runs/<run-id>/`에 남기고, `--contamination`은 그것을 읽어 **채점만** 한다」를 적고, AC-8이 실행 주체·채점 주체·3회의 대상을 못 박는다. **남은 것은 체크박스 표시뿐이다**(스위트 자체의 구축은 별개로 미착수 — 위 「열려 있는 것」 참조).
+- **근거**: `docs/devcareer-prep-plugin/spec.md:222`(구현 9단계), `:163`(AC-8).
+
+**4. `schemas/config.schema.json`의 최상위 `required`는 8개가 아니라 9개다**
+
+- **문서가 적은 것**: 핸드오프가 required 8개라고 적었다.
+- **실제**: 9개다 — `schemaVersion`·`updatedAt`·`identitySelection`·`scope`·`budget`·`includeDiff`·`exclusions`·`storage`·`snippetQuoting`. D3(아래)의 얇은 CLI가 자기 검증할 대상이 이 9개다.
+- **근거**: `schemas/config.schema.json`의 최상위 `required` 배열(9개 원소).
+
+**5. 드리프트 — `slice_plan.md` 예외 4번 ②가 「네 파일 모두」라고 적는데 코드는 3/4다**
+
+- **문서가 적은 것**: `slice_plan.md:25` 예외 4번 ②는 「**네 파일 모두** 「`evidence`가 비면 `basis`는 `insufficient`」 조건절을 `["insufficient","external"]`로 완화」한다고 적었다(커밋 `5f71c32`의 "all four"도 같은 과대 진술).
+- **실제**: career·gap-report·knowledge-map 세 파일만 `enum`으로 완화됐고 **plan만 아직 `const: "insufficient"`**다. 새 예외가 아니라 **예외 4번의 미완 집행**으로 처리한다(D4).
+- **근거**: `schemas/plan.schema.json:173`(`"then": { "properties": { "basis": { "const": "insufficient" } } }`).
+
+---
+
+### B. 이어 붙인 정정 — 이번 회차에 반증을 통과한 것
+
+**6. 게이트 C-4 — 「40건의 기반 픽스처·원장 지정」**
+
+- **문서가 적은 것**: 이 문서 게이트 C의 C-4 체크박스(정정 전)가 `- [ ] C-4. 40건의 기반 픽스처·원장 지정 — m-4`로 남아 있다(게이트 A와 달리 게이트 C 블록에는 「체크박스 정정」 주석이 0건).
+- **실제**: C-3과 **같은 문단**에서 함께 확정됐다 — 「40건은 300커밋 픽스처(봇·타 저자·머지 커밋을 포함하도록 구성된 것) 위에서 수집한 원장을 대상으로 주입한다」. 지정 대상 픽스처는 실재한다(`buildLarge300`: traversed 300 / 봇 20 / 타 저자 30 / 머지 5 선언 + 자기 검증). 이 문서 자신의 반영 현황 `:75`도 m-4를 「스펙에만 적혔고 코드는 슬라이스 B가 만든다」 목록에 올려 두었다. 체크박스가 들어간 커밋(`c8cfd7c`)보다 지정 문장이 **나중**(`a31bdca`)이다.
+- **근거**: `docs/devcareer-prep-plugin/spec.md:222`; `fixtures/make-fixture.mjs`의 `buildLarge300`·`verifyLarge300Composition`, `:845`(`ownerTotal: 240 + 5 + 5`); 이 문서 「반영 현황」.
+- **남는 공백(정직하게 기록)**: 40건 원장의 **수집 옵션**(선택 identity 집합·머지 포함 여부)은 (17) 케이스처럼 「머지 포함 설정에서 실행」으로 못 박혀 있지 않다. m-4가 요구한 「어느 픽스처·어느 원장 위에」는 충족됐으므로 C-4를 열어 둘 근거는 아니고, 별개 항목으로 다룬다.
+
+**7. 게이트 C-2 후속 표 — 「`externalUrl`을 담을 자리가 세 계층에 없다」**
+
+- **문서가 적은 것**: 이 문서 「게이트 C-2 후속」 절의 표의 표가 career·gap-report·plan의 `externalUrl` 칸을 **「없음」**으로 적고, 「출처를 기록할 자리가 없고 `additionalProperties: false`가 추가도 막는다」고 서술한다.
+- **실제**: 네 계층 **모두** `externalUrl` 프로퍼티와 `basis: "external" → required: ["externalUrl"]` 조건절을 갖는다. 커밋 `5f71c32`(2026-08-19 12:26, 예외 4번 ①)가 절이 들어온 지 22분 뒤에 고쳤는데 이 문서만 갱신되지 않았다. 표의 1열(`basis` enum에 `external`)과 3열(`additionalProperties: false`)은 여전히 맞고 **2열만 무효**다.
+- **근거**: `schemas/career.schema.json:187`·`:196`, `schemas/gap-report.schema.json:168`·`:177`, `schemas/knowledge-map.schema.json:164`·`:177`, `schemas/plan.schema.json:160`·`:169`. 관측은 `tests/run-smoke.mjs:539`(금지 방향 — `externalUrl` 없으면 FAIL)와 `:578-582`(허용 방향 — 커밋 근거 없이 URL 출처만 있는 노드가 통과).
+- **단서**: 그 스모크 루프는 career·knowledge-map·gap-report 3계층뿐이라(`tests/run-smoke.mjs:566`) **plan은 소스 확인만** 됐다. 그리고 이 절의 **(2)는 plan에서 아직 열려 있다** — 위 정정 5와 같은 지점이다. 부수 발견: `tests/run-smoke.mjs:913-915` 주석도 같은 낡은 서술을 담고 있다(정정 대상 아님, 기록만).
+
+**8. 반영 현황 「아직 열려 있다」 — 「`origin`·`verification` 기입 주체 규약에 집행 코드가 없다」**
+
+- **문서가 적은 것**: 이 문서 「반영 현황」의 「아직 열려 있다」 목록가 「집행 코드가 없다 — 현재는 스키마 description과 AC의 산문뿐이다. 슬라이스 B가 병합 로직을 만들 때 정적 린트로 승격할지 판단해야 한다」.
+- **실제**: 첫 문장이 사실과 반대다. `checkAuthorshipContract`가 생성 출력의 자기기입을 거부하고, `write-artifact.mjs`가 **병합보다 먼저** 이를 호출해 위반 시 exit 1로 아무 파일도 만들지 않는다. 이 불릿을 마지막으로 만진 커밋(`13c48e6`, 08-19)보다 집행 코드가 **나중**(`f029375` → `4cb236b`)이다. 같은 문서 B-7(`:485-487`)이 이미 「`verification`을 M-1에서 닫은 것과 같은 형태」라고 적어 자기 문서와도 어긋난다.
+- **근거**: `scripts/lib/artifact-contract.mjs:180`(`ORIGIN_SET_BY_TEMPLATE`)·`:238`(`VERIFICATION_SET_BY_TEMPLATE`)·`:425`(`NODE_ID_CHURN`); `scripts/write-artifact.mjs:322`(계약 검사 — 주석 「병합보다 **먼저** 본다」)·`:355`(`mergeArtifact`); `tests/run-smoke.mjs:3168`(WA-8 — exit 1 + 파일 미생성 + stderr에 `VERIFICATION_SET_BY_TEMPLATE`).
+- **단서**: 여기서 승격 후보로 적었던 **「템플릿 본문 정적 린트」는 채택되지 않았다.** 집행 지점은 쓰기 경계의 런타임 검사이고 프롬프트 문안(`career-writer.md` 규칙 6, `fact-checker.md`)은 보조 방어다 — 그 근거가 `artifact-contract.mjs:136-139` 주석에 남아 있다.
+
+**9. 게이트 D-2 — 「T3(타인 커밋 PII) 설계 재검토를 10단계보다 앞에 완료하고 §6을 개정」**
+
+- **문서가 적은 것**: 이 문서 게이트 D의 D-2 체크박스이 `[ ]`로 남아 있다.
+- **실제**: 두 요건 모두 충족됐다. §6이 (i) 제외 커밋의 원장 전량 등재 유지, (ii) `authorEmail`·`subject`·`coAuthors`의 **기록 시점 축소** + 스키마 조건부 강제, (iii) **원장→LLM 컨텍스트 경계** 축소(L1+ 스킬은 원본이 아니라 `projectLedgerForSkills(evidence)` 투영본을 읽는다), (iv) 잔여 위험(`files[].path`·`authorDate`가 남는다) 공개, (v) AC-11 deny-list 미채택 사유를 모두 담는다. M-8 수정안 ③은 재검토의 산출물을 **§6 개정 자체**로 규정했으므로 별도 문서는 요구되지 않는다. `spec.md:227`도 10단계 선행 조건 (a)(§6 정책 반영)에는 미확정 표시를 달지 않고 (b)(대상 레포)에만 「현재 미확정」을 붙였다. 게이트 D가 열려 있는 이유는 **D-1 하나**다.
+- **근거**: `docs/devcareer-prep-plugin/spec.md:130`·`:132`(§6), `:227`(구현 10단계 선행 조건 (a)/(b)); `schemas/evidence.schema.json:249-272`(`excluded` 조건절 3건 + `x-invariant-note`); `docs/handoff/2026-08-18-slice-b-gate-a-t3-prework.md:16-17`; 이 문서 「반영 현황」의 「코드로 닫혔고 절 단위로 관측된다」 표(T3 행이 「코드로 닫혔고 절 단위로 관측된다」 표에 있음)·`:85`(열린 항목을 「M-8(b)」로만 적음). 실행 관측: 스모크의 T3 단언 7건(기록 시점 축소·대조군·비공허성·`coAuthors` 축소)과 §6 투영 경계 (LP-2)(LP-3), `--negative` 케이스 (22)(`tests/fixtures-invalid/22-evidence-excluded-commit-pii-leak` → exit 1 + `SCHEMA_CHECK_VIOLATION`) 전부 PASS.
+
+**10~14. `plan_critic_findings.md` 게이트 A-1·A-2·A-3·A-5·B-1·B-2 — 요구한 스펙 문장은 이미 들어가 있다**
+
+이 항목들은 **다른 파일**(`docs/devcareer-prep-plugin/plan_critic_findings.md`)의 체크박스지만, 그 파일의 `[ ]` 열은 이 레포 역사에서 `[x]`로 뒤집힌 적이 한 번도 없다(아래 「정정하려다 반증된 것」 참조). 그래서 **그 파일을 일괄로 뒤집지 말고**, 실제 상태는 여기에 기록한다.
+
+| 항목 | 문서가 적은 것 | 실제 | 근거 |
+|---|---|---|---|
+| **A-1** (`:22`) | AC-6의 `truncated` 불변식이 한 방향뿐이니 양방향(T-1)·동치(T-2)를 추가하라 | AC-6이 (T-1) `dropped_commits > 0` ⟺ `reason != "none"`, (T-2) `reason == "none"` ⟺ `samplingMethod == "none:full-scan"`을 **픽스처 종류·절단 발생 여부와 무관한 전역 불변식**으로 명문화했고 코드가 집행한다 | `spec.md:161`; `schemas/evidence.schema.json:153-171`(T-1 + `x-invariant-note`), `scripts/lib/invariants.mjs:60`(T-1)·`:85`(T-2)·`:285`(묶음)·`scripts/validate-plugin.mjs:78`·`:845`(배선); `--negative` 케이스 (14) `tests/fixtures-invalid/14-evidence-truncated-samplingmethod-mismatch` → `EVIDENCE_INVARIANT_T2_VIOLATION` PASS |
+| **A-2** (`:23`) | AC-6에 (iii)(`isMerge === (parents.length >= 2)`)·(iv)(merge 픽스처 비공허성) 절을 추가하라 | 두 절 모두 AC-6에 들어가 있고 코드·픽스처로 관측된다 | `spec.md:161`; `scripts/lib/invariants.mjs:171`(`checkIsMergeOracleInvariant` → `EVIDENCE_INVARIANT_AC6_III_VIOLATION`)·`:307`(`checkMergeNonVacuous`); `--negative` 케이스 (15) `tests/fixtures-invalid/15-evidence-ismerge-parents-mismatch` PASS, `--golden`의 「300커밋 픽스처의 실제 원장에 머지 5건이 (iv) 비공허성을 만족함」 PASS |
+| **A-3** (`:24`) | `coverage.traversed`의 값 계약을 스키마 description에 못 박아라 | 문구가 들어가 있고(「예산·절단의 분모로 쓰지 않으며, `analyzed` 또는 `total`을 그대로 복사한 값이 될 수 없다」), 「값 계약이 있어도 읽는 조항이 없다」는 우려까지 재계산 불변식으로 해소됐다 | `schemas/evidence.schema.json:80`, `spec.md:186`; `scripts/lib/invariants.mjs:204`(원장 `commits[]`로 `traversed === total + excluded 건수` 독립 재계산 + `analyzed <= total <= traversed`)·`:292`(배선); `--negative` 케이스 `tests/fixtures-invalid/17-evidence-coverage-traversed-copied-from-total` → `EVIDENCE_INVARIANT_COVERAGE_TRAVERSED_VIOLATION` PASS |
+| **A-5** (`:26`) | Co-authored-by 트레일러의 P0 방침을 스키마 확정 전에 정하라 (「어떤 AC도 없다」) | 「원장에 기록하되 귀속 규칙은 두지 않는다」로 **확정**됐다 — 트레일러를 파싱해 `coAuthors[]`에 원문 문자열 배열로 기록(부재·파싱 실패 시 빈 배열), 저자 필터·`excluded` 판정·정량 집계 반영은 P1 명시 연기. AC도 생겼다 | `spec.md:186`(구현 2단계 확정문), `:280`(엣지 케이스 재확인), `:161`(AC-6의 비공허성 검사); `schemas/evidence.schema.json:213`·`:258`(`excluded: true` → `maxItems: 0`), `scripts/collect-git-facts.mjs:413`; 스모크의 T3 `coAuthors` 축소/대조군/비공허성 PASS. **같은 문서 `:173` 미검사 영역 표의 「Co-authored-by 트레일러」 행도 함께 낡았다** |
+| **B-1·B-2** (`:32-33`) | AC-21과 테스트 전략 [볼륨]의 `250` 하드코드가 **「올바른 구현을 FAIL시킨다」**(현재형 사실 주장) | 두 곳 모두 관계식으로 바뀌었다 — AC-21이 「`dropped_commits`는 250이 아니다. 절대값을 하드코딩하면 정확히 구현된 수집기가 오히려 FAIL 하므로 개수는 관계식으로만 적는다」를 명시하고 `traversed == 300`·`total ==` 픽스처 선언값·`analyzed == K == 50`을 못 박았다. 실측 `dropped_commits`는 **200**이다 | `spec.md:176`(AC-21), `:251`(테스트 전략 [볼륨]); `tests/run-smoke.mjs:5957`(`run1.coverage.total === declared.ownerTotal`)와 값 출처 `fixtures/make-fixture.mjs:845`; `--golden` 11 PASS / 0 FAIL |
+
+**15. `README.md`가 `verify-evidence.mjs`의 exit 2를 INCONCLUSIVE로 단정한다**
+
+- **문서가 적은 것**: `README.md`의 「2) L1+ 산출물의 인용을 검증하기」 종료 코드 범례가 「`2`=INCONCLUSIVE(도구·레포 오류로 일부를 검증하지 못함 — "성공"이 아니므로 0을 반환하지 않는다)」로만 적는다.
+- **실제**: **`[INPUT_ERROR]`도 같은 exit 2다.** 인자·파일 문제(입력 파일 판독 실패, JSON 파싱 실패)와 「검증을 완결하지 못함」이 같은 코드로 나오고, 구별은 stderr 접두사로 한다. 이 레포는 이미 이것을 금지 규약으로 못 박았고(`skills/career-from-git/SKILL.md` 7단계의 「exit 2를 INCONCLUSIVE로 단정하지 마라 — `[INPUT_ERROR]`도 같은 코드다」), README만 그 규약을 어긴다. README는 `INPUT_ERROR`를 **0회** 언급한다. 「증거가 부족해 결론을 못 냈다」와 「내가 인자를 잘못 줬다」는 사용자에게 전혀 다른 이야기이므로, 접두사를 보지 않고 보고하면 그럴듯하지만 틀린 이유를 전달하게 된다.
+- **근거**: `scripts/verify-evidence.mjs`에 `process.exit(2)`가 8곳이며 `:959-960`·`:965-966`이 `[INPUT_ERROR]` 갈래, `:1121`·`:1135` 등이 `[INCONCLUSIVE]` 갈래다. `skills/career-from-git/SKILL.md`는 `INPUT_ERROR`를 언급하고 `README.md`는 하지 않는다.
+- **고치는 법**: 범례를 「`2`=INCONCLUSIVE **또는** 입력 오류 — stderr 접두사 `[INCONCLUSIVE]`/`[INPUT_ERROR]`로 구별한다」로 바꾼다. **이 정정은 이 절에 기록만 하고 README 자체는 아직 고치지 않았다.**
+
+---
+
+### 체크박스를 어떻게 고칠 것인가 (게이트 C·D)
+
+게이트 A의 「체크박스 정정(2026-08-20)」과 **같은 형식**으로 고친다 — 블록 인용 주석 한 덩어리 + 각 줄에 `**확인(2026-08-21)**:` 근거. 게이트 C 블록(`:518-546`) 머리에 다음을 넣고, 두 줄을 아래처럼 교체한다.
+
+```markdown
+> **체크박스 정정(2026-08-21).** C-3·C-4는 게이트 A 회차와 같은 종류의 잔류다 — 요구된 스펙
+> 문장은 `spec.md` 구현 9단계에 이미 들어가 있는데(커밋 `a31bdca`, 이 문서의 체크박스가 들어간
+> `c8cfd7c`보다 나중이다) 이 문서의 표시만 `[ ]`로 남아 있었다. 이번 회차에 `spec.md` 원문을
+> 대조한 뒤 표시를 맞췄다. **「미완」으로 읽고 다시 하면 이미 한 일을 두 번 한다.**
+> (오염 스위트 자체의 구축은 별개다 — `tests/contamination/`도 `--contamination`도 아직 없고,
+> 그것은 AC-8의 몫이지 이 두 체크박스의 몫이 아니다.)
+
+- [x] C-3. `--contamination`의 실행 모델(스킬 실행 주체 / 채점 주체 / 3회의 대상)을 스펙에
+      명문화 — **C-1**
+      **확인(2026-08-21)**: `spec.md:222`(구현 9단계)가 「스킬 실행 3회는 **사람이 수행**해
+      산출물을 `tests/contamination/runs/<run-id>/`에 남기고, `--contamination`은 그것을 읽어
+      **채점만** 한다」를 적고, `spec.md:163`(AC-8)이 실행 주체·채점 주체·3회의 대상을
+      (i)~(v)로 못 박는다.
+- [x] C-4. 40건의 기반 픽스처·원장 지정 — **m-4**
+      **확인(2026-08-21)**: 같은 `spec.md:222`가 「40건은 300커밋 픽스처(봇·타 저자·머지 커밋을
+      포함하도록 구성된 것) 위에서 수집한 원장을 대상으로 주입한다」로 지정했다. 그 픽스처는
+      `fixtures/make-fixture.mjs`의 `buildLarge300`(traversed 300·봇 20·타 저자 30·머지 5 선언 +
+      `verifyLarge300Composition` 자기 검증)으로 실재한다. **남은 공백**: 40건 원장의 수집 옵션
+      (선택 identity 집합·머지 포함 여부)은 (17) 케이스처럼 못 박혀 있지 않다 — 별개 항목이다.
+```
+
+게이트 D(`:717-721`)는 **D-1만 열어 둔다.**
+
+```markdown
+- [ ] D-1. 대상 레포 확정·기록(이름·커밋 수·저자 수·공개 여부) — **M-8**
+      **미확정(2026-08-21).** 대상 레포는 **사용자가 직접 지정한다**(D1). 이름을 추측으로 채우지 않는다.
+- [x] D-2. **T3(타인 커밋 PII) 설계 재검토를 구현 10단계보다 앞에 완료**하고 `spec.md` §6을
+      개정 — **M-8**.
+      **확인(2026-08-21)**: 커밋 `a31bdca`(2026-08-18)가 재검토와 §6 개정을 함께 처리했다 —
+      `spec.md:130`(기록 시점 축소 + `evidence.schema.json` 조건부 강제 + `projectLedgerForSkills`
+      투영으로 원장→LLM 컨텍스트 경계 차단 + deny-list 미채택 사유)·`:132`(잔여 위험 공개).
+      M-8 수정안 ③이 재검토의 산출물을 §6 개정 자체로 규정했으므로 별도 검토 문서는 요건이
+      아니다. 관측은 스모크 T3 단언 7건 + (LP-2)(LP-3) + `--negative` 케이스 (22).
+      **게이트 D가 열려 있는 이유는 D-1 하나다**(이 문서 `:85`가 열린 항목을 「M-8(b)」로만 적은 것과 일치).
+```
+
+---
+
+### 이 회차에 사용자가 확정한 결정 (D1~D4)
+
+이 절이 이 회차의 **유일한 결정 기록**이다. 아래 넷은 심사 항목이 아니라 사용자가 내린 결정이며, 다음 세션은 이것을 전제로 움직인다.
+
+- **D1. 도그푸딩 대상 레포는 사용자가 직접 지정한다.** 후보 조사를 에이전트에 위임하지 않는다. **아직 미지정이며, 이름을 지어내면 안 된다** — 추측으로 채운 레포명은 그 자체로 결함이다(게이트 D-1이 열려 있는 이유).
+- **D2. 실물 PII가 흐르기 전에 원격을 private으로 전환한다.** 도그푸딩(구현 10단계) 착수 전 **필수 선행**이다. 도그푸딩은 실제 동료 PII가 처음으로 실물로 흐르는 지점이므로, §6의 T3 정책(정정 9)이 코드로 닫혀 있다는 사실만으로 이 선행 조건을 건너뛰지 않는다.
+- **D3. `config.json` 갈래는 A(정본)를 택한다.** `writeConfig`를 감싸는 **얇은 CLI를 신설**하고, 구현 7단계의 인용 검증과 8단계 skill-gap이 `--config`로 그것을 읽는다. 그 CLI는 최상위 `required` **9개**(정정 4)를 자기 검증하며, 실패는 `[INPUT_ERROR]` + **exit 2**다(확정된 인용 위반의 exit 1과 구별된다 — 게이트 C-6/A-32가 세운 규약을 그대로 따른다).
+- **D4. `plan.schema.json`의 `const → enum`은 슬라이스 A 파일 수정 예외 **4번의 미완 집행**으로 처리한다.** 새 예외를 받지 않는다 — `slice_plan.md:25` 예외 4번 ②가 이미 「네 파일 모두」를 허용했고 plan 하나가 빠졌을 뿐이다(정정 5).
+
+---
+
+### 정정하려다 반증된 것 — 다시 정정하려 들지 마라
+
+이 회차에 「낡았다」고 의심해 파고들었으나 **문서 쪽이 옳았던** 항목이다. 다음 세션이 같은 것을 또 뒤집으려 하면 시간만 든다.
+
+- **`plan_critic_findings.md:36` 게이트 B-5 — 「체크박스는 `[ ]`인데 본문은 '반영 완료'라 자기모순」**: 자기모순이 아니다. 항목 전문이 「(반영 완료 항목 …) … 네 곳(AC-7 / 구현 4단계 / 구현 6단계 / 테스트 전략)에 동일 문장으로 들어가 있음을 확인했다. **골든·러너 구현 시 이 조건을 코드로 옮긴다.**」이며, 괄호의 '반영 완료'는 스펙 문장을, 열린 체크박스는 **코드 이관**을 가리킨다. 두 대상이 다르므로 일부러 구분해 적은 이월 항목이다(코드 이관 쪽도 이후 완료됐다 — `tests/run-smoke.mjs`의 (9) A-22가 `collect(dirs.merge, { mergeIncluded: true })`로 실행해 `CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN`을 요구하며 PASS. 그러나 그것은 이 후보를 살리는 근거가 아니다).
+- **`plan_critic_findings.md:25` 게이트 A-4 — 「저장 위치 이중값은 §6이 이미 해소했으니 낡았다」**: 낡지 않았다. ① `spec.md`와 `plan_critic_findings.md`는 **같은 커밋**(`7534483`)에서 함께 들어왔고 그 시점의 `spec.md`에 이미 해소 문장이 있었다 — 뒤늦게 낡은 것이 아니다. ② A-4의 문면은 「스펙이 모순됐다」가 아니라 **「이번 라운드도 검사하지 않았다」**는 미검사 선언이며, 그 문서가 스스로 「'0 (미검사)'는 결함 없음이 아니라 검사하지 않음을 뜻한다」로 어휘를 정의한다. ③ `conventions.md:44`·`:70`이 홈 루트 없이 `.devcareer/`를 저장 디렉터리로 평서해 두 번째 항이 여전히 문서에 살아 있다.
+- **덧붙여 — `plan_critic_findings.md`의 체크박스 열을 일괄로 뒤집지 마라.** 그 파일의 `- [ ]` 14개는 이 레포 역사에서 `[x]`로 바뀐 적이 **0건**이고, 위 A-4·B-5처럼 `[ ]`가 정당한 항목이 섞여 있다. 실제로 닫힌 A-1·A-2·A-3·A-5·B-1·B-2의 상태는 이 절의 표(정정 10~14)에 남기는 것으로 갈음한다.
+
+---
+
+### 이번에 확인하지 못한 것
+
+- **이 회차의 조사가 후보 17건을 냈고 그중 12건만 적대 검증을 거쳤다 — 5건은 미검증으로 잘렸다.** 조용한 절단을 남기지 않기 위해 이름을 적는다: `plan_critic_findings.md`의 게이트 **B-3**(골든 파일 생성 근거 요구)·**B-4**(리네임·삭제 픽스처 기대값 하드코딩)·**B-6**(AC-1 「의존성 0」 vs AC-12 「스키마 레벨 강제」 긴장)·**C-1·C-2·C-3**(구현 6단계 착수 전 재확인 3건). 전부 「이미 닫혔을 가능성이 있다」는 신뢰도 high/medium 후보였으나 **반증을 거치지 않았으므로 이 절은 그것들에 대해 아무 주장도 하지 않는다.**
+- **위 표의 `B-1·B-2` 행은 적대 검증을 거치지 않았다.** 작성 단계에서 검증 통과 목록 밖의 후보가 표에 섞여 들어왔다. 오케스트레이터가 사후에 두 값만 직접 확인했다 — `fixtures/make-fixture.mjs:845`의 `ownerTotal: 240 + 5 + 5`(= `coverage.total` 250)와 `analyzed == 50`에서 `dropped_commits == 200`이 따라 나온다. **나머지 서술(AC-21·테스트 전략 본문이 관계식으로 바뀌었다는 부분)은 미검증이다.**
+
+- **`spec.md`의 AC 체크박스 22건은 전부 `[ ]`이고, 역사 전체에서 `[x]`로 바뀐 커밋이 0건이다.** 이것이 「고의로 절대 체크하지 않는 닻」 관례인지 「갱신 누락」인지 이 정황만으로는 판별할 수 없어, 개별 AC를 정정 대상으로 올리지 않았다. 정정은 **사람이 실제로 `[x]`를 찍어 온 게이트류 문서**(이 문서의 게이트 A/B/C/E)에만 한정했다.
+- **각 AC의 「완전 관측」 여부를 절 단위로 전수 검증하지는 못했다.** 특히 AC-13(FactChecker 2회 재시도가 `career-from-git` 프롬프트에 온전히 반영됐는지), AC-18(「실제 프롬프트로 라우팅 오발동 없음」 — 자동화 흔적을 찾지 못했다), AC-16(노드 id 재사용 규칙이 CareerWriter 템플릿 상단에 고정돼 있는지)은 프롬프트 본문까지 열어보지 않았다. 스킬 프롬프트 '품질'이 아직 심사 대상이 아니라는 이 문서 자체의 고지와 일치해 낮은 우선순위로 남긴다.
+- **`plan` 계층의 절 오라클은 소스 확인만 됐다.** 스모크의 `NODE_CASES` 루프는 career·knowledge-map·gap-report 3계층뿐이다(`tests/run-smoke.mjs:566`).
+- **`npm test`(스모크 3연속 실행)는 권한 분류기에 막혀 재현하지 못했다.** 개별 실행(기본 445 / `--negative` 33 / `--golden` 11, 전부 0 FAIL)은 관측했으나, README의 「`npm test`가 로컬에서 통과한다」 문장 자체는 이번 회차에 실측 재현하지 못했다.
+- **`/handoff resume`의 경로 없는 호출이 `docs/harness/handoff/`를 본다」는 `conventions.md` §9 서술은 이 레포 코드로 검증 불가**다(agent-harness 플러그인 동작이며 `docs/harness/**`는 gitignore돼 새 클론에 없다). 반증 증거가 없어 통과 처리했다.
+- **정리 실패 기록**: 1·2단계 명령 완비성을 실행으로 확인하는 과정에서 `~/.devcareer/career-forge-b1ed7ffb/`(레포 밖, 도구 기본 저장 위치)에 `evidence.json`·`git-facts.json`·`ledger-projection.json`이 남았고 삭제 명령이 권한 분류기에 막혔다. 레포에는 영향이 없지만, 다음 세션이 그 디렉터리를 실제 사용 이력으로 오인하지 않도록 적어 둔다.
