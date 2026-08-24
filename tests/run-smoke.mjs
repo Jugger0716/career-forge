@@ -406,8 +406,9 @@ let abortedSections = 0;
  * 지연 판독으로 바꾼 것이 그 부류를 줄이는 작업이었고, 여기서 더 좁힐 수단은 없다.
  */
 const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
-  // 447 → 448 이력: (DH-1d) 445 → 446. 7번 C2의 A-21 판독 전제 단언 446 → 447.
-  default: 447,
+  // 이력: (DH-1d) 445 → 446. 7번 C2의 A-21 판독 전제 단언 446 → 447.
+  //       7번 C9의 (SP-1b) 프롬프트 판독 전제 단언 447 → 448.
+  default: 448,
   negative: 33,
   golden: 11,
 });
@@ -2766,7 +2767,10 @@ function runLedgerProjectionOracleSmoke() {
         // 쓰지 않고 필터를 손으로 복제하되 import는 남긴다)이 이름만 보는
         // 스캔을 통과했다 — 실측된 구멍이다. `projectLedgerForSkills(`까지
         // 요구하면 그 형태가 잡힌다(정의부를 가진 store.mjs는 위에서 제외한다).
-        if (fs.readFileSync(full, "utf8").includes("projectLedgerForSkills(")) callers.push(rel);
+        // 판정이 **양수 방향**(`callers.length >= 1`)이라 판독 실패는 통과를 더 어렵게만 만든다 —
+        // 거짓 초록이 생기지 않으므로 별도 전제 단언을 세우지 않고 판독만 안전하게 바꾼다.
+        const { text } = readRepoTextSafe(rel);
+        if (text !== null && text.includes("projectLedgerForSkills(")) callers.push(rel);
       }
     };
     scan(path.join(REPO_ROOT, "scripts"));
@@ -2954,9 +2958,21 @@ function runSkillPromptContractSmoke() {
   };
   scan(skillsDir);
 
-  const read = (p) => fs.readFileSync(p, "utf8");
   const rel = (p) => path.relative(REPO_ROOT, p).split(path.sep).join("/");
-  const allText = promptFiles.map(read).join("\n");
+
+  // DH-1과 같은 모양이다 — 전량을 **한 번만** 판독해 보관하고, 실패는 빈 문자열로 강등하지 않고
+  // 목록에 남긴다. 아래 소비 지점이 12곳이라 각각을 게이트하는 대신 전용 전제 단언 (SP-1b)를
+  // 세운다: 판독이 하나라도 실패하면 그것이 먼저 FAIL하므로, 소비 지점이 빈 문자열을 보고
+  // 「위반 0건」을 내더라도 그 초록이 조용히 남지 않는다.
+  const texts = new Map();
+  const promptReadFailures = [];
+  for (const p of promptFiles) {
+    const { text, error } = readRepoTextSafe(rel(p));
+    if (error !== null) promptReadFailures.push(error);
+    else texts.set(p, text);
+  }
+  const read = (p) => texts.get(p) ?? "";
+  const allText = [...texts.values()].join("\n");
 
   // ---- (SP-1) 대상이 0건이 아닌가 ----
   //      **이 단언이 먼저 와야 한다.** 아래 금지 방향 단언들은 파일이 하나도
@@ -2967,6 +2983,17 @@ function runSkillPromptContractSmoke() {
     if (!ok) console.log("    실제: skills/ 밑에 .md 프롬프트가 0건이다(아래 단언들이 전부 공허해진다).");
     else console.log(`    대상: ${JSON.stringify(promptFiles.map(rel))}`);
     report(ok, "(SP-1) skills/ 밑에 프롬프트 문서가 1건 이상 실재한다(금지 방향 단언들이 공허해지지 않는 전제)");
+  }
+
+  // ---- (SP-1b) 그 대상을 실제로 판독했는가 ----
+  //      (SP-1)과 **같은 성격의 전제이되 다른 축**이다 — 대상이 존재하는가(SP-1)와 그 대상을
+  //      실제로 읽었는가(SP-1b)가 둘 다 서야 아래 금지 방향이 비공허해진다. 두 전제를 한
+  //      단언에 묶지 않는 이유는 「어느 경로로 실패했는가」를 로그가 아니라 **라벨**에
+  //      고정하기 위해서다(DH-1a/DH-1d가 세운 선례).
+  {
+    const ok = promptReadFailures.length === 0;
+    if (!ok) console.log(`    실제: 판독 실패 ${JSON.stringify(promptReadFailures)}`);
+    report(ok, `(SP-1b) 프롬프트 ${promptFiles.length}건을 전부 판독했다(판독 실패를 '위반 0건'으로 집계하지 않는다)`);
   }
 
   // ---- (SP-2) 게이트 E-3 허용 방향: 투영 명령의 호출 지점이 있는가 ----
@@ -4572,17 +4599,21 @@ function runVerifyEvidenceSmoke() {
 
       // fixtures/golden/case-17-merge-hash-claim.json 골든 파일 자체도 같은
       // 결과를 내는지 확인한다(생성기와 커밋된 골든이 드리프트하지 않음).
-      const goldenPath = path.join(REPO_ROOT, "fixtures", "golden", "case-17-merge-hash-claim.json");
-      const golden = JSON.parse(fs.readFileSync(goldenPath, "utf8"));
-      const goldenCitation = golden.node.evidence[0];
-      const rGolden = verifyCitation({
+      const GOLDEN_CASE17_REL = "fixtures/golden/case-17-merge-hash-claim.json";
+      const { json: golden, error: goldenError } = readRepoJsonSafe(GOLDEN_CASE17_REL);
+      if (goldenError !== null) console.log(`    실제: ${goldenError}`);
+      // 판독 실패 시 `verifyCitation`을 부르지 않는다 — 골든이 null이면 `golden.node`가
+      // TypeError로 터진다. 아래 판정은 양수 방향(`verdict === "FAIL" && code === …`)이라
+      // `rGolden`이 null이면 자연히 false가 된다.
+      const goldenCitation = golden?.node?.evidence?.[0];
+      const rGolden = goldenCitation === undefined ? null : verifyCitation({
         repoPath: dirs.merge,
         evidence,
         selectedIdentities: [OWNER_EMAIL],
         ledgerId: goldenCitation.ledgerId,
         nodeBasis: golden.node.basis,
       });
-      const okGolden = rGolden.verdict === "FAIL" && rGolden.code === "CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN";
+      const okGolden = rGolden?.verdict === "FAIL" && rGolden?.code === "CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN";
       if (!okGolden) console.log(`    실제(골든 파일): ${JSON.stringify(rGolden)}`);
       report(okGolden, "(9-부가) 커밋된 fixtures/golden/case-17-merge-hash-claim.json 자체도 같은 결과로 FAIL(생성기-골든 드리프트 없음)");
     }
@@ -6125,7 +6156,8 @@ function runChurnVendoredExclusionSmoke() {
 // (=캐시 미스) 픽스처가 그 새 코드로 다시 생성된다 — 이전 해시의 캐시는
 // 그냥 버려진다(OS temp 정리에 맡긴다). 캐시 메타 파일에도 해시를 별도
 // 기록해(cache.meta.json) 두 번째 방어선으로 삼는다.
-const MAKE_FIXTURE_PATH = path.join(REPO_ROOT, "fixtures", "make-fixture.mjs");
+const MAKE_FIXTURE_REL = "fixtures/make-fixture.mjs";
+const MAKE_FIXTURE_PATH = path.join(REPO_ROOT, MAKE_FIXTURE_REL);
 
 /** fixtures/make-fixture.mjs 현재 내용의 SHA-256 hex(앞 16자). */
 function computeMakeFixtureContentHash() {
@@ -6213,12 +6245,16 @@ function runGoldenCacheKeySmoke() {
   // 존재하지 않는 디렉터리가 되어 자동으로 캐시 미스(재생성) 처리된다.
   // 이 Run의 배경이 실측한 버그("declared.changeType을 변조해도 --golden이
   // 녹색")는 정확히 이 경로가 없어서 발생했다.
-  const realContent = fs.readFileSync(MAKE_FIXTURE_PATH);
-  const mutatedContent = Buffer.concat([realContent, Buffer.from("\n// 임무 B 캐시 무효화 관측용 — 실제 파일에는 쓰지 않음\n")]);
-  const mutatedHash = crypto.createHash("sha256").update(mutatedContent).digest("hex").slice(0, 16);
-  const mutatedCacheDir = path.join(os.tmpdir(), `devcareer-golden-cache-v1-${mutatedHash}`);
-  const invalidationOk = mutatedHash !== MAKE_FIXTURE_CONTENT_HASH && mutatedCacheDir !== GOLDEN_CACHE_DIR;
-  if (!invalidationOk) console.log(`    실제: mutatedHash=${mutatedHash} currentHash=${MAKE_FIXTURE_CONTENT_HASH}`);
+  // 판독 실패 시 해시를 **계산하지 않는다** — `Buffer.concat([null, …])`은 TypeError로 터진다.
+  // `mutatedHash`가 null이면 아래 `!==` 두 비교가 우연히 참이 될 수 있으므로(null은 어떤 해시와도
+  // 다르다) 판정에 판독 성공을 명시적으로 넣는다. 음수 방향 비교의 전형적인 거짓 초록이다.
+  const { text: realContent, error: fixtureError } = readRepoTextSafe(MAKE_FIXTURE_REL);
+  const mutatedHash = realContent === null
+    ? null
+    : crypto.createHash("sha256").update(Buffer.concat([Buffer.from(realContent, "utf8"), Buffer.from("\n// 임무 B 캐시 무효화 관측용 — 실제 파일에는 쓰지 않음\n")])).digest("hex").slice(0, 16);
+  const mutatedCacheDir = mutatedHash === null ? null : path.join(os.tmpdir(), `devcareer-golden-cache-v1-${mutatedHash}`);
+  const invalidationOk = mutatedHash !== null && mutatedHash !== MAKE_FIXTURE_CONTENT_HASH && mutatedCacheDir !== GOLDEN_CACHE_DIR;
+  if (!invalidationOk) console.log(`    실제: ${fixtureError ?? ""} mutatedHash=${mutatedHash} currentHash=${MAKE_FIXTURE_CONTENT_HASH}`);
   report(
     invalidationOk,
     "실측: make-fixture.mjs 내용을 1바이트라도 바꾸면 해시·캐시 디렉터리 경로가 모두 달라짐(변조된 정의로 만든 이전 캐시가 조용히 재사용될 수 없음)"
