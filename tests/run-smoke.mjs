@@ -2069,10 +2069,13 @@ function runRenderContractOracleSmoke() {
   //      "렌더는 되지만 스키마는 어기는" 픽스처로 계약을 검사하면 그 검사는
   //      현실과 무관해진다.
   {
-    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    // 판독 실패를 **빈 배열로 강등하지 않는다** — 빈 오류 배열은 「위반 0건」과 구별되지 않아
+    // 이 단언이 조용히 PASS한다. 사유 하나를 오류 배열로 삼아 (R-9)만 FAIL시킨다.
+    const { json: schema, error: schemaError } = readRepoJsonSafe(SCHEMA_REL("career"));
+    if (schemaError !== null) console.log(`    실제: ${schemaError}`);
     // validateInstance는 오류 **문자열 배열**을 돌려준다(객체가 아니다).
-    const e1 = validateInstance(schema, baseInstance);
-    const e2 = validateInstance(schema, withRefuted);
+    const e1 = schemaError !== null ? [schemaError] : validateInstance(schema, baseInstance);
+    const e2 = schemaError !== null ? [schemaError] : validateInstance(schema, withRefuted);
     const ok = e1.length === 0 && e2.length === 0;
     if (!ok) console.log(`    실제: base=${JSON.stringify(e1)} refuted=${JSON.stringify(e2)}`);
     report(ok, "(R-9) 렌더 계약 픽스처 2종이 career.schema.json을 실제로 통과한다(픽스처가 스키마와 어긋나지 않는다)");
@@ -2448,12 +2451,13 @@ function runArtifactContractOracleSmoke() {
   //      R-9와 같은 이유다 — 픽스처가 스키마를 어기면 위 26개 단언은 전부
   //      녹색인 채로 현실의 어떤 산출물과도 대응하지 않는 검사가 된다.
   {
-    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    const { json: schema, error: schemaError } = readRepoJsonSafe(SCHEMA_REL("career"));
+    if (schemaError !== null) console.log(`    실제: ${schemaError}`);
     const inst = makeCareerInstance([
       makeCareerNode({ id: "car:001" }),
       makeCareerNode({ id: "car:002", locked: true, verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
     ]);
-    const errs = validateInstance(schema, inst);
+    const errs = schemaError !== null ? [schemaError] : validateInstance(schema, inst);
     const ok = errs.length === 0;
     if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
     report(ok, "(AC-27) 병합 오라클 픽스처가 career.schema.json을 실제로 통과한다(픽스처를 세계로 착각하지 않는다)");
@@ -2645,10 +2649,14 @@ function runArtifactContractOracleSmoke() {
   //      함께 물어야 한다. 안 물으면 통과하지만 현실의 어떤 산출물과도
   //      대응하지 않는 검사가 된다(R-9에서 실측된 형태다).
   {
-    const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
+    // 이 절은 (AC-27)과 같은 파일을 읽지만 **변수를 공유하지 않는다.** 공유하면 앞 절을 지우는
+    // 순간 이 절이 참조할 선언이 함께 사라지는 결합이 생긴다 — 이 레포는 절 단위 독립성을
+    // 반복해서 우선해 왔고, 대가는 수 KB 재판독뿐이다.
+    const { json: schema, error: schemaError } = readRepoJsonSafe(SCHEMA_REL("career"));
+    if (schemaError !== null) console.log(`    실제: ${schemaError}`);
     const { merged } = mergeArtifact("career", null, makeCareerInstance([makeDraftNode({ id: "car:001" })]), { stage: "draft" });
     merged.contentHash = computeArtifactContentHash("career", merged);
-    const errs = validateInstance(schema, merged);
+    const errs = schemaError !== null ? [schemaError] : validateInstance(schema, merged);
     const ok = errs.length === 0;
     if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
     report(ok, "(AC-42) locked·verification을 담지 않은 draft의 병합 결과가 career.schema.json을 통과한다(병합이 required를 실제로 채운다)");
@@ -3303,8 +3311,13 @@ function runWriteArtifactOracleSmoke() {
       if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
       report(ok, "(WA-1) 정상 출력은 exit 0으로 career.json이 저장 루트에 기록된다");
 
-      const schema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "career.schema.json"), "utf8"));
-      const errs = written === null ? ["(파일이 기록되지 않았다)"] : validateInstance(schema, written);
+      // 이 자리에는 이미 「부재를 사유 배열로」 관례가 있다(`written === null` 갈래). 스키마 판독
+      // 실패를 **그 앞에** 합류시킨다 — 두 사유가 서로 다른 원인이므로 문자열로 구별된다.
+      const { json: schema, error: schemaError } = readRepoJsonSafe(SCHEMA_REL("career"));
+      if (schemaError !== null) console.log(`    실제: ${schemaError}`);
+      const errs = schemaError !== null
+        ? [schemaError]
+        : written === null ? ["(파일이 기록되지 않았다)"] : validateInstance(schema, written);
       if (errs.length > 0) console.log(`    실제: ${JSON.stringify(errs)}`);
       report(errs.length === 0, "(WA-2) 기록된 산출물이 career.schema.json을 통과한다");
 
