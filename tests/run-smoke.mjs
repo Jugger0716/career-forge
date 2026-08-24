@@ -3191,7 +3191,18 @@ function runIgnoredPathReferenceSmoke() {
   console.log("[gitignore 경로 참조 가드] 무시되는 산출물 경로를 추적 코드가 참조하면 새 클론에서 깨진다");
 
   // 정본은 .gitignore다. `docs/` 아래를 무시하는 줄만 뽑는다.
-  const ignoreLines = fs.readFileSync(path.join(REPO_ROOT, ".gitignore"), "utf8").split("\n");
+  //
+  // **판독 실패를 새 전제 단언으로 분리하지 않는다 — 여기서는 이미 시끄럽게 실패한다.**
+  // `.gitignore`를 못 읽으면 접두사 집합이 비고, 그러면 아래 (DH-1a)가 `length >= 1`에서
+  // 그대로 FAIL한다. 1285의 `scripts/**` 스캔은 판독이 전부 실패해도 어떤 단언도 울지 않아
+  // 전제를 새로 세웠지만, 이 자리는 그 조건이 성립하지 않는다 — 남는 것은 라벨의 정밀도뿐이고
+  // 사유는 (DH-1a)의 콘솔 로그가 싣는다.
+  //
+  // **다만 (DH-1b)는 반드시 게이트해야 한다.** 접두사가 비면 `offenders`가 항상 0건이 되어
+  // 「어디에도 참조가 없다」가 **공허하게 PASS**한다 — 이 가드가 막으려던 결함과 정확히 같은
+  // 형태다. 그 게이트는 타협 대상이 아니다.
+  const { text: ignoreText, error: ignoreError } = readRepoTextSafe(".gitignore");
+  const ignoreLines = ignoreText === null ? [] : ignoreText.split("\n");
   const ignoredDocPrefixes = ignoreLines
     .map((l) => l.trim())
     .filter((l) => !l.startsWith("#") && l.startsWith("docs" + "/") && l.endsWith("/"));
@@ -3225,7 +3236,7 @@ function runIgnoredPathReferenceSmoke() {
   //      조용히 건너뛰지 않는다.
   {
     const ok = ls.status === 0 && scanned.length >= 5 && ignoredDocPrefixes.length >= 1;
-    if (!ok) console.log(`    실제: git exit=${ls.status} 스캔 대상 ${scanned.length}건 무시 접두사 ${JSON.stringify(ignoredDocPrefixes)}`);
+    if (!ok) console.log(`    실제: ${ignoreError ?? ""} git exit=${ls.status} 스캔 대상 ${scanned.length}건 무시 접두사 ${JSON.stringify(ignoredDocPrefixes)}`);
     report(ok, "(DH-1a) .gitignore가 docs 하위 무시 접두사를 갖고 추적되는 스캔 대상이 실재한다(금지 방향이 공허해지지 않는 전제)");
   }
 
@@ -3259,8 +3270,11 @@ function runIgnoredPathReferenceSmoke() {
       const hit = ignoredDocPrefixes.find((p) => text.includes(p));
       if (hit !== undefined) offenders.push(`${f} → ${hit}`);
     }
-    const ok = offenders.length === 0;
-    if (!ok) console.log(`    실제: 무시되는 경로를 참조하는 추적 파일 ${JSON.stringify(offenders)}`);
+    // `ignoreError === null`은 **타협 불가**다. `.gitignore`를 못 읽으면 접두사가 비어
+    // `offenders`가 항상 0건이 되고, 이 단언이 「참조가 없다」로 공허하게 통과한다 — 이 가드가
+    // 막으려던 「워킹 트리는 녹색인데 새 클론에서만 깨진다」와 정확히 같은 형태의 자기 무력화다.
+    const ok = ignoreError === null && offenders.length === 0;
+    if (!ok) console.log(`    실제: ${ignoreError ?? ""} 무시되는 경로를 참조하는 추적 파일 ${JSON.stringify(offenders)}`);
     report(ok, `(DH-1b) 추적되는 코드·lint 스캔 대상 어디에도 무시 접두사(${ignoredDocPrefixes.join(", ")}) 참조가 없다(새 클론에서만 깨지는 고장 차단)`);
   }
 
