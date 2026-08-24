@@ -6273,8 +6273,19 @@ function runGoldenCacheKeySmoke() {
 function runGoldenGate() {
   console.log("[골든 게이트] AC-21 — 300커밋 픽스처 vs fixtures/golden/sampling-300.expected.json");
 
-  const goldenPath = path.join(REPO_ROOT, "fixtures", "golden", "sampling-300.expected.json");
-  const golden = JSON.parse(fs.readFileSync(goldenPath, "utf8"));
+  // **이 사이트는 다른 열여덟 곳과 성격이 다르다 — 골든 파일이 입력이 아니라 오라클 자체다.**
+  // 없으면 수집 파라미터조차 만들 수 없어 이 게이트의 단언 11건이 **전부 관측 불가**가 된다.
+  // 그래서 사유를 특정 단언에 귀속시키는 대신 게이트 전체를 `goldenOk`로 막는다.
+  //
+  // **균일한 게이트를 쓰는 이유.** 판정별로 null 안전성을 따지면 두 곳이 조용히 통과한다 —
+  // 결정성 단언은 `JSON.stringify(null) === JSON.stringify(null)`로 참이 되고,
+  // total/analyzed 대조는 `undefined === undefined`로 참이 된다. 오라클이 통째로 없는 상황에서
+  // 「어느 판정이 null에 안전한가」를 하나씩 따지는 것은 실수를 부르는 방식이고, 여기서는
+  // 답도 「전부 관측 불가」로 같다.
+  const GOLDEN_SAMPLING_REL = "fixtures/golden/sampling-300.expected.json";
+  const { json: golden, error: goldenError } = readRepoJsonSafe(GOLDEN_SAMPLING_REL);
+  const goldenOk = goldenError === null;
+  if (!goldenOk) console.log(`    실제: ${goldenError} — 이 게이트의 단언 11건이 전부 관측 불가다`);
 
   const { dir, declared, cached } = ensureLarge300Fixture();
   console.log(`  [준비] large300 픽스처 ${cached ? "캐시 재사용" : "새로 생성(최초 1회, ~1분 소요)"}: ${dir}`);
@@ -6283,87 +6294,98 @@ function runGoldenGate() {
   // (identity/max-commits/merge-included, ref는 CLI 기본값 HEAD).
   const collectParams = {
     repoPath: dir,
-    selectedIdentities: [golden.parameters.identity],
+    selectedIdentities: [golden?.parameters?.identity],
     ref: "HEAD",
-    mergeIncluded: golden.parameters.mergeIncluded,
-    maxCommits: golden.parameters.maxCommits,
-    botsEnabled: golden.parameters.botsExcluded,
+    mergeIncluded: golden?.parameters?.mergeIncluded,
+    maxCommits: golden?.parameters?.maxCommits,
+    botsEnabled: golden?.parameters?.botsExcluded,
   };
 
-  const run1 = collectGitFacts(collectParams).evidence;
-  const run2 = collectGitFacts(collectParams).evidence;
+  // 골든이 없으면 **수집을 아예 돌리지 않는다.** 잘못된 파라미터로 돌린 결과에 단언을
+  // 걸면 그건 관측이 아니라 소음이고, 일부 단언이 우연히 통과해 거짓 초록이 된다.
+  const run1 = goldenOk ? collectGitFacts(collectParams).evidence : null;
+  const run2 = goldenOk ? collectGitFacts(collectParams).evidence : null;
 
   const selectedHashesSorted = (ev) => ev.commits.filter((c) => !c.excluded).map((c) => c.hash).sort();
-  const sel1 = selectedHashesSorted(run1);
-  const sel2 = selectedHashesSorted(run2);
+  const sel1 = run1 === null ? null : selectedHashesSorted(run1);
+  const sel2 = run2 === null ? null : selectedHashesSorted(run2);
 
   // ---- 결정성(AC-21): 동일 입력 2회 실행 시 선택 집합이 같아야 한다. ----
   report(
+    goldenOk &&
     JSON.stringify(sel1) === JSON.stringify(sel2),
     "골든: 동일 인자로 collectGitFacts를 2회 실행해도 선택 집합이 동일함(샘플링 결정성)"
   );
 
   // ---- coverage 3수치(이월 게이트 A-3/B-2) — traversed==300, total은
   // 픽스처 선언값(ownerTotal)과 일치, analyzed==K==50, 부등식 성립. ----
-  report(run1.coverage.traversed === 300, `골든: coverage.traversed === 300 (실제 ${run1.coverage.traversed})`);
+  report(goldenOk && run1?.coverage?.traversed === 300, `골든: coverage.traversed === 300 (실제 ${run1?.coverage?.traversed})`);
   report(
-    run1.coverage.total === declared.ownerTotal,
-    `골든: coverage.total === 픽스처 선언값 ownerTotal(${declared.ownerTotal}) (실제 ${run1.coverage.total}) — ` +
+    goldenOk &&
+    run1?.coverage?.total === declared.ownerTotal,
+    `골든: coverage.total === 픽스처 선언값 ownerTotal(${declared.ownerTotal}) (실제 ${run1?.coverage?.total}) — ` +
       "B-1/B-2 '250 하드코딩' 회귀 방지, 픽스처 구성값과 직접 대조"
   );
   report(
-    run1.coverage.total === golden.coverage.total && run1.coverage.analyzed === golden.coverage.analyzed,
-    `골든: coverage.total/analyzed가 sampling-300.expected.json과 일치(total=${golden.coverage.total}, analyzed=${golden.coverage.analyzed})`
+    goldenOk &&
+    run1?.coverage?.total === golden?.coverage?.total && run1?.coverage?.analyzed === golden?.coverage?.analyzed,
+    `골든: coverage.total/analyzed가 sampling-300.expected.json과 일치(total=${golden?.coverage?.total}, analyzed=${golden?.coverage?.analyzed})`
   );
   report(
-    run1.coverage.analyzed <= run1.coverage.total && run1.coverage.total < run1.coverage.traversed,
-    `골든: analyzed(${run1.coverage.analyzed}) <= total(${run1.coverage.total}) < traversed(${run1.coverage.traversed}) 관계식 성립`
+    goldenOk &&
+    run1?.coverage?.analyzed <= run1?.coverage?.total && run1?.coverage?.total < run1?.coverage?.traversed,
+    `골든: analyzed(${run1?.coverage?.analyzed}) <= total(${run1?.coverage?.total}) < traversed(${run1?.coverage?.traversed}) 관계식 성립`
   );
 
   // ---- truncated: dropped_commits == total - K, reason == budget_commits. ----
   report(
-    run1.truncated.reason === "budget_commits" &&
-      run1.truncated.dropped_commits === run1.coverage.total - run1.coverage.analyzed,
-    `골든: truncated.reason==="budget_commits" 및 dropped_commits===total-analyzed(${run1.truncated.dropped_commits})`
+    goldenOk &&
+    run1?.truncated?.reason === "budget_commits" &&
+      run1?.truncated?.dropped_commits === run1?.coverage?.total - run1?.coverage?.analyzed,
+    `골든: truncated.reason==="budget_commits" 및 dropped_commits===total-analyzed(${run1?.truncated?.dropped_commits})`
   );
 
   // ---- samplingMethod 완전 일치(재서술 금지 — 리터럴 그대로). ----
   report(
-    run1.coverage.samplingMethod === golden.samplingMethodLiteral,
+    goldenOk &&
+    run1?.coverage?.samplingMethod === golden?.samplingMethodLiteral,
     "골든: coverage.samplingMethod가 정본 samplingMethod 리터럴과 완전 일치"
   );
 
   // ---- 선택 커밋 집합이 골든 파일과 완전 일치(개수 항등식이 아니라
   // 원소 단위 대조 — slice(0,max)·dedup 누락·정렬 키 오구현을 모두 잡는다). ----
-  const selMatches = JSON.stringify(sel1) === JSON.stringify(golden.selectedCommitHashesSorted);
-  if (!selMatches) {
-    const goldenSet = new Set(golden.selectedCommitHashesSorted);
+  const selMatches = sel1 !== null && JSON.stringify(sel1) === JSON.stringify(golden?.selectedCommitHashesSorted);
+  if (!selMatches && sel1 !== null) {
+    const goldenSet = new Set(golden?.selectedCommitHashesSorted);
     const actualSet = new Set(sel1);
-    const missing = golden.selectedCommitHashesSorted.filter((h) => !actualSet.has(h));
+    const missing = golden?.selectedCommitHashesSorted.filter((h) => !actualSet.has(h));
     const extra = sel1.filter((h) => !goldenSet.has(h));
-    console.log(`    개수: 기대 ${golden.selectedCommitHashesSorted.length} / 실제 ${sel1.length}`);
+    console.log(`    개수: 기대 ${golden?.selectedCommitHashesSorted?.length} / 실제 ${sel1.length}`);
     console.log(`    골든에는 있으나 실제엔 없음(최대 5건): ${missing.slice(0, 5).join(", ")}`);
     console.log(`    실제엔 있으나 골든엔 없음(최대 5건): ${extra.slice(0, 5).join(", ")}`);
   }
-  report(selMatches, "골든: 선택 커밋 집합(정렬됨)이 fixtures/golden/sampling-300.expected.json과 완전 일치");
+  report(goldenOk && selMatches, "골든: 선택 커밋 집합(정렬됨)이 fixtures/golden/sampling-300.expected.json과 완전 일치");
 
   // ---- excluded 커밋 전량 등재(AC-7 (a)축·AC-9가 절단 상태에서도 관측
   // 가능해야 한다는 구현 5단계 요구) — traversed - total과 정확히 같아야 한다. ----
-  const excludedCount = run1.commits.filter((c) => c.excluded).length;
+  const excludedCount = run1 === null ? null : run1.commits.filter((c) => c.excluded).length;
   report(
-    excludedCount === run1.coverage.traversed - run1.coverage.total,
-    `골든: excluded 커밋이 원장에 전량 등재됨(excluded=${excludedCount} === traversed-total=${run1.coverage.traversed - run1.coverage.total})`
+    goldenOk &&
+    excludedCount === run1?.coverage?.traversed - run1?.coverage?.total,
+    `골든: excluded 커밋이 원장에 전량 등재됨(excluded=${excludedCount} === traversed-total=${run1?.coverage?.traversed - run1?.coverage?.total})`
   );
 
   // ---- AC-6 회귀: 300커밋 규모(실제 머지 5건 포함)의 실제 수집 결과에도
   // 새 교차 불변식이 위반 0건이어야 한다(무오탐 재확인, 더 큰 표본). ----
-  const invariantViolations = checkEvidenceInvariants(run1);
+  // `run1`이 null이면 불변식 검사를 부르지 않는다 — 위 게이트가 이미 FAIL을 보장하므로
+  // 빈 배열이어도 초록이 되지 않지만, 호출 자체가 터지면 섹션이 중단된다.
+  const invariantViolations = run1 === null ? [] : checkEvidenceInvariants(run1);
   if (invariantViolations.length > 0) {
     for (const v of invariantViolations) console.log(`    실제 위반: ${v.code}: ${v.message}`);
   }
-  report(invariantViolations.length === 0, "골든: 300커밋 실제 수집 결과(머지 5건 포함)에 AC-6 교차 불변식 위반 0건");
-  const nonVacuous = checkMergeNonVacuous(run1);
-  report(nonVacuous.length === 0, "골든: 300커밋 픽스처의 실제 원장에 머지 5건이 (iv) 비공허성을 만족함");
+  report(goldenOk && invariantViolations.length === 0, "골든: 300커밋 실제 수집 결과(머지 5건 포함)에 AC-6 교차 불변식 위반 0건");
+  const nonVacuous = run1 === null ? [] : checkMergeNonVacuous(run1);
+  report(goldenOk && nonVacuous.length === 0, "골든: 300커밋 픽스처의 실제 원장에 머지 5건이 (iv) 비공허성을 만족함");
 }
 
 // ---------------------------------------------------------------------------
