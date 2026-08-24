@@ -387,7 +387,12 @@ let abortedSections = 0;
  * 모드별 단언 수의 정본. **최종 가드 2건은 제외한 수다.**
  *
  * 가드가 자기 자신을 세면 순환이 된다(세는 시점에 아직 보고되지 않았다). 그래서 기준을
- * 가드 앞으로 잡고, 「결과:」 줄의 수는 여기 적힌 값 + 2가 된다(녹색일 때 447 / 35 / 13).
+ * 가드 앞으로 잡고, 「결과:」 줄의 수는 **여기 적힌 값 + 2**가 된다.
+ *
+ * **파생 값을 여기 적지 않는다.** 초판은 「녹색일 때 447 / 35 / 13」이라고 실제 수를 함께 적었고,
+ * 바로 그 커밋에서 default가 445 → 446으로 오르자 이 주석만 낡았다(콜드 리뷰가 실측으로 잡았다).
+ * 총량 리터럴의 조용한 드리프트를 막으려고 만든 가드의 설명이 같은 방식으로 드리프트한 것이므로,
+ * 갱신 지점을 아래 객체 **한 곳**으로 줄인다 — 관계식만 남기면 다시 낡을 값이 없다.
  *
  * **왜 하한이 아니라 정확 일치인가.** 하한(`>=`)은 「단언 3건을 추가하고 2건을 잃어 순증 +1」인
  * 변경을 통과시킨다. 이 레포에서 실제로 났던 사고가 그 형태에 가깝다 — 445에서 444로 줄었고
@@ -401,7 +406,8 @@ let abortedSections = 0;
  * 지연 판독으로 바꾼 것이 그 부류를 줄이는 작업이었고, 여기서 더 좁힐 수단은 없다.
  */
 const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
-  default: 446, // (DH-1d) 신설로 445 → 446. 이 가드가 실제로 그 +1을 잡아 값을 고치게 했다.
+  // 447 → 448 이력: (DH-1d) 445 → 446. 7번 C2의 A-21 판독 전제 단언 446 → 447.
+  default: 447,
   negative: 33,
   golden: 11,
 });
@@ -1143,10 +1149,15 @@ function runStoreIoContractSmoke() {
 
   // (1) 추출이 실제로 일어났는가 — 소스 스캔.
   {
-    const collector = fs.readFileSync(path.join(REPO_ROOT, "scripts", "collect-git-facts.mjs"), "utf8");
-    const hasOwnDefinition = /^function writeJsonAtomic\(/m.test(collector);
-    const importsShared = /import \{[^}]*\bwriteJsonAtomic\b[^}]*\} from "\.\/lib\/store\.mjs";/.test(collector);
-    report(!hasOwnDefinition, "collect-git-facts.mjs에 writeJsonAtomic 자체 정의가 남아 있지 않음(사본 금지)");
+    // **판독 실패를 그대로 흘리면 거짓 초록이 난다.** `collector`가 null이면 `hasOwnDefinition`이
+    // false로 평가되어 `!hasOwnDefinition`이 **우연히 true**가 된다 — 「사본이 없다」와 「파일을
+    // 못 읽었다」의 결과가 같아지는, 이 레포가 실측한 거짓 초록의 정확한 형태다. 그래서 부정형
+    // 단언에는 판독 성공을 **게이트로 앞세운다**. 긍정형(`importsShared`)은 null에서 이미 false다.
+    const { text: collector, error: collectorError } = readRepoTextSafe("scripts/collect-git-facts.mjs");
+    if (collectorError !== null) console.log(`    실제: ${collectorError}`);
+    const hasOwnDefinition = collector !== null && /^function writeJsonAtomic\(/m.test(collector);
+    const importsShared = collector !== null && /import \{[^}]*\bwriteJsonAtomic\b[^}]*\} from "\.\/lib\/store\.mjs";/.test(collector);
+    report(collector !== null && !hasOwnDefinition, "collect-git-facts.mjs에 writeJsonAtomic 자체 정의가 남아 있지 않음(사본 금지)");
     report(importsShared, "collect-git-facts.mjs가 store.mjs의 writeJsonAtomic을 import해 쓴다");
   }
 
@@ -1371,11 +1382,26 @@ function runProductionGitCallSiteSmoke() {
 
   report(uniqueTargets.length > 0, `사전 확인: scripts/·scripts/lib/ 아래 git.mjs를 제외한 .mjs 파일이 최소 1개 존재함(스캔 대상 확보, 실제 ${uniqueTargets.length}개)`);
 
+  // **판독 실패를 「위반 0건」으로 집계하면 이 스캔은 조용히 통과한다.** 읽지 못한 파일은
+  // `SPAWN_GIT_RE`에 걸릴 기회 자체가 없으므로 offenders가 비고, 「직접 스폰 0개」가 참처럼
+  // 보인다 — DH-1b가 실측으로 당한 것과 같은 형태다. 그래서 **판독 성공을 별도 전제 단언으로
+  // 세운다**(DH-1a/DH-1d의 선례). 두 전제를 한 단언에 묶지 않는 이유는 「어느 경로로
+  // 실패했는가」를 로그가 아니라 **라벨**에 고정하기 위해서다.
   const offenders = [];
+  const scanReadFailures = [];
   for (const f of uniqueTargets) {
-    const text = fs.readFileSync(f, "utf8");
+    const { text, error } = readRepoTextSafe(path.relative(REPO_ROOT, f));
+    if (error !== null) {
+      scanReadFailures.push(error);
+      continue;
+    }
     if (SPAWN_GIT_RE.test(text)) offenders.push(path.relative(REPO_ROOT, f));
   }
+  if (scanReadFailures.length > 0) console.log(`    실제: 판독 실패 ${JSON.stringify(scanReadFailures)}`);
+  report(
+    scanReadFailures.length === 0,
+    `사전 확인: 스캔 대상 ${uniqueTargets.length}건을 전부 판독했다(판독 실패를 '위반 0건'으로 집계하지 않는다)`
+  );
   if (offenders.length > 0) console.log(`    직접 git 스폰 발견: ${offenders.join(", ")}`);
   report(offenders.length === 0, "A-21: scripts/lib/git.mjs 외에는 프로덕션 코드에 git 프로세스 직접 스폰 지점이 0개(store.mjs가 runGit()을 재사용)");
 }
@@ -3908,8 +3934,11 @@ function runCitationCoverageOracleSmoke() {
     //      validate-plugin.mjs는 이번 예외 범위 밖이라 고치지 않는다.
     //      대신 두 리터럴이 갈리는 순간 이 단언이 FAIL한다.
     {
-      const src = fs.readFileSync(path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "utf8");
-      const m = src.match(/const layers = (\[[^\]]*\]);/);
+      //      판독 실패는 예외가 아니라 사유다. `copy`가 null이면 아래 `ok`가 이미 false이므로
+      //      판정식은 손대지 않는다 — 이 사이트는 11곳 중 유일하게 판정식 수정이 필요 없다.
+      const { text: src, error: srcError } = readRepoTextSafe("scripts/validate-plugin.mjs");
+      if (srcError !== null) console.log(`    실제: ${srcError}`);
+      const m = src === null ? null : src.match(/const layers = (\[[^\]]*\]);/);
       let copy = null;
       if (m) {
         try {
