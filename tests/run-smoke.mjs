@@ -6159,14 +6159,36 @@ function runChurnVendoredExclusionSmoke() {
 const MAKE_FIXTURE_REL = "fixtures/make-fixture.mjs";
 const MAKE_FIXTURE_PATH = path.join(REPO_ROOT, MAKE_FIXTURE_REL);
 
-/** fixtures/make-fixture.mjs 현재 내용의 SHA-256 hex(앞 16자). */
+/**
+ * `fixtures/make-fixture.mjs` 현재 내용의 SHA-256 hex(앞 16자). **예외를 던지지 않는다.**
+ *
+ * **이것이 이 파일에 남아 있던 마지막 A류였다.** 초판은 맨몸 `readFileSync`였고, 그 결과가
+ * 아래에서 **모듈 최상위 `const`로 즉시 소비**되므로 파일을 읽지 못하면 예외가 import 시점에
+ * 터져 **단언 0건**으로 프로세스가 끝났다 — 섹션 중단보다 한 단계 더 나쁜 부류다.
+ * 이 파일의 기록은 오랫동안 「A류 0건」이라고 적어 왔는데, 그것이 사실이 아니었다(2026-08-24).
+ *
+ * **판독 위치를 옮기지 않고 「죽지 않게」만 만든다.** 이 값에서 파생되는 캐시 경로 상수가
+ * 넷이고 참조 지점이 35곳이라, 지연 판독으로 바꾸면 그 전부를 함수 호출로 고쳐야 한다.
+ * A류의 해악은 「최상위에서 읽는다」가 아니라 **「부재가 프로세스를 죽인다」**이므로, 예외를
+ * 없애면 해악이 사라진다. 실패는 사유로 남고 아래 캐시 키 단언이 그것을 잡는다.
+ *
+ * **덧붙여, 이 파일이 없으면 어차피 `:150`의 정적 import가 먼저 죽는다.** 그러므로 이 판독이
+ * 실제로 발현하는 경로는 「import는 성공했으나 이 판독만 실패」(권한·손상·레이스)뿐이다.
+ * 그 좁은 경로가 이 수정이 닫는 전부이며, 그것을 부풀려 적지 않는다.
+ *
+ * 해시는 utf8 텍스트로 계산한다 — 이 값의 용도는 「내용이 바뀌면 달라진다」뿐이고,
+ * 캐시 키 단언도 같은 함수로 재계산해 대조하므로 바이트 충실성이 요구되지 않는다.
+ *
+ * @returns {{hash: string|null, error: string|null}}
+ */
 function computeMakeFixtureContentHash() {
-  const content = fs.readFileSync(MAKE_FIXTURE_PATH);
-  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+  const { text, error } = readRepoTextSafe(MAKE_FIXTURE_REL);
+  if (error !== null) return { hash: null, error };
+  return { hash: crypto.createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16), error: null };
 }
 
-const MAKE_FIXTURE_CONTENT_HASH = computeMakeFixtureContentHash();
-const GOLDEN_CACHE_DIR = path.join(os.tmpdir(), `devcareer-golden-cache-v1-${MAKE_FIXTURE_CONTENT_HASH}`);
+const { hash: MAKE_FIXTURE_CONTENT_HASH, error: MAKE_FIXTURE_HASH_ERROR } = computeMakeFixtureContentHash();
+const GOLDEN_CACHE_DIR = path.join(os.tmpdir(), `devcareer-golden-cache-v1-${MAKE_FIXTURE_CONTENT_HASH ?? "unreadable"}`);
 const LARGE300_CACHE_DIR = path.join(GOLDEN_CACHE_DIR, "large300");
 const LARGE300_DECLARED_CACHE_PATH = path.join(GOLDEN_CACHE_DIR, "large300.declared.json");
 const CACHE_META_PATH = path.join(GOLDEN_CACHE_DIR, "cache.meta.json");
@@ -6231,11 +6253,20 @@ function ensureLarge300Fixture() {
 function runGoldenCacheKeySmoke() {
   console.log("[골든 캐시 키 스모크] 임무 B — make-fixture.mjs 내용 해시가 캐시 무효화에 실제로 반영되는지 관측");
 
+  // 판독에 실패하면 `recomputed.hash`와 `MAKE_FIXTURE_CONTENT_HASH`가 **둘 다 null**이라
+  // 등식이 우연히 참이 된다 — 「결정적이다」와 「둘 다 못 읽었다」가 같아지는 거짓 초록이다.
+  // 그래서 판독 성공을 판정에 명시한다. 이 단언이 A류를 없앤 대가로 생긴 관측 지점이다.
   const recomputed = computeMakeFixtureContentHash();
-  report(recomputed === MAKE_FIXTURE_CONTENT_HASH, "make-fixture.mjs 내용 해시 재계산이 모듈 로드 시점 값과 일치(결정적)");
+  if (MAKE_FIXTURE_HASH_ERROR !== null || recomputed.error !== null) {
+    console.log(`    실제: ${MAKE_FIXTURE_HASH_ERROR ?? recomputed.error}`);
+  }
+  report(
+    recomputed.hash !== null && recomputed.hash === MAKE_FIXTURE_CONTENT_HASH,
+    "make-fixture.mjs 내용 해시 재계산이 모듈 로드 시점 값과 일치(결정적)"
+  );
 
   report(
-    GOLDEN_CACHE_DIR.includes(MAKE_FIXTURE_CONTENT_HASH),
+    MAKE_FIXTURE_CONTENT_HASH !== null && GOLDEN_CACHE_DIR.includes(MAKE_FIXTURE_CONTENT_HASH),
     "GOLDEN_CACHE_DIR 경로 자체에 make-fixture.mjs 내용 해시가 포함됨(파일이 바뀌면 다른 캐시 디렉터리를 가리킨다)"
   );
 
