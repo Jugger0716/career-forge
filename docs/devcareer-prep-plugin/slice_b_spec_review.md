@@ -1065,6 +1065,154 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
    **관측 단위는 사이트 11회가 아니라 「부재시킬 수 있는 대상」 7개**다 —
    evidence·career·state 스키마, `tests/fixtures-valid/career.json`, `collect-git-facts.mjs`,
    `validate-plugin.mjs`, `.gitignore`. `career.schema.json` 삭제 1회가 4개 사이트를 동시에 관측한다.
+
+   > **집계 정정(2026-08-24, 착수 직전 재도출). 대상은 7개가 아니라 11개이고, `career.schema.json`은
+   > 4사이트가 아니라 6사이트를 관측한다.** 위 7개 집계는 **512·640의 간접 참조를 따라가지 않았다** —
+   > 그 두 사이트는 맨몸 `readFileSync`를 지역 헬퍼 `loadJson(rel)`으로 감싸고 512는 다시
+   > `schemaOf(layer)`로 감싸므로, 실제 판독 대상이 호출부 문자열에 드러나지 않는다.
+   > `schemaOf` 호출 3곳(`:541`·`:585`·`:606`)의 layer 집합과 `bases` 객체(`:533-536`)를 따라가면
+   > 아래가 나온다.
+   >
+   > | 대상 파일 | 관측되는 사이트 |
+   > |---|---|
+   > | `schemas/career.schema.json` | 512 · 640 · 1955 · 2334 · 2531 · 3187 (**6곳**) |
+   > | `schemas/evidence.schema.json` | 512 · 640 |
+   > | `schemas/state.schema.json` | 1136 · 2069 |
+   > | `schemas/knowledge-map.schema.json` | 512 — **초판 누락** |
+   > | `schemas/gap-report.schema.json` | 512 — **초판 누락** |
+   > | `tests/fixtures-valid/career.json` | 512 · 640 |
+   > | `tests/fixtures-valid/knowledge-map.json` | 512 — **초판 누락** |
+   > | `tests/fixtures-valid/gap-report.json` | 512 — **초판 누락** |
+   > | `scripts/collect-git-facts.mjs` | 1055 |
+   > | `scripts/validate-plugin.mjs` | 3818 |
+   > | `.gitignore` | 3057 |
+   >
+   > **사이트 11곳이라는 수는 맞다** — 독립 재도출로 확인했다. `fs.readFileSync`·`readdirSync`·
+   > `copyFileSync`·`statSync`에 `path.join(REPO_ROOT, …)`를 넘기는 지점이 이 파일에 총 **14곳**이고,
+   > 그중 3곳(`:3077` DH-1의 `texts`, `:4691` `loadEvidenceSchema`, `:6314` `readRepoText`)은 이미
+   > 안전 처리돼 있어 맨몸은 정확히 11곳이다.
+   >
+   > **따라서 변이 관측은 7회가 아니라 11회다.** 이 항목 본문이 「'현실적인 대상만 고르자'는 타협을
+   > 기각한다」고 못 박았으므로 4개를 빼고 갈 근거가 없다 — 빼면 그 4개가 이 회차가 닫으려는 규칙의
+   > 미관측 잔여가 된다. **예산이 빠듯하면 대상을 골라 남기지 말고 파일 단위로 커밋을 쪼개라**(본문의
+   > 같은 지시가 그대로 적용된다).
+   >
+   > **왜 초판이 틀렸는가를 적어 둔다**: 간접 참조 한 겹이 집계를 7/11로 만들었다. 다음에 같은 집계를
+   > 할 사람은 호출부 문자열을 세지 말고 **헬퍼를 따라가라** — `loadJson`·`schemaOf`처럼 인자로
+   > 경로를 받는 지역 헬퍼가 있으면 그 인자의 실제 값 집합이 대상이다.
+
+   > **집계 정정 2 (2026-08-24, 같은 회차 재재도출). 사이트도 11곳이 아니다 — 맨몸 레포 판독은
+   > 19~20곳이고, 「A류 0건」 기록도 틀렸다.**
+   >
+   > **첫 재도출이 11을 확인한 것은 독립적이지 않았다.** 오케스트레이터가 쓴 grep 패턴이
+   > `fs.readFileSync(path.join(REPO_ROOT` **인라인 형태만** 잡았고, 경로를 변수에 담는 형태
+   > (`const schemaPath = path.join(...); ... readFileSync(schemaPath)`)를 구조적으로 놓쳤다.
+   > 핸드오프의 11과 같은 맹점을 가진 방법으로 11을 재확인한 것이므로 **교차검증이 아니었다.**
+   > 정합성 심판 에이전트가 366행을 지목해 드러났다.
+   >
+   > `fs.readFileSync`·`readdirSync`·`copyFileSync`·`statSync` 호출 **36곳**을 전수 분류한 결과:
+   >
+   > | 행 | 판독 대상 | 소속 함수 | 초판 11곳 |
+   > |---|---|---|---|
+   > | **366·367** | `schemas/{career,knowledge-map,gap-report}.schema.json` + 대응 `tests/fixtures-valid/*.json` | `runSchemaValidatorSmoke` | **누락** |
+   > | 512 | 스키마 4 + 픽스처 3 | `runSchemaClauseOracleSmoke` | 있음 |
+   > | 640 | career·evidence 스키마 + career 픽스처 | `runSecretScanOracleSmoke` | 있음 |
+   > | 1055 | `scripts/collect-git-facts.mjs` | `runStoreIoContractSmoke` | 있음 |
+   > | 1136 | `schemas/state.schema.json` | 같은 함수 | 있음 |
+   > | **1285** | `scripts/**/*.mjs`(git.mjs 제외) | git.mjs 가드 회귀 | **누락** |
+   > | 1955 | `schemas/career.schema.json` | `runRenderContractOracleSmoke` | 있음 |
+   > | 2069 | `schemas/state.schema.json` | `runArtifactContractOracleSmoke` | 있음 |
+   > | 2334·2531 | `schemas/career.schema.json` | 같은 함수 | 있음 |
+   > | **2578** | `scripts/**` 재귀 (LP-1) | `runLedgerProjectionOracleSmoke` | **누락** |
+   > | **2766** | `skills/**/*.md` | `runSkillPromptContractSmoke` | **누락** |
+   > | 3057 | `.gitignore` | `runIgnoredPathReferenceSmoke` | 있음 |
+   > | 3187 | `schemas/career.schema.json` | `runWriteArtifactOracleSmoke` | 있음 |
+   > | 3818 | `scripts/validate-plugin.mjs` | `runCitationCoverageOracleSmoke` | 있음 |
+   > | **4361** | `fixtures/golden/case-17-merge-hash-claim.json` | verify-evidence 스모크 | **누락** |
+   > | **5917** | `fixtures/make-fixture.mjs` — **모듈 최상위** | (최상위) | **누락 · A류** |
+   > | **6001** | `fixtures/make-fixture.mjs` | `runGoldenCacheKeySmoke` | **누락** |
+   > | **6026** | `fixtures/golden/sampling-300.expected.json` | `runGoldenGate`(golden 모드) | **누락** |
+   >
+   > 이미 안전 처리된 것 3곳(`:3077` DH-1 `texts`, `:4691` `loadEvidenceSchema`, `:6314`
+   > `readRepoText`)과 부분 가드 1곳(`:1944` — 앞에 `existsSync` + `missing.push` 처리), try/catch가
+   > 있는 1곳(`:174`), 그리고 tmp 판독 8곳(`:1068`·`:1071`·`:2668`·`:3151`·`:3152`·`:3255`·`:5955`·`:5960`)은
+   > 대상이 아니다.
+   >
+   > **「A류 0건」은 틀렸다 — 1건이다.** `:5921`의 `const MAKE_FIXTURE_CONTENT_HASH =
+   > computeMakeFixtureContentHash()`가 모듈 최상위에서 `fixtures/make-fixture.mjs`를 판독한다
+   > (`:5917`). 다만 **그 1건은 정적 import에 가려져 있다** — `:150`이 같은 파일을 import하므로
+   > 「파일 부재」 시나리오에서는 ESM 로더가 먼저 죽는다. 발현하는 유일한 경로는 「import는 성공했으나
+   > 판독만 실패」(권한·손상·레이스)다. 그래서 실질 위험은 낮지만, **기록된 사실이 틀린 것은 별개
+   > 문제다** — Do NOT의 「A류를 새로 만들지 마라. 현재 0건이다」를 읽는 사람이 0을 기준선으로 삼는다.
+   >
+   > **정적 import가 완료 조건 (i)을 원리적으로 막는 대상 3개.** `:54` `scripts/validate-plugin.mjs`,
+   > `:87` `scripts/collect-git-facts.mjs`, `:150` `fixtures/make-fixture.mjs`. 이 셋을 실제로 지우면
+   > Node ESM 로더가 `ERR_MODULE_NOT_FOUND`로 **단언 0건**에 프로세스를 죽이고 `finishMode`의 두 가드가
+   > 아예 실행되지 않는다(격리 사본 실측). 따라서 1055·3818·6001의 전환이 실제로 방어하는 것은
+   > **「import는 성공했으나 이 두 번째 판독만 실패」하는 좁은 경로**뿐이다. **이 셋에 대해 완료 조건
+   > (i)은 7번 단독으로 달성 불가능하다** — 4번의 완료 조건 정정과 정확히 같은 형태의 오류를
+   > 반복하지 않으려고 착수 전에 적는다.
+
+   > **확정된 범위와 커밋 계획 (2026-08-24, 사용자 결정).** 진짜 전수를 전환한다 — 이 항목 본문의
+   > 「'현실적인 대상만 고르자'는 타협을 기각한다」를 그대로 적용한다. **규모 L → XL.**
+   >
+   > **설계 (4그룹 병렬 분석 → 정합성 심판이 충돌 8건 해소).** 파일 상단(`REPO_ROOT` 선언 직후)에:
+   > `readRepoTextSafe(rel) → {text, error}` / `readRepoJsonSafe(rel) → {json, error}`(판독 실패와
+   > JSON 파싱 실패를 사유에서 구별) / 다중 파일 귀책용 `makeReadTracker() → {readText, readJson,
+   > blameFor}` 팩토리. **경로는 리터럴 상수 4개가 아니라 `SCHEMA_REL(layer)` /
+   > `FIXTURE_VALID_REL(layer)` 조립 함수**다 — 366·512가 계층명으로 경로를 조립하므로 리터럴
+   > 상수를 만들면 최대 표면이 여전히 손으로 세그먼트를 적는 절반짜리 상수화가 된다.
+   > 반환 필드명은 `{text}`/`{json}`으로 고정하고 호출부에서 `const { json: schema, error } = …`로
+   > 개명 구조분해한다(헬퍼는 계층 개념을 몰라야 하고 `schema`는 텍스트 판독에 쓸 수 없다).
+   > `makeReadTracker`를 두는 이유: 512·640에 각각 Map+blameFor를 손으로 두면 sampling-drift의 것과
+   > 합쳐 같은 아이디어가 3벌이 된다.
+   >
+   > **선례 3종을 같은 회차에 배선하지 않으면 통일이 아니라 4중 재구현이다.** 셋 다 순수 본문
+   > 교체로 총량 델타 0이다 — ① `loadEvidenceSchema`(`:4688`) 본문을 `readRepoJsonSafe` 위로
+   > (이름·JSDoc·계약 유지) ② sampling-drift 블록(`:6311~`)의 지역 `readRepoText`+`readFailures`+
+   > `blameFor`를 `makeReadTracker()`로 (단 「JSON 파싱 실패」·「description이 문자열 아님」 사유를
+   > 직접 `set`하므로 트래커가 `note(rel, msg)`를 함께 노출해야 한다) ③ DH-1 루프(`:3075~`)는
+   > **판독 원시함수만** 교체 — 실패 집계 배열은 `(DH-1d)`가 직접 단언하는 값이라 지역에 남긴다
+   > (부분 통일이 맞다).
+   >
+   > **총량 델타 0.** 11곳 전부 기존 `report()` 호출의 **판정식과 인자만** 바꾸고 실패 경로에서도
+   > 호출 **횟수**를 보존한다(512의 `run()`이 case 개수만큼, 640의 13건이 그대로). `negative`·`golden`은
+   > `main()`이 `runCommonSections()`를 아예 돌리지 않고 조기 exit하므로 **구조적으로 무영향** —
+   > `EXPECTED_ASSERTIONS_BEFORE_GUARDS.negative`·`.golden`은 손대지 않는다.
+   >
+   > **최대 함정: `structuredClone(null)`은 예외를 던지지 않는다.** null을 그대로 돌려주므로 이어지는
+   > `inst.nodes[0].text = …` 대입이 TypeError로 터진다. 512·640에 그 지점이 도합 8곳 흩어져 있어
+   > **하나만 빠뜨리면 섹션이 지금과 똑같이 중단된다.** `mutate`/`validateInstance`/`scanForSecrets`
+   > **호출 이전에** null 게이트를 두어야 한다.
+   >
+   > **거짓 초록 함정 2곳.** ① 1055 — `text`가 null이면 `hasOwnDefinition`이 false가 되어
+   > `!hasOwnDefinition`이 우연히 true가 된다. ② 3057 — 접두사 집합이 비면 `offenders`가 항상 0건이라
+   > `(DH-1b)`가 「위반 0건」으로 통과한다(**게이트 자신이 막으려던 결함과 정확히 같은 형태**).
+   > `(DH-1b)`의 판정에 `error === null`을 넣는 것은 **타협 불가**다.
+   >
+   > **커밋 순서** — 가장 작은 표면부터, 최대 표면을 마지막에. 각 커밋 뒤 4게이트 녹색을 확인한다.
+   >
+   > | # | 대상 | 사이트 |
+   > |---|---|---|
+   > | 1 | 헬퍼 3종 + 경로 조립 함수 + **선례 3종 배선** | (사이트 전환 없음) |
+   > | 2 | 텍스트 판독 | 3818 · 1055 · 1285 |
+   > | 3 | `career.schema.json` | 1955 · 2531 · 2334 · 3187 |
+   > | 4 | `state.schema.json` | 2069 · 1136 |
+   > | 5 | `runSchemaValidatorSmoke`(스키마 3 + 픽스처 3) | 366 · 367 |
+   > | 6 | `.gitignore` | 3057 |
+   > | 7 | secretscan(트래커 첫 적용) | 640 |
+   > | 8 | clause oracle(최대 표면 54건) | 512 |
+   > | 9 | golden·make-fixture·재귀 walk | 4361 · 6001 · 6026 · 2578 · 2766 |
+   > | 10 | **A류 1건** 지연 판독화 | 5917 / 5921 |
+   >
+   > 2531을 2334보다 **먼저** 두는 이유: 같은 함수 안이라 변수 공유 유혹이 생기는데, 공유하면
+   > 「AC-27 절을 지우면 AC-42가 참조할 선언이 함께 사라지는」 결합이 만들어진다. 대가는 수 KB
+   > 재판독뿐이고 이 레포는 절 단위 독립성을 반복해 우선해 왔다 — 먼저 독립 판독으로 확정해
+   > 구조적으로 차단한다.
+   >
+   > **관측**: 커밋마다 그 커밋이 다루는 대상 파일을 격리 사본에서 지우고 (i)~(iv)를 확인한다.
+   > 정적 import 3개 대상은 (i)이 원리적으로 불가능하므로 **(ii)(iii)(iv)만** 확인하고 그 사실을
+   > 커밋 메시지에 적는다.
    **「현실적인 대상만 고르자」는 타협은 기각한다** — 남긴 사이트가 이 회차가 닫으려는 그 규칙의
    미관측 잔여가 된다. 예산이 빠듯하면 **사이트를 골라 남기지 말고 파일 단위로 커밋을 쪼개라.**
    **왜 13번 앞인가**: 8단계가 스모크에 새 섹션을 추가하면서 깨진 판독 패턴을 복제하면 수리 대상이
