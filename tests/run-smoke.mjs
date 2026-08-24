@@ -458,12 +458,14 @@ function runSchemaValidatorSmoke() {
   // 관측되지 않았다(인스턴스가 레포에 아예 없었다). positive 픽스처가
   // 스키마와 갈려도 게이트가 침묵하는 상태를 여기서 닫는다.
   for (const layer of ["career", "knowledge-map", "gap-report"]) {
-    const schemaPath = path.join(REPO_ROOT, "schemas", `${layer}.schema.json`);
-    const instPath = path.join(TESTS_DIR, "fixtures-valid", `${layer}.json`);
-    const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-    const instance = JSON.parse(fs.readFileSync(instPath, "utf8"));
+    // 이 단언은 **두 파일 모두**에 의존하므로 사유도 둘을 합쳐 싣는다 — 어느 쪽이 없었는지가
+    // 한 줄에 남아야 한다. 경로는 조립 함수를 쓴다(초판은 세그먼트를 손으로 적었고, 그래서
+    // 이 사이트가 「11곳」 집계에서 통째로 빠졌다 — 호출부에 경로 문자열이 없었기 때문이다).
+    const { json: schema, error: schemaError } = readRepoJsonSafe(SCHEMA_REL(layer));
+    const { json: instance, error: instError } = readRepoJsonSafe(FIXTURE_VALID_REL(layer));
+    const readError = [schemaError, instError].filter((e) => e !== null).join(", ");
     const warnings = [];
-    const errors = validateInstance(schema, instance, schema, "$", warnings);
+    const errors = readError !== "" ? [readError] : validateInstance(schema, instance, schema, "$", warnings);
     if (errors.length > 0) {
       for (const e of errors) console.log(`    실제 오류: ${e}`);
     }
