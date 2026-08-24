@@ -1235,8 +1235,9 @@ function runStoreIoContractSmoke() {
 
       // 쓴 state가 실제 스키마를 만족하는지까지 본다 — 계약이 스키마와
       // 어긋나면 이 IO 계층을 쓰는 스킬이 곧바로 부적합 산출물을 만든다.
-      const stateSchema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "state.schema.json"), "utf8"));
-      const errs = validateInstance(stateSchema, round.value, stateSchema, "$");
+      const { json: stateSchema, error: stateError } = readRepoJsonSafe(SCHEMA_REL("state"));
+      if (stateError !== null) console.log(`    실제: ${stateError}`);
+      const errs = stateError !== null ? [stateError] : validateInstance(stateSchema, round.value, stateSchema, "$");
       if (errs.length > 0) console.log(`    실제 오류: ${JSON.stringify(errs)}`);
       report(errs.length === 0, "writeState가 쓴 state.json이 state.schema.json을 만족한다");
 
@@ -2186,11 +2187,20 @@ function runArtifactContractOracleSmoke() {
 
   // ---- (AC-2) stateKey가 state.schema.json의 artifacts 프로퍼티와 일치하는가 ----
   {
-    const stateSchema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "state.schema.json"), "utf8"));
-    const schemaKeys = Object.keys(stateSchema.properties.artifacts.properties).filter((k) => k !== "evidence").sort();
+    // **판독 실패와 형태 변화를 둘 다 막아야 하는 유일한 사이트다.** `properties.artifacts.properties`
+    // 접근은 스키마가 null일 때뿐 아니라 스키마가 읽혔어도 그 경로가 사라졌을 때 터진다 — 후자는
+    // 파일이 멀쩡한데도 섹션을 중단시키므로 옵셔널 체이닝이 필수다. `schemaKeys`가 null이면
+    // 비교 자체가 성립하지 않으므로 `ok` 판정에 그 조건을 명시적으로 넣는다(빈 배열로 강등하면
+    // `mine`도 비었을 때 우연히 일치해 조용히 PASS한다).
+    const { json: stateSchema, error: stateError } = readRepoJsonSafe(SCHEMA_REL("state"));
+    const props = stateSchema?.properties?.artifacts?.properties;
+    const schemaKeys = props ? Object.keys(props).filter((k) => k !== "evidence").sort() : null;
     const mine = Object.values(ARTIFACT_LAYERS).map((v) => v.stateKey).sort();
-    const ok = JSON.stringify(mine) === JSON.stringify(schemaKeys);
-    if (!ok) console.log(`    실제: stateKey=${JSON.stringify(mine)} schema=${JSON.stringify(schemaKeys)}`);
+    const ok = schemaKeys !== null && JSON.stringify(mine) === JSON.stringify(schemaKeys);
+    if (!ok) {
+      const why = stateError !== null ? stateError : (schemaKeys === null ? `${SCHEMA_REL("state")} properties.artifacts.properties 경로가 없음` : "");
+      console.log(`    실제: ${why} stateKey=${JSON.stringify(mine)} schema=${JSON.stringify(schemaKeys)}`);
+    }
     report(ok, "(AC-2) ARTIFACT_LAYERS의 stateKey 집합이 state.schema.json의 artifacts 키(evidence 제외)와 일치");
   }
 
