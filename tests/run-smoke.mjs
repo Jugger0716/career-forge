@@ -608,8 +608,18 @@ function runSchemaValidatorSmoke() {
 function runSchemaClauseOracleSmoke() {
   console.log("[스키마 절 단위 오라클] 게이트 A가 넣은 조건절·제약이 각각 실제로 FAIL을 내는지(절대 규칙: 관측되지 않는 제약은 없는 것이다)");
 
-  const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"));
-  const schemaOf = (layer) => loadJson(`schemas/${layer}.schema.json`);
+  // **계층 단위로 귀책한다.** 이 섹션은 스키마 4개와 픽스처 3개를 읽고 단언 54건이 그 위에
+  // 서므로, 사유를 섹션 전량에 실으면 어느 파일이 없었는지가 통째로 뭉개진다.
+  //
+  // `evidence` 계층만 다르다 — 그 기준 인스턴스는 파일이 아니라 아래에서 buildMultiAuthor +
+  // collectGitFacts로 **런타임 합성**한 것이다. 그래서 evidence의 blame 대상은 스키마 하나뿐이고,
+  // `tests/fixtures-valid/evidence.json`을 사유에 적으면 실재하지 않는 파일을 가리키게 된다.
+  const tracker = makeReadTracker();
+  const schemaOf = (layer) => tracker.readJson(SCHEMA_REL(layer));
+  const blameOf = (layer) =>
+    layer === "evidence"
+      ? tracker.blameFor([SCHEMA_REL("evidence")])
+      : tracker.blameFor([SCHEMA_REL(layer), FIXTURE_VALID_REL(layer)]);
 
   // evidence 기준 인스턴스는 손으로 쓰지 않고 실제 수집 결과를 쓴다 —
   // 프로덕션이 실제로 만드는 형태여야 절 검사에 의미가 있다.
@@ -629,16 +639,19 @@ function runSchemaClauseOracleSmoke() {
   }
 
   const bases = {
-    career: loadJson("tests/fixtures-valid/career.json"),
-    "knowledge-map": loadJson("tests/fixtures-valid/knowledge-map.json"),
-    "gap-report": loadJson("tests/fixtures-valid/gap-report.json"),
+    career: tracker.readJson(FIXTURE_VALID_REL("career")),
+    "knowledge-map": tracker.readJson(FIXTURE_VALID_REL("knowledge-map")),
+    "gap-report": tracker.readJson(FIXTURE_VALID_REL("gap-report")),
     evidence: evidenceBase,
   };
 
   // (1) 대조군 — 기준 인스턴스가 위반 0건이어야 아래 변이 단언이 공허하지 않다.
+  //     음수 방향이므로 판독 실패를 **사유 배열로 치환**한다. 빈 배열로 두면 「위반 0건」과
+  //     구별되지 않아 대조군이 조용히 PASS하고, 그 순간 아래 절 단언 50건이 전부 공허해진다.
   for (const [layer, inst] of Object.entries(bases)) {
     const schema = schemaOf(layer);
-    const errors = validateInstance(schema, inst, schema, "$");
+    const blame = blameOf(layer);
+    const errors = blame !== "" ? [blame] : validateInstance(schema, inst, schema, "$");
     if (errors.length > 0) for (const e of errors) console.log(`    실제 오류: ${e}`);
     report(errors.length === 0, `대조군: ${layer} 기준 인스턴스가 위반 0건(이게 깨지면 아래 절 단언이 전부 공허해진다)`);
   }
@@ -682,10 +695,22 @@ function runSchemaClauseOracleSmoke() {
 
   const run = (layer, cases) => {
     const schema = schemaOf(layer);
+    const blame = blameOf(layer);
     for (const c of cases) {
-      const inst = structuredClone(bases[layer]);
-      c.mutate(inst);
-      const errors = validateInstance(schema, inst, schema, "$");
+      // **판독에 실패하면 `c.mutate`를 부르지 않는다.** `structuredClone(null)`은 예외를 던지지
+      // 않고 null을 돌려주므로, 그 뒤의 `i.nodes[0].verification = …` 같은 대입이 TypeError로
+      // 터져 섹션 전체를 중단시킨다 — 이 회차가 닫으려는 바로 그 형태다. 루프는 그대로 돌려
+      // **`report` 호출 횟수를 보존**한다(케이스 수만큼 FAIL이 남아야 총량이 유지된다).
+      let errors;
+      if (blame !== "") {
+        errors = [blame];
+      } else {
+        const inst = structuredClone(bases[layer]);
+        c.mutate(inst);
+        errors = validateInstance(schema, inst, schema, "$");
+      }
+      // 양수 방향이라 별도 게이트가 필요 없다 — 사유 문자열에는 `c.expect`가 들어 있지 않으므로
+      // `some(...)`이 false가 되어 자연히 FAIL한다.
       const ok = errors.some((e) => e.includes(c.expect));
       if (!ok) console.log(`    실제 오류: ${JSON.stringify(errors)}`);
       report(ok, `${layer}: ${c.label} → '${c.expect}' 발화`);
@@ -703,11 +728,17 @@ function runSchemaClauseOracleSmoke() {
   // 조건절을 되돌려도 아무도 모른다(금지 방향만 관측하면 완화를 못 잡는다).
   for (const layer of ["career", "knowledge-map", "gap-report"]) {
     const schema = schemaOf(layer);
-    const inst = structuredClone(bases[layer]);
-    inst.nodes[0].evidence = [];
-    inst.nodes[0].basis = "external";
-    inst.nodes[0].externalUrl = "https://developer.mozilla.org/en-US/docs/Web/HTTP";
-    const errors = validateInstance(schema, inst, schema, "$");
+    const blame = blameOf(layer);
+    let errors;
+    if (blame !== "") {
+      errors = [blame];
+    } else {
+      const inst = structuredClone(bases[layer]);
+      inst.nodes[0].evidence = [];
+      inst.nodes[0].basis = "external";
+      inst.nodes[0].externalUrl = "https://developer.mozilla.org/en-US/docs/Web/HTTP";
+      errors = validateInstance(schema, inst, schema, "$");
+    }
     if (errors.length > 0) console.log(`    실제 오류: ${JSON.stringify(errors)}`);
     report(errors.length === 0, `${layer}: 커밋 근거 없이 URL 출처만 있는 external 노드가 스키마를 통과함(표현 가능성)`);
   }
