@@ -736,10 +736,35 @@ function runSchemaClauseOracleSmoke() {
 function runSecretScanOracleSmoke() {
   console.log("[시크릿 스캔 절 단위 오라클] scripts/lib/secret-scan.mjs — 패턴별 탐지 · 오탐 · 과잉 면제 3방향");
 
-  const loadJson = (rel) => JSON.parse(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"));
-  const careerSchema = loadJson("schemas/career.schema.json");
-  const evidenceSchema = loadJson("schemas/evidence.schema.json");
-  const careerBase = loadJson("tests/fixtures-valid/career.json");
+  // 세 판독을 **두 그룹으로 갈라 귀책한다.** career 그룹(스키마 + 픽스처)과 evidence 그룹은
+  // 서로 독립이라 한쪽이 없어도 다른 쪽 단언은 영향받지 않아야 한다.
+  //
+  // **`evidenceBase`는 이 사이트가 읽는 파일이 아니다** — 아래에서 buildMultiAuthor +
+  // collectGitFacts로 런타임에 합성한다. 그러므로 evidence 그룹의 실패 원인은 스키마 하나뿐이고,
+  // 사유에 `fixtures-valid/evidence.json` 같은 실재하지 않는 파일을 적으면 오도가 된다.
+  const tracker = makeReadTracker();
+  const careerSchema = tracker.readJson(SCHEMA_REL("career"));
+  const evidenceSchema = tracker.readJson(SCHEMA_REL("evidence"));
+  const careerBase = tracker.readJson(FIXTURE_VALID_REL("career"));
+  const careerBlame = tracker.blameFor([SCHEMA_REL("career"), FIXTURE_VALID_REL("career")]);
+  const evidenceBlame = tracker.blameFor([SCHEMA_REL("evidence")]);
+  const careerOk = careerBlame === "";
+  const evidenceOk = evidenceBlame === "";
+
+  /**
+   * career 변이 케이스 1건. 판독 실패 시 **호출 자체를 건너뛰고 null**을 돌려준다.
+   *
+   * 골격 객체로 대체하지 않는 이유: 그 골격을 `scanForSecrets`에 넘기면 위반 0건이 나와
+   * 「시크릿 없음」과 「관측하지 못함」이 같아진다 — 이 아크가 닫아 온 거짓 초록 그대로다.
+   * `structuredClone(null)`은 예외를 던지지 않고 null을 돌려주므로, 뒤이은 필드 대입이
+   * TypeError로 섹션을 중단시킨다. 그 대입을 아예 실행하지 않는 것이 요점이다.
+   */
+  const careerCase = (mutate) => {
+    if (!careerOk) return null;
+    const inst = structuredClone(careerBase);
+    mutate(inst);
+    return scanForSecrets(careerSchema, inst);
+  };
 
   // evidence 기준 인스턴스는 손으로 쓰지 않고 실제 수집 결과를 쓴다 —
   // commits[].authorEmail 면제 경로가 "문자열 authorEmail이 실제로 존재하는"
@@ -762,8 +787,12 @@ function runSecretScanOracleSmoke() {
 
   // --- 대조군 -------------------------------------------------------------
   // 기준 인스턴스가 위반 0건이어야 아래 변이 단언이 공허하지 않다.
+  // **음수 방향이라 게이트가 필수다.** 판독에 실패하면 스캔을 못 돌리고, 그 결과를 「위반 0건」과
+  // 구별하지 않으면 이 대조군이 조용히 PASS한다. 아래 양수 방향 단언들(`Boolean(hit)`)은
+  // null에서 자동으로 false가 되므로 게이트가 필요 없다 — 그 비대칭이 이 회차의 반복 주제다.
+  if (!careerOk) console.log(`    실제: ${careerBlame}`);
   report(
-    scanForSecrets(careerSchema, careerBase).length === 0,
+    careerOk && scanForSecrets(careerSchema, careerBase).length === 0,
     "대조군: career 기준 인스턴스가 위반 0건(40자 hex 해시 · format:email 이메일 포함)"
   );
 
@@ -774,8 +803,11 @@ function runSecretScanOracleSmoke() {
     evidenceIncluded.length >= 1,
     `선결: evidence 기준 인스턴스에 authorEmail이 문자열인 커밋이 최소 1건 존재(실제 ${evidenceIncluded.length}건) — 없으면 아래 면제 관측이 공허해진다`
   );
+  // 바로 위 「선결」 단언은 `evidenceBase`의 **구조만** 보므로 스키마 판독과 무관하다 —
+  // 두 전제를 묶지 않는다. 이 대조군만 evidence 그룹에 귀책한다.
+  if (!evidenceOk) console.log(`    실제: ${evidenceBlame}`);
   report(
-    scanForSecrets(evidenceSchema, evidenceBase).length === 0,
+    evidenceOk && scanForSecrets(evidenceSchema, evidenceBase).length === 0,
     "대조군: 실제 수집한 evidence 기준 인스턴스가 위반 0건(commits[].authorEmail 면제 경로 실행됨)"
   );
 
@@ -792,11 +824,9 @@ function runSecretScanOracleSmoke() {
   ];
 
   for (const c of PATTERN_CASES) {
-    const inst = structuredClone(careerBase);
-    inst.nodes[0].text = `이 작업에서 설정값을 다뤘다: ${c.payload} 관련 처리.`;
-    const violations = scanForSecrets(careerSchema, inst);
-    const hit = violations.find((v) => v.path === "nodes[0].text" && v.patterns.includes(c.name));
-    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    const violations = careerCase((i) => { i.nodes[0].text = `이 작업에서 설정값을 다뤘다: ${c.payload} 관련 처리.`; });
+    const hit = violations?.find((v) => v.path === "nodes[0].text" && v.patterns.includes(c.name));
+    if (!hit) console.log(`    실제 위반: ${careerBlame || JSON.stringify(violations)}`);
     report(Boolean(hit), `패턴 '${c.name}'이 nodes[0].text에서 발화`);
   }
 
@@ -805,16 +835,16 @@ function runSecretScanOracleSmoke() {
   // 이식한다. 이 도구의 산출물은 커밋 해시로 가득하므로, 이 예외가 깨지면
   // 정상 산출물 전부가 시크릿 유출로 판정된다.
   {
-    const inst = structuredClone(careerBase);
-    inst.nodes[0].text = `근거 커밋 a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4 에서 처리했다.`;
-    const violations = scanForSecrets(careerSchema, inst);
+    const violations = careerCase((i) => { i.nodes[0].text = `근거 커밋 a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4 에서 처리했다.`; });
     // **겨냥한 경로의 위반만** 본다. 전체 위반 수(=== 0)로 판정하면 같은
     // 인스턴스의 selectedIdentities 이메일이 오염원으로 섞여, 면제 로직을
     // 건드리는 변이에서도 이 단언이 함께 깨진다(실측: M1에서 그렇게 깨졌다).
     // 그러면 이 단언이 무엇을 관측하는 것인지가 흐려진다.
-    const textViolation = violations.find((v) => v.path === "nodes[0].text");
-    if (textViolation) console.log(`    실제 위반: ${JSON.stringify(textViolation)}`);
-    report(!textViolation, "무오탐: free-text 안의 40자 hex 커밋 SHA는 위반이 아님(A-10 단언의 새 경로 이식)");
+    // 음수 방향 — `violations`가 null이면 `textViolation`도 undefined라 `!textViolation`이
+    // **우연히 true**가 된다. `careerOk` 게이트가 그 거짓 초록을 막는다.
+    const textViolation = violations?.find((v) => v.path === "nodes[0].text");
+    if (textViolation || !careerOk) console.log(`    실제 위반: ${careerBlame || JSON.stringify(textViolation)}`);
+    report(careerOk && !textViolation, "무오탐: free-text 안의 40자 hex 커밋 SHA는 위반이 아님(A-10 단언의 새 경로 이식)");
   }
 
   // --- (3) 과잉 면제 방지 — 이 셋이 핵심이다 ------------------------------
@@ -830,13 +860,11 @@ function runSecretScanOracleSmoke() {
     // isSingleEmail이 false라 **면제 분기에 아예 들어가지 않았다** — 변이는
     // 분기 안에 있으므로 단언이 통과해 버렸다(실측: 면제를 필드 단위로 넓히는
     // 변이에서 FAIL 0건). 핸드오프가 금지한 자기충족 테스트의 형태 그대로였다.
-    const inst = structuredClone(careerBase);
-    inst.coverage.exclusions.selectedIdentities = ["AKIAIOSFODNN7EXAMPLE@example.com"];
-    const violations = scanForSecrets(careerSchema, inst);
-    const hit = violations.find(
+    const violations = careerCase((i) => { i.coverage.exclusions.selectedIdentities = ["AKIAIOSFODNN7EXAMPLE@example.com"]; });
+    const hit = violations?.find(
       (v) => v.path === "coverage.exclusions.selectedIdentities[0]" && v.patterns.includes("aws-access-key")
     );
-    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    if (!hit) console.log(`    실제 위반: ${careerBlame || JSON.stringify(violations)}`);
     report(
       Boolean(hit),
       "과잉 면제 방지 (a): 값 전체가 단일 이메일이라 면제 분기에 진입해도 aws-access-key는 살아남음(면제는 email 패턴 한정)"
@@ -847,11 +875,9 @@ function runSecretScanOracleSmoke() {
   //       시크릿을 덧붙이는 회피를 막는다. 이 조건이 없으면 email 패턴이
   //       한 번이라도 맞는 값은 통째로 면제된다.
   {
-    const inst = structuredClone(careerBase);
-    inst.coverage.exclusions.selectedIdentities = ["dev@example.com AKIAIOSFODNN7EXAMPLE"];
-    const violations = scanForSecrets(careerSchema, inst);
-    const hit = violations.find((v) => v.patterns.includes("email"));
-    if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    const violations = careerCase((i) => { i.coverage.exclusions.selectedIdentities = ["dev@example.com AKIAIOSFODNN7EXAMPLE"]; });
+    const hit = violations?.find((v) => v.patterns.includes("email"));
+    if (!hit) console.log(`    실제 위반: ${careerBlame || JSON.stringify(violations)}`);
     report(
       Boolean(hit),
       "과잉 면제 방지 (b): format:email 경로라도 값 전체가 단일 이메일이 아니면 email 면제가 적용되지 않음"
@@ -870,22 +896,18 @@ function runSecretScanOracleSmoke() {
     //       isSingleEmail이 false라 경로 조건을 지워도 여전히 면제되지 않아
     //       단언이 통과했다(실측: 면제를 전역으로 넓히는 변이에서 FAIL 0건).
     //       두 형태는 서로를 대신하지 못한다.
-    const inst1 = structuredClone(careerBase);
-    inst1.nodes[0].text = "dev@example.com";
-    const v1 = scanForSecrets(careerSchema, inst1);
-    const hit1 = v1.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
-    if (!hit1) console.log(`    실제 위반: ${JSON.stringify(v1)}`);
+    const v1 = careerCase((i) => { i.nodes[0].text = "dev@example.com"; });
+    const hit1 = v1?.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
+    if (!hit1) console.log(`    실제 위반: ${careerBlame || JSON.stringify(v1)}`);
     report(
       Boolean(hit1),
       "과잉 면제 방지 (c-1): 값 전체가 단일 이메일이어도 format:email이 아닌 경로(nodes[].text)에서는 위반(면제는 경로 단위)"
     );
 
     // (c-2) 실제 유출이 나타날 법한 형태 — 산문 안에 동료 이메일이 박힌 경우.
-    const inst2 = structuredClone(careerBase);
-    inst2.nodes[0].text = `동료 dev@example.com 와 함께 작업했다.`;
-    const v2 = scanForSecrets(careerSchema, inst2);
-    const hit2 = v2.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
-    if (!hit2) console.log(`    실제 위반: ${JSON.stringify(v2)}`);
+    const v2 = careerCase((i) => { i.nodes[0].text = `동료 dev@example.com 와 함께 작업했다.`; });
+    const hit2 = v2?.find((v) => v.path === "nodes[0].text" && v.patterns.includes("email"));
+    if (!hit2) console.log(`    실제 위반: ${careerBlame || JSON.stringify(v2)}`);
     report(Boolean(hit2), "과잉 면제 방지 (c-2): 산문 안에 박힌 동료 이메일도 free-text 경로에서는 위반");
   }
 
@@ -931,10 +953,12 @@ function runSecretScanOracleSmoke() {
     const target = inst.commits.find((c) => typeof c.subject === "string");
     report(Boolean(target), "선결: evidence 기준 인스턴스에 subject가 문자열인 커밋이 존재");
     if (target) {
+      // 바로 위 「선결」은 `evidenceBase`의 구조만 보므로 손대지 않는다 — 스키마 판독과
+      // 무관한 전제이고, 둘을 묶으면 어느 쪽이 무너졌는지가 뭉개진다.
       target.subject = `fix: rotate AKIAIOSFODNN7EXAMPLE`;
-      const violations = scanForSecrets(evidenceSchema, inst);
-      const hit = violations.find((v) => v.patterns.includes("aws-access-key"));
-      if (!hit) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+      const violations = evidenceOk ? scanForSecrets(evidenceSchema, inst) : null;
+      const hit = violations?.find((v) => v.patterns.includes("aws-access-key"));
+      if (!hit) console.log(`    실제 위반: ${evidenceBlame || JSON.stringify(violations)}`);
       report(Boolean(hit), "evidence 계층의 commits[].subject에 남은 AWS 키도 탐지됨");
     }
   }
@@ -944,12 +968,11 @@ function runSecretScanOracleSmoke() {
   // 흘리면 방어가 아니라 두 번째 유출 경로다.
   {
     const secret = "AKIAIOSFODNN7EXAMPLE";
-    const inst = structuredClone(careerBase);
-    inst.nodes[0].text = `키 ${secret} 를 사용했다.`;
-    const violations = scanForSecrets(careerSchema, inst);
-    const excerpts = violations.map((v) => v.excerpt).join("\n");
+    const violations = careerCase((i) => { i.nodes[0].text = `키 ${secret} 를 사용했다.`; });
+    const excerpts = (violations ?? []).map((v) => v.excerpt).join("\n");
+    if (!careerOk) console.log(`    실제: ${careerBlame}`);
     report(
-      violations.length > 0 && !excerpts.includes(secret) && excerpts.includes("[REDACTED:aws-access-key]"),
+      careerOk && violations.length > 0 && !excerpts.includes(secret) && excerpts.includes("[REDACTED:aws-access-key]"),
       "위생: 위반 메시지의 excerpt가 원문 시크릿이 아니라 마스킹된 형태를 담음"
     );
   }
