@@ -153,6 +153,97 @@ import { redactSecrets, containsSecretPattern } from "../scripts/lib/redact.mjs"
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TESTS_DIR, "..");
 
+// ---------------------------------------------------------------------------
+// 레포 파일 안전 판독 — 부재를 예외가 아니라 각 단언의 FAIL로
+// ---------------------------------------------------------------------------
+//
+// **왜 헬퍼를 하나로 두는가.** 이 파일은 같은 요구(「파일을 읽되 예외를 던지지 않고 실패 사유를
+// 각 단언에 귀속시킨다」)를 세 곳에서 **서로 다른 자료구조로** 구현하고 있었다 — `{schema,error}`
+// 객체 / `Map`+문자열 배열 / `Map`+`blameFor` 클로저. 콜드 리뷰가 그 3중 재구현을 지적했고,
+// 세 곳 다 `catch`에서 `e.code ?? e.message`를 사유로 남기는 핵심은 동일했다. 판독과 사유 포맷만
+// 여기로 모으고, **실패 정책은 각 호출부에 남긴다** — 전용 전제 단언(DH-1d) / 단언별 귀책 분배
+// (blameFor) / 절 단위 강등은 서로 다른 것이 옳다.
+//
+// **경로를 리터럴 상수로 만들지 않는 이유.** `CAREER_SCHEMA_REL` 같은 상수 4개를 두면
+// `runSchemaValidatorSmoke`와 `runSchemaClauseOracleSmoke`가 계층명으로 경로를 **조립**하므로
+// 그 상수를 쓸 수 없다 — 최대 표면이 여전히 손으로 세그먼트를 적는 절반짜리 상수화가 된다.
+// 조립 함수를 정본으로 두면 `SCHEMA_REL("state")`와 `SCHEMA_REL(layer)`가 한 메커니즘에 수렴한다.
+//
+// `EVIDENCE_SCHEMA_REL`(sampling-literal-drift.mjs export)은 `checkSamplingMethodLiteralDrift`의
+// 결과 키와 **바이트 일치**해야 하므로 드리프트 가드 사용처에서는 그 상수를 계속 쓴다.
+// 두 값은 같은 문자열이며, 그 밖의 스모크 내부 판독은 `SCHEMA_REL("evidence")`로 통일한다.
+
+/** `schemas/<layer>.schema.json` 상대 경로. */
+const SCHEMA_REL = (layer) => `schemas/${layer}.schema.json`;
+/** `tests/fixtures-valid/<layer>.json` 상대 경로. */
+const FIXTURE_VALID_REL = (layer) => `tests/fixtures-valid/${layer}.json`;
+
+/**
+ * 레포 파일 텍스트를 판독한다. **예외를 던지지 않는다.**
+ *
+ * @param {string} rel 레포 루트 기준 상대 경로
+ * @returns {{text: string|null, error: string|null}}
+ */
+function readRepoTextSafe(rel) {
+  try {
+    return { text: fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"), error: null };
+  } catch (e) {
+    return { text: null, error: `${rel} 판독 실패(${e.code ?? e.message})` };
+  }
+}
+
+/**
+ * 레포 JSON 파일을 판독한다. **예외를 던지지 않는다.**
+ *
+ * 판독 실패와 파싱 실패를 **사유 문자열에서 구별한다** — 어느 경로로 실패했는지가 로그에
+ * 고정되어야 한다. `JSON.parse`의 `SyntaxError`에는 `e.code`가 없으므로 `e.message`로 떨어진다.
+ *
+ * @param {string} rel 레포 루트 기준 상대 경로
+ * @returns {{json: object|null, error: string|null}}
+ */
+function readRepoJsonSafe(rel) {
+  const { text, error } = readRepoTextSafe(rel);
+  if (text === null) return { json: null, error };
+  try {
+    return { json: JSON.parse(text), error: null };
+  } catch (e) {
+    return { json: null, error: `${rel} JSON 파싱 실패(${e.message})` };
+  }
+}
+
+/**
+ * 여러 파일을 읽고 **파일별로** 귀책해야 하는 섹션 전용 트래커.
+ *
+ * 사유를 그 섹션의 단언 전량에 싣지 않기 위한 장치다 — 전량에 실으면 어느 파일이 없었는지가
+ * 다시 뭉뚱그려져 「어느 경로로 실패했는가를 고정하라」를 반대쪽에서 어긴다. `blameFor(rels)`는
+ * **인자로 준 파일 중 실제로 실패한 것만** 사유로 엮으므로, 그 파일에 의존하는 단언에만 실린다.
+ *
+ * `note(rel, msg)`는 판독은 성공했으나 **내용이 기대 형태가 아닌** 경우(예: 특정 키가 문자열이
+ * 아님)를 같은 귀책 경로에 얹기 위한 것이다 — 그 실패도 예외가 아니라 사유다.
+ *
+ * @returns {{readText: (rel: string) => string|null, readJson: (rel: string) => object|null,
+ *            note: (rel: string, msg: string) => void, blameFor: (rels: string[]) => string,
+ *            failed: (rel: string) => boolean}}
+ */
+function makeReadTracker() {
+  const failures = new Map();
+  return {
+    readText: (rel) => {
+      const r = readRepoTextSafe(rel);
+      if (r.error !== null) failures.set(rel, r.error);
+      return r.text;
+    },
+    readJson: (rel) => {
+      const r = readRepoJsonSafe(rel);
+      if (r.error !== null) failures.set(rel, r.error);
+      return r.json;
+    },
+    note: (rel, msg) => failures.set(rel, `${rel} ${msg}`),
+    blameFor: (rels) => rels.filter((r) => failures.has(r)).map((r) => failures.get(r)).join(", "),
+    failed: (rel) => failures.has(rel),
+  };
+}
+
 // AC-4: "CR 픽스처가 .gitattributes 정규화로 CR을 잃지 않음을 러너가
 // 사전 확인한다"는 요구. negative 루프를 돌리기 전에 케이스 (5) CR 혼입
 // 픽스처의 워킹 트리 바이트를 직접 읽어 CR(0x0D)이 실제로 존재하는지
@@ -3070,14 +3161,16 @@ function runIgnoredPathReferenceSmoke() {
   // 스캔 대상을 **한 번만** 판독해 보관한다(초판은 DH-1b와 DH-1c가 각자 전량을 다시 읽어
   // 같은 파일을 두 번 열었다). 판독 실패는 **빈 문자열로 강등하지 않고** 목록에 남긴다 —
   // 그 강등이 아래 (DH-1d) 주석이 적은 거짓 초록의 원인이었다.
+  //
+  // **판독 원시함수만** 파일 상단의 `readRepoTextSafe`로 넘긴다(2026-08-24). 실패 **집계**는
+  // 아래 (DH-1d)가 직접 단언하는 값이므로 지역 배열로 남긴다 — 여기서 통일할 것은 판독과
+  // 사유 포맷뿐이고, 「어떻게 실패를 다루는가」는 이 섹션의 정책이다(부분 통일이 맞다).
   const texts = new Map();
   const readFailures = [];
   for (const f of scanned) {
-    try {
-      texts.set(f, fs.readFileSync(path.join(REPO_ROOT, f), "utf8"));
-    } catch (e) {
-      readFailures.push(`${f}(${e.code ?? e.message})`);
-    }
+    const { text, error } = readRepoTextSafe(f);
+    if (error !== null) readFailures.push(error);
+    else texts.set(f, text);
   }
 
   // ---- (DH-1a) 대상이 0건이 아닌가 ----
@@ -4683,17 +4776,17 @@ function runEvidenceInvariantSmoke() {
  * 경로는 정본 상수 `EVIDENCE_SCHEMA_REL`로 조립한다 — 세그먼트를 손으로 적으면 스키마가
  * 옮겨질 때 이 판독만 조용히 옛 경로를 본다(같은 회차에 드리프트 가드 쪽에서 고친 것과 같은 형태).
  *
+ * **판독 자체는 파일 상단의 `readRepoJsonSafe`가 한다**(2026-08-24). 초판은 여기에 try/catch를
+ * 손으로 두었고, 그 결과 같은 아이디어가 이 파일에 3벌로 늘어났다 — 콜드 리뷰가 그것을 지적했다.
+ * 이 함수는 **이름·계약·사유 문자열 형태를 그대로 유지**하면서 판독만 공유 헬퍼로 넘긴다.
+ * 반환 필드명이 `{schema}`인 것은 이 함수의 기존 계약이므로 호출부를 건드리지 않기 위해 유지하고,
+ * 헬퍼의 중립적인 `{json}`을 여기서 개명 구조분해한다.
+ *
  * @returns {{schema: object|null, error: string|null}} **예외를 던지지 않는다.**
  */
 function loadEvidenceSchema() {
-  try {
-    return {
-      schema: JSON.parse(fs.readFileSync(path.join(REPO_ROOT, EVIDENCE_SCHEMA_REL), "utf8")),
-      error: null,
-    };
-  } catch (e) {
-    return { schema: null, error: `${EVIDENCE_SCHEMA_REL} 판독 실패(${e.code ?? e.message})` };
-  }
+  const { json: schema, error } = readRepoJsonSafe(EVIDENCE_SCHEMA_REL);
+  return { schema, error };
 }
 
 function runEvidenceSchemaCheckSmoke() {
@@ -6308,36 +6401,32 @@ function runSamplingLiteralDriftSmoke() {
       // **경로는 가드가 쓰는 정본 상수로 조립한다.** 세그먼트를 손으로 적으면
       // `spec.md`가 옮겨질 때 이 사본만 조용히 옛 경로를 보고, 가드는 새 경로를
       // 봐서 둘 다 값을 얻지 못하는데도 대조가 초록이 될 수 있다.
-      const readFailures = new Map();
-      const readRepoText = (rel) => {
-        try {
-          return fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
-        } catch (e) {
-          readFailures.set(rel, e.code ?? e.message);
-          return null;
-        }
-      };
-      const blameFor = (rels) =>
-        rels.filter((rel) => readFailures.has(rel)).map((rel) => `${rel}(${readFailures.get(rel)})`).join(", ");
+      // 판독·사유 포맷은 파일 상단의 `makeReadTracker()`가 담당한다(2026-08-24). 초판은 이 자리에
+      // `readFailures` Map과 `readRepoText`·`blameFor`를 손으로 두었고, 그것이 이 파일의 3중
+      // 재구현 중 하나였다 — 콜드 리뷰가 지적한 그 지점이다. **실패 정책(단언별 귀책 분배)은
+      // 여기 남는다** — 통일하는 것은 판독과 사유 포맷뿐이다.
+      const tracker = makeReadTracker();
+      const { readText, note, blameFor } = tracker;
 
-      const schemaText = readRepoText(EVIDENCE_SCHEMA_REL);
-      const goldenText = readRepoText(GOLDEN_SCRIPT_REL);
-      const specText = readRepoText(SPEC_MD_REL);
+      const schemaText = readText(EVIDENCE_SCHEMA_REL);
+      const goldenText = readText(GOLDEN_SCRIPT_REL);
+      const specText = readText(SPEC_MD_REL);
 
       // 스키마의 파싱 실패·형태 변화도 예외가 아니라 사유다 — description이
       // 사라지거나 문자열이 아니게 되면 아래 `desc.replace`가 TypeError로 터진다.
+      // 이 두 갈래는 「판독 실패」와 성격이 달라(파일은 읽혔다) `note()`로 같은 귀책 경로에 얹는다.
       let schema = null;
       let desc = null;
       if (schemaText !== null) {
         try {
           schema = JSON.parse(schemaText);
         } catch (e) {
-          readFailures.set(EVIDENCE_SCHEMA_REL, `JSON 파싱 실패: ${e.message}`);
+          note(EVIDENCE_SCHEMA_REL, `JSON 파싱 실패: ${e.message}`);
         }
         if (schema !== null) {
           const raw = schema?.$defs?.coverage?.properties?.samplingMethod?.description;
           if (typeof raw === "string") desc = raw;
-          else readFailures.set(EVIDENCE_SCHEMA_REL, "coverage.samplingMethod.description이 문자열이 아님");
+          else note(EVIDENCE_SCHEMA_REL, "coverage.samplingMethod.description이 문자열이 아님");
         }
       }
 
