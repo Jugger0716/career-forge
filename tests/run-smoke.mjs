@@ -69,7 +69,7 @@ import {
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
 import { projectWithReport, EVIDENCE_FILE_NAME } from "../scripts/project-ledger.mjs";
-import { inspectPreviousArtifact, updateRegistry } from "../scripts/write-artifact.mjs";
+import { inspectPreviousArtifact, updateRegistry, loadSchema } from "../scripts/write-artifact.mjs";
 import {
   computeRepoKeyForPath,
   getRepoToplevel,
@@ -181,12 +181,19 @@ const FIXTURE_VALID_REL = (layer) => `tests/fixtures-valid/${layer}.json`;
 /**
  * 레포 파일 텍스트를 판독한다. **예외를 던지지 않는다.**
  *
- * @param {string} rel 레포 루트 기준 상대 경로
+ * **`root`를 인자로 받는다(2026-08-25).** 콜드 리뷰가 「경로 인자를 받게 설계하라 —
+ * `loadEvidenceSchema()`는 `REPO_ROOT`를 모듈 스코프에서 직접 참조해 가짜 루트 주입이
+ * 불가능하다」고 지적했고, 그 지적이 옳았다는 것이 아래 형태 게이트의 회귀 단언을 쓰려는
+ * 순간 드러났다 — 루트를 못 바꾸면 **레포 안에 고장난 파일을 실제로 만들어야만** 그 게이트를
+ * 관측할 수 있다. 기본값이 `REPO_ROOT`이므로 기존 호출부 전량은 그대로다.
+ *
+ * @param {string} rel 판독 루트 기준 상대 경로
+ * @param {string} [root] 판독 루트. 기본값 `REPO_ROOT`
  * @returns {{text: string|null, error: string|null}}
  */
-function readRepoTextSafe(rel) {
+function readRepoTextSafe(rel, root = REPO_ROOT) {
   try {
-    return { text: fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"), error: null };
+    return { text: fs.readFileSync(path.join(root, rel), "utf8"), error: null };
   } catch (e) {
     return { text: null, error: `${rel} 판독 실패(${e.code ?? e.message})` };
   }
@@ -198,17 +205,65 @@ function readRepoTextSafe(rel) {
  * 판독 실패와 파싱 실패를 **사유 문자열에서 구별한다** — 어느 경로로 실패했는지가 로그에
  * 고정되어야 한다. `JSON.parse`의 `SyntaxError`에는 `e.code`가 없으므로 `e.message`로 떨어진다.
  *
- * @param {string} rel 레포 루트 기준 상대 경로
+ * **파싱 성공은 판독 성공이 아니다(2026-08-25). 이것이 세 번째 실패 경로다.**
+ * 내용이 `null`·`false`·스칼라·배열인 파일은 `JSON.parse`를 **통과하고**, 그 값이 그대로
+ * `validateInstance`에 넘어가면 `schema-validate.mjs`의 falsy·비객체 fail-open이
+ * **오류 0건**을 돌려준다(직접 실행 확인: `null`·`false`·`123`·`"abc"`·`[]` 전부 오류 0건,
+ * 경고조차 0건). 그 파일은 슬라이스 A 수정 금지 대상이라 근본 비대칭은 그대로 두고,
+ * **부재·파싱실패와 같은 등급의 판독 실패로 여기서 강등한다.**
+ *
+ * **실측(격리 사본, `git clone --no-hardlinks` 후 대상 파일만 덮어씀).**
+ * `schemas/career.schema.json`을 `null`로 바꾸면 433 PASS / 17 FAIL이면서
+ * 「기준 인스턴스가 스키마에 적합함」류 단언 3건이 **거짓 초록**이었고, 그중 하나가
+ * 「이게 깨지면 아래 절 단언이 전부 공허해진다」고 스스로 적어 둔 **대조군 자신**이다.
+ * `schemas/evidence.schema.json`을 `false`로 바꾸면 A-13 적합성 단언 6건이 전부 거짓 초록이었다 —
+ * 그 지점의 유일한 게이트가 `EVIDENCE_SCHEMA === null`인데 **`false === null`은 false**다.
+ *
+ * **형태 검사를 호출부가 아니라 여기 한 곳에 두는 이유.** 이 헬퍼의 호출부 18곳은 전부
+ * 사유 문자열(`error !== null`)로 게이트하므로, 비객체를 사유로 강등하는 순간 18곳이 함께
+ * 닫힌다. 호출부마다 `typeof` 검사를 복제하면 다음에 생길 19번째 호출부가 그것을 빠뜨린다 —
+ * 이 파일이 판독 헬퍼를 하나로 모은 이유와 같다.
+ *
+ * **한계(감추지 않는다)**: 이 계약은 「이 헬퍼가 읽는 레포 JSON은 전부 객체다」에 기댄다
+ * (착수 시 실측: 스키마 6 + `fixtures-valid` 3 + 골든 전량이 객체). 배열이나 스칼라를 담은
+ * JSON을 읽어야 하는 호출부가 생기면 이 헬퍼를 완화하지 말고 그 용도의 판독을 따로 두어라 —
+ * 완화하는 순간 위 거짓 초록 3+6건이 그대로 돌아온다.
+ *
+ * @param {string} rel 판독 루트 기준 상대 경로
+ * @param {string} [root] 판독 루트. 기본값 `REPO_ROOT`
  * @returns {{json: object|null, error: string|null}}
  */
-function readRepoJsonSafe(rel) {
-  const { text, error } = readRepoTextSafe(rel);
+function readRepoJsonSafe(rel, root = REPO_ROOT) {
+  const { text, error } = readRepoTextSafe(rel, root);
   if (text === null) return { json: null, error };
+  let parsed;
   try {
-    return { json: JSON.parse(text), error: null };
+    parsed = JSON.parse(text);
   } catch (e) {
     return { json: null, error: `${rel} JSON 파싱 실패(${e.message})` };
   }
+  const shape = jsonShapeViolation(parsed);
+  if (shape !== null) {
+    return { json: null, error: `${rel} 내용이 객체가 아님(${shape}) — 스키마·픽스처는 객체여야 한다` };
+  }
+  return { json: parsed, error: null };
+}
+
+/**
+ * 파싱된 JSON 값이 **평범한 객체가 아니면** 그 형태 이름을, 객체면 `null`을 돌려준다.
+ *
+ * 술어를 따로 빼 두는 이유는 회귀 단언이 파일 IO 없이 **판정 자체**를 관측할 수 있게 하려는
+ * 것이다. 배선(파일 → 사유 문자열)은 가짜 루트로 따로 관측한다 — 둘 중 하나만 보면
+ * 「술어는 맞는데 배선이 빠진」 상태가 조용히 통과한다.
+ *
+ * @param {unknown} parsed
+ * @returns {string|null} `"null"` · `"array"` · `typeof` 결과, 또는 위반 없으면 `null`
+ */
+function jsonShapeViolation(parsed) {
+  if (parsed === null) return "null";
+  if (Array.isArray(parsed)) return "array";
+  if (typeof parsed !== "object") return typeof parsed;
+  return null;
 }
 
 /**
@@ -408,7 +463,8 @@ let abortedSections = 0;
 const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   // 이력: (DH-1d) 445 → 446. 7번 C2의 A-21 판독 전제 단언 446 → 447.
   //       7번 C9의 (SP-1b) 프롬프트 판독 전제 단언 447 → 448.
-  default: 448,
+  //       8번 ⑪의 (SR-1)~(SR-11) 안전 판독 형태 오라클 448 → 459.
+  default: 459,
   negative: 33,
   golden: 11,
 });
@@ -606,6 +662,132 @@ function runSchemaValidatorSmoke() {
 //   (2) 기대 메시지 조각을 절마다 다르게 잡는다 — 아무 오류나 나면 통과하는
 //       판정은 이 파일이 messageIncludes를 도입한 이유와 정확히 같은 실패다.
 // ---------------------------------------------------------------------------
+/**
+ * 안전 판독의 **세 번째 실패 경로**(파싱은 성공했는데 내용이 객체가 아님)를 관측한다.
+ *
+ * **왜 이 절이 있는가.** 이 아크는 「부재를 예외가 아니라 FAIL로」를 13곳에서 닫았지만,
+ * 그 폐쇄는 **부재·파싱실패** 두 축만 덮었다. 「판독도 파싱도 성공했는데 값이 `null`」인
+ * 축은 열려 있었고, `schema-validate.mjs`의 falsy·비객체 fail-open과 만나 **거짓 초록**이
+ * 됐다(격리 사본 실측: career 스키마 `null` → 거짓 초록 3건, evidence 스키마 `false` →
+ * A-13 적합성 6건). 그 폐쇄를 관측하는 단언이 **0건이었으므로** 여기 만든다 —
+ * 이 레포의 절대 규칙은 「관측되지 않는 제약은 없는 것이다」이다.
+ *
+ * **가짜 루트로 관측한다.** `readRepoJsonSafe(rel, root)`·`loadSchema(layer, root)`가 루트를
+ * 인자로 받게 바뀌었으므로 레포 안에 고장난 파일을 만들지 않고 os.tmpdir에서 전부 끝난다.
+ * 루트 주입이 불가능했다면 이 절은 존재할 수 없었다 — 콜드 리뷰의 「경로 인자를 받게
+ * 설계하라」가 값을 낸 지점이 여기다.
+ *
+ * **양방향으로 본다.** 금지 방향(비객체 5종이 사유로 강등)만 보면 게이트가 너무 넓어져
+ * 정상 객체까지 막는 회귀를 놓친다. 그래서 (SR-1)이 허용 방향을 먼저 고정한다.
+ */
+function runSafeReadShapeOracleSmoke() {
+  console.log("[안전 판독 형태 오라클] 판독·파싱 성공 뒤에도 내용이 객체가 아니면 판독 실패로 강등되는가");
+
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-shape-"));
+  try {
+    fs.mkdirSync(path.join(fake, "schemas"), { recursive: true });
+    const put = (rel, raw) => {
+      const p = path.join(fake, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, raw, "utf8");
+      return rel;
+    };
+
+    // 정상 스키마 1개 — 허용 방향의 대조군이자, 아래 금지 방향이 「전부 막는 게이트」가
+    // 아님을 증명하는 짝이다.
+    const okSchema = { type: "object", required: ["a"], properties: { a: { type: "string" } } };
+    put("schemas/career.schema.json", JSON.stringify(okSchema));
+
+    // ---- (SR-1) 허용 방향 ----
+    {
+      const { json, error } = readRepoJsonSafe("schemas/career.schema.json", fake);
+      const ok = error === null && json !== null && json.type === "object";
+      if (!ok) console.log(`    실제: json=${JSON.stringify(json)} error=${error}`);
+      report(ok, "(SR-1) 허용 방향: 내용이 정상 객체인 JSON은 그대로 판독된다(형태 게이트가 과잉 차단하지 않는다)");
+    }
+
+    // ---- (SR-2)~(SR-6) 금지 방향: 파싱은 통과하지만 객체가 아닌 5종 ----
+    for (const [raw, shape] of [
+      ["null", "null"],
+      ["false", "boolean"],
+      ["123", "number"],
+      ['"schema"', "string"],
+      ["[]", "array"],
+    ]) {
+      const rel = put(`schemas/probe-${shape}.schema.json`, raw);
+      const { json, error } = readRepoJsonSafe(rel, fake);
+      // 사유에 **형태 이름**이 들어가야 한다 — 「객체가 아님」만으로는 어느 형태였는지가
+      // 로그에서 사라지고, 그러면 「어느 경로로 실패했는가를 고정하라」를 반대쪽에서 어긴다.
+      const ok = json === null && typeof error === "string" && error.includes("객체가 아님") && error.includes(shape);
+      if (!ok) console.log(`    실제(${raw}): json=${JSON.stringify(json)} error=${error}`);
+      report(ok, `(SR-${shape === "null" ? 2 : shape === "boolean" ? 3 : shape === "number" ? 4 : shape === "string" ? 5 : 6}) 금지 방향: 내용이 ${shape}인 JSON은 판독 실패 사유로 강등된다(형태 이름 포함)`);
+    }
+
+    // ---- (SR-7) 기존 두 실패 경로가 살아 있는가(회귀) ----
+    {
+      const relBroken = put("schemas/probe-broken.schema.json", "{ not json");
+      const broken = readRepoJsonSafe(relBroken, fake);
+      const missing = readRepoJsonSafe("schemas/does-not-exist.schema.json", fake);
+      const ok =
+        broken.json === null && broken.error !== null && broken.error.includes("JSON 파싱 실패") &&
+        missing.json === null && missing.error !== null && missing.error.includes("판독 실패");
+      if (!ok) console.log(`    실제: broken=${broken.error} missing=${missing.error}`);
+      report(ok, "(SR-7) 형태 게이트를 넣어도 기존 두 실패 경로(파싱 실패·부재)의 사유가 서로 구별된 채 남는다");
+    }
+
+    // ---- (SR-8) 술어 자체 ----
+    {
+      const cases = [
+        [null, "null"], [[], "array"], [false, "boolean"], [1, "number"], ["s", "string"],
+        [{}, null], [{ a: 1 }, null],
+      ];
+      const bad = cases.filter(([v, want]) => jsonShapeViolation(v) !== want);
+      if (bad.length > 0) console.log(`    실제: ${JSON.stringify(bad.map(([v]) => jsonShapeViolation(v)))}`);
+      report(bad.length === 0, "(SR-8) jsonShapeViolation 술어가 7개 입력을 정확히 분류한다(객체만 위반 없음)");
+    }
+
+    // ---- (SR-9) 이 게이트가 **왜** 필요한지를 고정한다 ----
+    {
+      // 슬라이스 A 파일이라 고칠 수 없는 현행 동작을 여기 못 박는다. 이것이 바뀌면(즉
+      // schema-validate.mjs가 fail-closed가 되면) 이 단언이 FAIL하고, 그때 이 우회로가
+      // 아직 필요한지 다시 판단하게 된다. 「고칠 수 없는 것」과 「고칠 필요 없는 것」은 다르다.
+      const w = [];
+      const permissive = [null, false, 123, "abc", []].every(
+        (s) => validateInstance(s, { anything: 1 }, s, "$", w).length === 0
+      );
+      const strict = validateInstance(okSchema, { b: 1 }, okSchema, "$", []).length > 0;
+      const ok = permissive && strict && w.length === 0;
+      if (!ok) console.log(`    실제: permissive=${permissive} strict=${strict} warnings=${JSON.stringify(w)}`);
+      report(
+        ok,
+        "(SR-9) 전제 고정: validateInstance는 비객체 스키마에 오류 0건·경고 0건을 돌려준다" +
+        "(schema-validate.mjs는 슬라이스 A 수정 금지라 이 비대칭은 판독 쪽에서 막는다)"
+      );
+    }
+
+    // ---- (SR-10)(SR-11) 프로덕션 쓰기 경계 ----
+    {
+      let okObj = null;
+      try { okObj = loadSchema("career", fake); } catch (e) { okObj = e; }
+      const ok = okObj !== null && !(okObj instanceof Error) && okObj.type === "object";
+      if (!ok) console.log(`    실제: ${okObj instanceof Error ? okObj.message : JSON.stringify(okObj)}`);
+      report(ok, "(SR-10) 허용 방향: loadSchema가 정상 스키마를 그대로 돌려준다");
+    }
+    {
+      put("schemas/knowledge-map.schema.json", "null");
+      let threw = null;
+      try { loadSchema("knowledge-map", fake); } catch (e) { threw = e; }
+      // **던지는 것이 요점이다.** 여기서 null을 돌려주면 호출부의 validateInstance가
+      // 오류 0건을 받아 검증되지 않은 산출물이 exit 0으로 기록된다(격리 사본 실측).
+      const ok = threw !== null && threw.message.includes("객체가 아닙니다") && threw.message.includes("null");
+      if (!ok) console.log(`    실제: ${threw === null ? "던지지 않았다" : threw.message}`);
+      report(ok, "(SR-11) 금지 방향: loadSchema는 내용이 null인 스키마에 던진다(호출부의 LAYER_SCHEMA_UNREADABLE + exit 3 채널로 간다)");
+    }
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
+}
+
 function runSchemaClauseOracleSmoke() {
   console.log("[스키마 절 단위 오라클] 게이트 A가 넣은 조건절·제약이 각각 실제로 FAIL을 내는지(절대 규칙: 관측되지 않는 제약은 없는 것이다)");
 
@@ -6891,6 +7073,9 @@ function finishMode(mode) {
 // 수백 개를 더 이상 다시 스폰하지 않는다).
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
+  // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
+  // 아래 절의 「기준 인스턴스가 적합함」류 단언이 공허해지므로 먼저 관측한다.
+  runSection("안전 판독 형태 오라클(비객체 스키마 fail-closed)", runSafeReadShapeOracleSmoke);
   runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);

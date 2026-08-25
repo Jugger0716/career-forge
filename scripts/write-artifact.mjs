@@ -87,10 +87,44 @@ export const EMPTY_REGISTRY_ARTIFACTS = Object.freeze({
 /** state.json 자신의 형식 버전(state.schema.json의 default와 같은 값). */
 const STATE_SCHEMA_VERSION = "0.1.0";
 
-function loadSchema(layer) {
+/**
+ * 계층 스키마를 판독한다. **판독·파싱·형태 중 하나라도 실패하면 던진다.**
+ *
+ * **파싱 성공은 판독 성공이 아니다(2026-08-25) — 이것이 쓰기 경계의 fail-open이었다.**
+ * 스키마 파일 내용이 `null`·`false`·스칼라·배열이면 `JSON.parse`는 통과하고, 그 값이
+ * `validateInstance`에 넘어가면 `schema-validate.mjs`의 falsy·비객체 fail-open이
+ * **오류 0건**을 돌려준다. 그러면 이 파일이 유일한 쓰기 경로라고 선언하며 세워 둔
+ * 「쓰기 직전 자기 스키마 검증」(구현 7단계 (a))이 **통째로 건너뛰어진다.**
+ *
+ * **실측(격리 사본).** `schemas/career.schema.json`을 `null`로 두고 enum 위반 노드 2건을
+ * 넘겼더니 `[write-artifact] 기록: …career.json (노드 2건)` + **exit 0**이었고, 기록된 파일에
+ * `status: "NOT_A_VALID_ENUM_VALUE"`가 그대로 남았다. 같은 draft를 정상 스키마에 넘긴
+ * 대조군은 `[SCHEMA] additionalProperties 위반` + **exit 1 + 미기록**이다.
+ * 이 제품이 막으려는 실패의 원형이 쓰기 경계 자신에게 있었다.
+ *
+ * **던지는 것이 옳은 이유**: 호출부의 `try/catch`가 이미 `LAYER_SCHEMA_UNREADABLE` + exit 3
+ * 으로 이 부류를 처리한다(「출력을 고쳐도 해소되지 않으므로 exit 1은 거짓 안내다」).
+ * 비객체 스키마는 부재·훼손과 **같은 부류**(플러그인 설치 손상)이므로 같은 채널로 보낸다 —
+ * 새 종료 코드를 만들면 그 구별을 아무도 쓰지 않는다.
+ *
+ * **`root`를 인자로 받는다.** 기본값이 `REPO_ROOT`라 기존 호출부는 그대로이고, 가짜 루트를
+ * 주입할 수 있어야 위 형태 게이트를 **관측**할 수 있다(관측되지 않는 제약은 없는 것이다).
+ *
+ * @param {string} layer 계층 이름
+ * @param {string} [root] 스키마 루트. 기본값 `REPO_ROOT`
+ * @returns {object} 스키마 객체
+ * @throws {Error} 판독 실패 · JSON 파싱 실패 · 내용이 객체가 아님
+ */
+export function loadSchema(layer, root = REPO_ROOT) {
   // 파일명 규약은 `<layer>.schema.json` 하나뿐이다 — 표를 따로 두면 계층을
   // 늘릴 때 두 곳을 고쳐야 하고, 한쪽만 고치면 조용히 다른 스키마로 검증한다.
-  return JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", `${layer}.schema.json`), "utf8"));
+  const rel = path.join("schemas", `${layer}.schema.json`);
+  const parsed = JSON.parse(fs.readFileSync(path.join(root, rel), "utf8"));
+  const shape = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+  if (shape !== "object") {
+    throw new Error(`${rel} 내용이 객체가 아닙니다(${shape}) — 스키마로 쓸 수 없습니다`);
+  }
+  return parsed;
 }
 
 /**
@@ -259,7 +293,12 @@ function updateRegistryOrThrow(root, layer, artifactPath, schemaVersion, skillNa
 
   state.artifacts[stateKey] = { path: relPath, schemaVersion, generatedBySkill: skillName };
 
-  const stateSchema = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "schemas", "state.schema.json"), "utf8"));
+  // **`loadSchema`를 거친다(2026-08-25).** 초판은 여기서 맨 `readFileSync` + `JSON.parse`를
+  // 했고, 그래서 `state.schema.json` 내용이 `null`이면 아래 `validateInstance`가 오류 0건을
+  // 돌려 **검증되지 않은 레지스트리가 기록됐다.** 경로 조립도 `loadSchema`와 이중이었다.
+  // 던지는 경로는 `updateRegistry`의 try/catch가 `REGISTRY_UNEXPECTED_ERROR`로 받는다 —
+  // 그 사유 문자열이 이미 「플러그인 설치(schemas/state.schema.json)를 확인하십시오」를 적고 있다.
+  const stateSchema = loadSchema("state");
   const errors = validateInstance(stateSchema, state);
   if (errors.length > 0) {
     return { ok: false, error: `갱신된 state.json이 스키마를 위반합니다: ${JSON.stringify(errors)}` };
