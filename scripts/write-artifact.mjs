@@ -48,8 +48,14 @@
 //     필요하다**: 사용자 편집 감지(PREV_ARTIFACT_EDITED), 이전 산출물 판독 불가
 //     (PREV_ARTIFACT_UNREADABLE / _HASH_MISSING), 백업 실패
 //     (PREV_ARTIFACT_BACKUP_FAILED), 파일시스템 쓰기 실패(ARTIFACT_WRITE_FAILED),
-//     플러그인 설치 손상(LAYER_SCHEMA_UNREADABLE). 사유는 [HOLD] 줄의 코드로 나온다.
+//     플러그인 설치 손상(LAYER_SCHEMA_UNREADABLE), **이전 산출물에서 온 내용의 스키마
+//     위반(PREV_ARTIFACT_SCHEMA_VIOLATION)**. 사유는 [HOLD] 줄의 코드로 나온다.
 //     공통점은 「인자나 출력을 고쳐서 해소되지 않는다」이다 — 그래서 1·2가 아니다.
+//
+//     **PREV_ARTIFACT_SCHEMA_VIOLATION만 `--force`로 넘어갈 수 없다**(f029375 Minor 12).
+//     다른 보류는 「덮어써도 되는가」를 사람에게 묻는 것이라 강행이 답이 될 수 있지만,
+//     이것은 쓰기 직전 자기 검증이라 강행하면 스키마를 어기는 산출물이 기록된다.
+//     사람이 고쳐야 하는 대상이 draft가 아니라 **이전 산출물**이라는 점도 다르다.
 //   4 산출물은 기록됐으나 state.json 레지스트리 갱신에 실패했다.
 //
 // **왜 3과 4를 2·1에 합치지 않는가.** exit 1·2·3은 전부 "쓰지 않았다"는
@@ -66,6 +72,7 @@ import {
   ARTIFACT_LAYERS,
   AUTHORSHIP_STAGES,
   checkAuthorshipContract,
+  classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
   mergeArtifact,
 } from "./lib/artifact-contract.mjs";
@@ -397,7 +404,7 @@ function main() {
   // (b)/AC-16 — 병합. prev를 읽지 못한 상태에서 --force로 강행하면 병합할
   // 대상이 없으므로 draft가 그대로 새 산출물이 된다(그때 .bak이 유일한
   // 복구 수단이다).
-  const { merged, violations } = mergeArtifact(opts.layer, inspected.prev, draft, { stage: opts.stage });
+  const { merged, violations, prevDerived } = mergeArtifact(opts.layer, inspected.prev, draft, { stage: opts.stage });
   if (violations.length > 0) {
     printViolations("MERGE", violations);
     console.error("[write-artifact] 병합 계약 위반으로 아무것도 쓰지 않았습니다(구현 7단계 (b) / AC-16).");
@@ -431,6 +438,62 @@ function main() {
   }
   const schemaErrors = validateInstance(layerSchema, merged);
   if (schemaErrors.length > 0) {
+    // **위반이 prev에서 왔으면 exit 1은 거짓 안내다(f029375 Minor 12).**
+    // 이 검증의 대상은 draft가 아니라 **병합 결과**이고, 병합 결과에는 prev에서
+    // 온 것이 섞인다 — 잠긴 생존자 노드 전체와, draft 노드에 얹힌 `origin`·
+    // `verification`. 그 위반에 대고 exit 1의 계약(「출력을 고쳐 다시 부른다」)을
+    // 내면 호출자는 draft를 아무리 고쳐도 **영원히 같은 위반**을 받는다.
+    //
+    // **여기가 지금 열려 있던 유일한 비가역 데이터 손실 경로였다.** 구체 경로:
+    // 사용자가 노드를 손으로 고치며 잘못된 값과 `locked: true`를 함께 넣음 →
+    // `PREV_ARTIFACT_EDITED` 보류 → `--force` 강행 → 병합이 그 노드를 싣는다 →
+    // 스키마 위반 → exit 1. 그 막다른 길에서 「출력을 고쳐라」를 따르다 지친
+    // 호출자가 산출물을 지우고 새로 쓰면 잠가 둔 편집분이 사라진다.
+    //
+    // **`--force`로 넘어갈 수 없다 — 의도다.** 이 검사는 (a)「쓰기 직전 자기
+    // 검증」이므로 강행하면 스키마를 어기는 산출물이 기록된다. 그래서 이 HOLD는
+    // 다른 보류들과 달리 우회로가 없고, 사람이 **이전 산출물 쪽**을 고쳐야 한다.
+    const { fromPrev, fromDraft } = classifySchemaErrorsByProvenance(schemaErrors, prevDerived);
+    if (fromPrev.length > 0) {
+      console.error(
+        `[HOLD] PREV_ARTIFACT_SCHEMA_VIOLATION: 병합 결과의 스키마 위반 ${fromPrev.length}건이 ` +
+        `이전 산출물에서 온 내용입니다(${filePath}) — 출력(draft)을 고쳐도 해소되지 않습니다.`
+      );
+      for (const e of fromPrev) console.error(`[HOLD]   ${e}`);
+      // draft 몫이 함께 있으면 **감추지 않는다.** 사람이 prev를 고친 뒤 재실행하면
+      // 곧바로 이것들을 만나므로, 한 번에 보여 주는 편이 왕복을 줄인다.
+      //
+      // **라벨을 붙인다.** 붙이지 않으면 아래 「조치」 문단 바로 위에 그 조치로는
+      // 해소되지 않는 줄이 섞여 나온다 — 이 커밋이 고친 결함(따라도 낫지 않는 안내)과
+      // 같은 형태다. 적대 검증이 혼합 케이스를 실행해 지적했다.
+      if (fromDraft.length > 0) {
+        console.error(
+          `[write-artifact] 아래 ${fromDraft.length}건은 성격이 다릅니다 — 출력(draft)을 고쳐야 해소되며, ` +
+          "위 보류를 해결하고 다시 부르면 이번엔 exit 1로 만납니다."
+        );
+        for (const e of fromDraft) console.error(`[SCHEMA] ${e}`);
+      }
+      // **조치 목록은 실행으로 검증했다.** 초판은 (2)를 「잠금을 풀면 재생성이 대체한다」로
+      // 조건 없이 적었는데, 실측에서 두 갈래가 틀렸다: 잠기지 않은 노드(origin·verification을
+      // 이어받은 경우)에는 **아무 효과가 없고**(이미 false다), draft에 없는 잠긴 생존자의
+      // 잠금을 풀면 대체가 아니라 **삭제된다**(draft가 그 id를 언급하지 않으므로 병합 규칙 1이
+      // 살리지 않는다 — 실측: 노드 2건 → 1건). 통하지 않는 안내를 내보내는 것이 바로 이
+      // 항목이 고친 결함이므로 조건을 명시한다.
+      console.error(
+        "[write-artifact] 아무것도 쓰지 않았습니다 — 사람 확인이 필요합니다. " +
+        "(1) **어느 경우에나 통하는 조치**: 산출물 파일의 해당 노드를 직접 고친 뒤 --force와 함께 다시 부른다" +
+        "(고치면 contentHash가 어긋나 PREV_ARTIFACT_EDITED로 보류되므로 --force가 필요하고, 덮어쓰기 직전 " +
+        ".bak 1세대가 남습니다). " +
+        "(2) **그 노드가 잠겨 있고 이번 출력이 같은 id를 다시 내놓는 경우에만**: locked를 false로 바꾸면 " +
+        "재생성이 대체합니다 — 출력에 없는 노드의 잠금을 풀면 대체가 아니라 **삭제**되고, 애초에 잠기지 않은 " +
+        "노드(origin·verification을 이어받아 위반이 난 경우)에는 효과가 없습니다. " +
+        "(3) 이전에 --force 덮어쓰기가 성공한 적이 있어 .bak이 남아 있다면 그것으로 복원한다 — " +
+        "**이번 실행은 .bak을 만들지 않았습니다**(이 검사가 백업보다 앞입니다). " +
+        "**--force만으로는 이 지점을 넘을 수 없습니다** — 쓰기 직전 자기 검증이라 강행하면 스키마를 어기는 " +
+        "산출물이 기록됩니다."
+      );
+      process.exit(3);
+    }
     for (const e of schemaErrors) console.error(`[SCHEMA] ${e}`);
     console.error("[write-artifact] 스키마 위반으로 아무것도 쓰지 않았습니다(구현 7단계 (a)).");
     process.exit(1);

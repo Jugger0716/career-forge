@@ -339,11 +339,27 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
  * 노드 순서: draft 순서를 그대로 두고, draft에 없던 `locked` 생존자를 prev
  * 순서로 뒤에 붙인다. 순서를 섞으면 재실행 diff가 무의미해진다.
  *
+ * **`prevDerived` — 노드별 출처 기록(2026-08-25, 순서 10번 / f029375 Minor 12).**
+ * `merged.nodes`와 **같은 순서·같은 길이**의 배열을 함께 돌려준다. 각 원소는
+ * `{ whole: boolean, fields: string[] }`이며, `whole`이면 그 노드 **전체**가 prev에서
+ * 왔고(규칙 1의 두 경로), 아니면 `fields`가 draft 노드 위에 얹힌 **prev 유래 필드**의
+ * 이름 집합이다.
+ *
+ * **왜 병합이 이것을 돌려주는가.** 쓰기 직전 스키마 검증은 draft가 아니라 **병합 결과**를
+ * 본다. 위반이 prev에서 온 내용이면 「출력을 고쳐 다시 부른다」(exit 1)는 **거짓 안내**이고,
+ * 호출자는 draft를 아무리 고쳐도 같은 위반을 반복한다. 그 판별에 필요한 것은 병합이 방금
+ * 내린 결정 그 자체이므로, 호출자가 id를 대조해 **재도출하면 정본이 둘로 갈린다** —
+ * 규칙이 바뀔 때 한쪽만 따라가면 판별이 조용히 틀린다.
+ *
+ * **기존 호출자는 그대로다** — `const { merged, violations } = …` 구조분해는 이 필드를
+ * 무시한다.
+ *
  * @param {string} layer
  * @param {object|null} prev 이전 산출물(없으면 null)
  * @param {object} draft 이번 출력
  * @param {{stage: string}} opts
- * @returns {{merged: object, violations: {code: string, message: string}[]}}
+ * @returns {{merged: object, violations: {code: string, message: string}[],
+ *            prevDerived: {whole: boolean, fields: string[]}[]}}
  */
 export function mergeArtifact(layer, prev, draft, { stage } = {}) {
   if (!AUTHORSHIP_STAGES.includes(stage)) {
@@ -362,6 +378,13 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
         code: "NODES_NOT_ARRAY",
         message: "병합 입력의 nodes가 배열이 아닙니다 — 빈 배열로 강등하면 잠기지 않은 이전 노드가 조용히 사라집니다.",
       }],
+      // 조립을 하지 않았으므로 출처 기록도 없다. **빈 배열인 이유는 크래시 방어가
+      // 아니다** — 소비자 `classifySchemaErrorsByProvenance`는 `prevDerived?.[i]`로
+      // null-safe이고(실측: 두 번째 인자에 `null`을 줘도 예외 없이 전량 draft 몫으로
+      // 돌아온다), CLI는 `violations`가 있어 이 값을 만지기 전에 exit 1로 나간다.
+      // 빈 배열은 **반환 형태를 갈라 두지 않기 위한 것**이다: 어떤 경로로 돌아오든
+      // `prevDerived`가 배열이면 호출자가 분기를 하나 덜 갖는다.
+      prevDerived: [],
     };
   }
   const draftNodes = draft.nodes;
@@ -386,6 +409,11 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
   const FRESH_VERIFICATION = { status: "not-attempted", attempts: 0, reasonCode: null };
 
   const mergedNodes = [];
+  // `mergedNodes`와 인덱스가 **정확히 대응**한다. 두 배열에 push하는 지점이
+  // 네 곳이므로, 한 곳에서 빠뜨리면 이후 전부가 한 칸씩 밀려 **엉뚱한 노드를
+  // prev 유래로 판정한다** — 조용한 오판이라 `(AC-43)`이 인덱스 정렬 자체를
+  // 별도로 관측한다.
+  const prevDerived = [];
   const consumedPrevIds = new Set();
   const seenDraftIds = new Set();
 
@@ -411,6 +439,8 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
         // 얕은 사본으로 넣어 호출자가 merged를 만져도 prev 객체가 오염되지
         // 않게 한다(콜드 리뷰: merged와 prev의 참조 공유).
         mergedNodes.push({ ...prevNode });
+        // 내용이 **전부** prev에서 왔다 — draft는 이 노드에 한 글자도 기여하지 못한다.
+        prevDerived.push({ whole: true, fields: [] });
         continue;
       }
 
@@ -428,12 +458,22 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
       // 대신 「이 줄이 잠금을 이어받는다」고 읽지 않도록 여기 적어 둔다.
       const merged = { ...node, origin: prevNode.origin, locked: prevNode.locked === true };
 
+      // 이 노드의 본문은 draft가 만들었지만 **아래 필드는 prev가 만들었다.**
+      // `locked`는 `=== true` 정규화라 항상 boolean이므로 스키마를 어길 수 없지만,
+      // 그래도 적는다 — 이 목록은 「값이 어디서 왔는가」의 기록이지 「무엇이 위험한가」의
+      // 예측이 아니다. 규칙 4가 바뀌어 다른 값이 실리면 그때 이 목록이 이미 맞다.
+      const derivedFields = ["origin", "locked"];
+
       if (hasVerificationAxis) {
         if (stage === "draft") {
           // 규칙 3 — draft는 판정을 못 만든다. prev의 값을 그대로 이어받는다.
           merged.verification = prevNode.verification === undefined
             ? { ...FRESH_VERIFICATION }
             : prevNode.verification;
+          // **prev에 값이 있을 때만** prev 유래다. 없으면 위 `FRESH_VERIFICATION`이
+          // 실리는데 그것은 이 함수가 만든 값이라 prev에 책임을 물을 수 없다 —
+          // 「prev 유래」를 넓게 잡으면 고칠 수 있는 위반이 사람 확인으로 넘어간다.
+          if (prevNode.verification !== undefined) derivedFields.push("verification");
         } else {
           const prevAttempts = prevNode?.verification?.attempts;
           const draftAttempts = node?.verification?.attempts;
@@ -453,6 +493,7 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
       }
 
       mergedNodes.push(merged);
+      prevDerived.push({ whole: false, fields: derivedFields });
       continue;
     }
 
@@ -472,13 +513,84 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
     const fresh = { ...node, origin: "generated", locked: false };
     if (hasVerificationAxis && stage === "draft") fresh.verification = { ...FRESH_VERIFICATION };
     mergedNodes.push(fresh);
+    // 신규 노드에는 prev가 한 글자도 기여하지 않았다 — `origin`·`locked`·`verification`도
+    // 전부 이 함수가 만든 리터럴이다.
+    prevDerived.push({ whole: false, fields: [] });
   }
 
   // draft에 없던 prev 노드 — 잠긴 것만 살린다(규칙 1의 허용 방향).
   for (const node of prevNodes) {
     if (typeof node?.id !== "string" || consumedPrevIds.has(node.id)) continue;
-    if (node.locked === true) mergedNodes.push({ ...node });
+    if (node.locked === true) {
+      mergedNodes.push({ ...node });
+      // 규칙 1의 두 번째 경로. 위 early-return과 마찬가지로 draft가 기여한 것이 없다 —
+      // 오히려 이쪽은 draft가 이 노드를 **언급조차 하지 않았다.**
+      prevDerived.push({ whole: true, fields: [] });
+    }
   }
 
-  return { merged: { ...draft, nodes: mergedNodes }, violations };
+  return { merged: { ...draft, nodes: mergedNodes }, violations, prevDerived };
+}
+
+/**
+ * 스키마 오류를 **prev 유래**와 **draft를 고쳐 해소되는 것**으로 가른다
+ * (순서 10번 / f029375 Minor 12).
+ *
+ * **왜 필요한가.** 쓰기 직전 자기 검증은 병합 결과를 보므로, 위반이 이전 산출물에서
+ * 온 내용일 수 있다. 그때 exit 1(「출력을 고쳐 다시 부른다」)을 내면 호출자는 draft를
+ * 아무리 고쳐도 **영원히 같은 위반**을 받는다 — 5분기 종료 코드 계약이 이 경로에서
+ * 무너지고, 막다른 길에서 `--force`로 강행하면 locked 노드가 전멸한다.
+ *
+ * **경로 문자열로 가른다.** `validateInstance`의 오류는 `` `${path}: ${사유}` `` 형태이고
+ * `path`는 `$` · `[i]` · `.key`만으로 조립된다(`schema-validate.mjs`). 노드 단위 오류는
+ * 반드시 `$.nodes[N]`으로 시작하므로 인덱스를 뽑아 `prevDerived[N]`과 대조한다.
+ *
+ * **판별 규칙 세 가지.**
+ *  1. `$.nodes[N]…`이 아닌 오류(예: `$.nodes: minItems(1) 미만`, `$: required …`)는
+ *     **draft 몫**이다 — 산출물 최상위 형태는 draft가 정한다.
+ *  2. `prevDerived[N].whole`이면 그 노드 아래의 **모든** 오류가 prev 몫이다.
+ *  3. 부분 노드는 인덱스 **바로 뒤 한 세그먼트**가 `fields`에 있을 때만 prev 몫이다.
+ *
+ * **규칙 3이 놓치는 것(감추지 않는다)**: 노드 **자체**를 가리키는 오류
+ * (`$.nodes[N]: required 필드 'x' 없음` · `additionalProperties 위반('x')`)는 부분 노드에서
+ * draft 몫으로 분류된다. 이것은 근사가 아니라 **판정**이고, 근거는 키마다 다르다:
+ *  - `origin`·`locked` — 병합이 **항상 대입**한다(값이 `undefined`여도 키는 존재하므로
+ *    `required` 위반을 낼 수 없다).
+ *  - `verification` — **draft 단계에서만** 병합이 대입한다. fact-checked 단계에서는 값이
+ *    draft에서 오므로, 그 키가 없어서 나는 `required` 위반은 **draft의 몫이 맞다**
+ *    (분류가 우연히 맞는 것이 아니라 책임 소재가 실제로 draft에 있다).
+ *  - `additionalProperties` 위반을 내는 여분 키는 `{ ...node }`로 들어온 draft의 것이다.
+ *
+ * 초판 주석은 셋을 뭉뚱그려 「항상 대입한다」고 적었는데 `verification`에 대해 거짓이었다 —
+ * 결론은 같지만 근거가 틀린 주석은 다음 사람의 판단을 그르친다(적대 검증 지적).
+ * 규칙 4가 바뀌어 병합이 `origin`·`locked`를 **조건부로** 대입하게 되면 첫 줄의 논거가
+ * 무너지므로, 그때 이 문단과 함께 고쳐야 한다.
+ *
+ * **분류에 실패하면 draft 몫으로 떨어진다(보수적이지 않은 쪽).** 일부러 그렇게 뒀다 —
+ * 반대로 기울이면 평범한 draft 오류가 사람 확인으로 넘어가 exit 3이 흔해지고, 그러면
+ * 「exit 3은 사람이 결정해야 한다」는 신호 자체가 희석된다. 대신 호출자는 **두 목록을
+ * 모두** 출력해야 한다.
+ *
+ * @param {string[]} errors `validateInstance`가 돌려준 오류 문자열
+ * @param {{whole: boolean, fields: string[]}[]} prevDerived `mergeArtifact`의 출처 기록
+ * @returns {{fromPrev: string[], fromDraft: string[]}}
+ */
+export function classifySchemaErrorsByProvenance(errors, prevDerived) {
+  const NODE_PATH = /^\$\.nodes\[(\d+)\](?:\.([^.[:]+))?/;
+  const fromPrev = [];
+  const fromDraft = [];
+  for (const error of errors) {
+    const m = typeof error === "string" ? NODE_PATH.exec(error) : null;
+    const record = m === null ? undefined : prevDerived?.[Number(m[1])];
+    if (record === undefined) {
+      fromDraft.push(error);
+    } else if (record.whole === true) {
+      fromPrev.push(error);
+    } else if (m[2] !== undefined && Array.isArray(record.fields) && record.fields.includes(m[2])) {
+      fromPrev.push(error);
+    } else {
+      fromDraft.push(error);
+    }
+  }
+  return { fromPrev, fromDraft };
 }
