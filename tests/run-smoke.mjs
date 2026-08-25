@@ -65,6 +65,7 @@ import {
   ARTIFACT_LAYERS,
   AUTHORSHIP_STAGES,
   checkAuthorshipContract,
+  classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
@@ -474,7 +475,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       8번 ⑤의 (WA-29) PREV_ARTIFACT_HASH_MISSING CLI 관측 463 → 464.
   //       8번 ③④의 (AC-2b)(AC-2c) 계층 키·버전 드리프트 가드 464 → 466.
   //       9번의 (CH-1)~(CH-8) instance 부재 fail-closed 466 → 474.
-  default: 474,
+  //       10번의 (AC-43)~(AC-45)·(WA-30)~(WA-32) prev 유래 스키마 위반 전용 HOLD 474 → 480.
+  default: 480,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3214,6 +3216,91 @@ function runArtifactContractOracleSmoke() {
     if (!ok) console.log(`    실제: ${JSON.stringify(errs)}`);
     report(ok, "(AC-42) locked·verification을 담지 않은 draft의 병합 결과가 career.schema.json을 통과한다(병합이 required를 실제로 채운다)");
   }
+
+  // ---- (AC-43) prevDerived가 merged.nodes와 인덱스로 정렬되고 네 경로를 구별하는가 (10번) ----
+  //      **인덱스 정렬이 이 기록의 전부다.** `mergedNodes`와 `prevDerived`에 push하는
+  //      지점이 네 곳이고, 한 곳에서 빠뜨리면 이후 전량이 한 칸씩 밀려 **엉뚱한 노드를
+  //      prev 유래로 판정한다** — 그리고 그 오판은 조용하다(exit 3이 나긴 나므로).
+  //      그래서 길이 일치와 네 경로의 값을 **한 번의 병합**에서 함께 본다.
+  //
+  //      네 경로: ① prev의 locked 노드를 draft가 같은 id로 덮어쓰려 함(규칙 1, whole)
+  //      ② prev에 있던 비잠금 노드를 draft가 갱신(부분 — origin·locked·verification)
+  //      ③ 신규 노드(prev 기여 0) ④ draft에 없던 locked 생존자(규칙 1의 두 번째 경로, whole).
+  {
+    const prev = makeCareerInstance([
+      makeCareerNode({ id: "car:001", locked: true, text: "잠긴 노드." }),
+      makeCareerNode({ id: "car:002", locked: false, text: "갱신될 노드.", verification: { status: "verified", attempts: 2, reasonCode: null } }),
+      makeCareerNode({ id: "car:009", locked: true, text: "draft에 없는 잠긴 생존자." }),
+    ]);
+    const draft = makeCareerInstance([
+      makeDraftNode({ id: "car:001", text: "덮어쓰려는 시도." }),
+      makeDraftNode({ id: "car:002", text: "갱신된 서술." }),
+      makeDraftNode({ id: "car:003", text: "새로 생긴 노드." }),
+    ]);
+    const { merged, prevDerived } = mergeArtifact("career", prev, draft, { stage: "draft" });
+    // 인덱스 정렬 — 길이가 같고, 각 자리의 판정이 그 자리 노드의 실제 출처와 맞는가.
+    const aligned = Array.isArray(prevDerived) && prevDerived.length === merged.nodes.length;
+    const shape = aligned
+      ? merged.nodes.map((n, i) => `${n.id}:${prevDerived[i].whole ? "whole" : prevDerived[i].fields.join("+") || "none"}`)
+      : null;
+    const EXPECTED = [
+      "car:001:whole",                          // ① 잠긴 노드는 draft를 이기고 통째로 보존된다
+      "car:002:origin+locked+verification",     // ② draft 본문 + prev 유래 필드 3종
+      "car:003:none",                           // ③ 신규 — prev 기여 0건
+      "car:009:whole",                          // ④ draft에 없던 잠긴 생존자
+    ];
+    const ok = aligned && JSON.stringify(shape) === JSON.stringify(EXPECTED);
+    if (!ok) console.log(`    실제: aligned=${aligned} ${JSON.stringify(shape)}`);
+    report(ok, "(AC-43) mergeArtifact의 prevDerived가 merged.nodes와 인덱스로 정렬되고 네 경로(whole 2종·부분·신규)를 구별한다");
+  }
+
+  // ---- (AC-44) prev에 verification이 없으면 verification은 prev 유래가 아니다 (10번) ----
+  //      **경계를 좁게 잡은 것이 의도임을 못 박는다.** 그 경우 병합이 싣는 값은
+  //      `FRESH_VERIFICATION`이고 그것은 이 함수가 만든 값이라 prev에 책임을 물을 수 없다.
+  //      넓게 잡으면 **고칠 수 있는 위반이 사람 확인(exit 3)으로 넘어간다** — 그러면
+  //      「exit 3은 사람이 결정해야 한다」는 신호가 희석된다.
+  {
+    const prevNode = makeCareerNode({ id: "car:001", locked: false });
+    delete prevNode.verification;
+    const { prevDerived } = mergeArtifact(
+      "career",
+      makeCareerInstance([prevNode]),
+      makeCareerInstance([makeDraftNode({ id: "car:001" })]),
+      { stage: "draft" }
+    );
+    const ok = prevDerived[0].whole === false && JSON.stringify(prevDerived[0].fields) === JSON.stringify(["origin", "locked"]);
+    if (!ok) console.log(`    실제: ${JSON.stringify(prevDerived[0])}`);
+    report(ok, "(AC-44) prev에 verification이 없으면 병합이 채운 초기값은 prev 유래로 세지 않는다(경계를 넓히면 고칠 수 있는 위반이 exit 3으로 샌다)");
+  }
+
+  // ---- (AC-45) classifySchemaErrorsByProvenance의 판별 규칙 (10번) ----
+  //      **양방향이다.** prev 몫만 보면 「전부 prev 몫으로 보내는」 분류기가 통과하고,
+  //      draft 몫만 보면 「전부 draft 몫으로 보내는」(= 지금의 결함 그대로인) 분류기가
+  //      통과한다. 한 번의 호출에서 두 목록을 동시에 대조한다.
+  {
+    const prevDerived = [
+      { whole: true, fields: [] },                             // 0 — 통째로 prev
+      { whole: false, fields: ["origin", "locked"] },          // 1 — 부분
+      { whole: false, fields: [] },                            // 2 — 신규
+    ];
+    const errors = [
+      "$.nodes[0].basis: enum 불일치",                          // prev — whole 아래 전부
+      "$.nodes[0]: required 필드 'text' 없음",                  // prev — whole은 노드 단위 오류도 포함
+      "$.nodes[1].origin: enum 불일치",                         // prev — 부분 노드의 prev 유래 필드
+      "$.nodes[1].text: minLength(1) 미만",                     // draft — 같은 노드지만 draft가 만든 필드
+      "$.nodes[1]: additionalProperties 위반('x')",             // draft — 부분 노드의 노드 단위 오류
+      "$.nodes[2].basis: enum 불일치",                          // draft — 신규 노드
+      "$.nodes: minItems(1) 미만",                              // draft — 인덱스 없음
+      "$: required 필드 'coverage' 없음",                       // draft — 최상위
+      "$.nodes[9].basis: enum 불일치",                          // draft — 범위 밖 인덱스는 분류 실패 → draft 몫
+    ];
+    const { fromPrev, fromDraft } = classifySchemaErrorsByProvenance(errors, prevDerived);
+    const ok =
+      JSON.stringify(fromPrev) === JSON.stringify([errors[0], errors[1], errors[2]]) &&
+      JSON.stringify(fromDraft) === JSON.stringify([errors[3], errors[4], errors[5], errors[6], errors[7], errors[8]]);
+    if (!ok) console.log(`    실제: prev=${JSON.stringify(fromPrev)} draft=${JSON.stringify(fromDraft)}`);
+    report(ok, "(AC-45) classifySchemaErrorsByProvenance가 whole·prev필드·draft필드·노드단위·인덱스없음·범위밖 6형태를 정확히 가른다(양방향)");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -4259,6 +4346,109 @@ function runWriteArtifactOracleSmoke() {
         ok,
         "(WA-29) contentHash가 없는 prev는 CLI에서 [HOLD] PREV_ARTIFACT_HASH_MISSING + exit 3이고 " +
         "기존 파일을 한 바이트도 덮어쓰지 않는다(f029375 Minor 8 잔여 — 세 보류 사유가 같은 깊이로 관측된다)"
+      );
+    }
+
+    // ---- (WA-30)~(WA-32) prev 유래 스키마 위반은 exit 1이 아니라 전용 HOLD다 (10번) ----
+    //
+    //      **f029375 Minor 12. 지금까지 열려 있던 유일한 비가역 데이터 손실 경로다.**
+    //      쓰기 직전 자기 검증은 draft가 아니라 **병합 결과**를 보는데, 그 결과에는
+    //      prev에서 온 것이 섞인다. 위반이 거기서 오면 exit 1(「출력을 고쳐 다시
+    //      부른다」)은 **따라도 낫지 않는 안내**이고, 막다른 길에서 사용자가 산출물을
+    //      지우고 새로 쓰면 잠가 둔 편집분이 사라진다.
+    //
+    //      **세 갈래를 각각 본다.** 하나만 보면 반대 방향의 잘못된 구현이 통과한다 —
+    //      (WA-30)만 두면 「모든 스키마 위반을 exit 3으로 보내는」 구현이 통과하고,
+    //      (WA-31)만 두면 지금의 결함이 그대로인 구현이 통과한다.
+
+    // ---- (WA-30) 금지 방향: 잠긴 노드의 편집 + --force 강행 ----
+    //      **prev를 손으로 조립하지 않고 진짜 산출물에서 파생시킨다**((WA-29)와 같은 규율) —
+    //      골격을 손으로 쓰면 「prev 유래 위반」과 「그 밖의 위반」이 뭉개진다.
+    //      `basis`를 enum 밖 값으로 바꾸고 `locked: true`를 함께 넣는 것이 리뷰가 적은
+    //      구체 경로 그대로다(사용자가 노드를 손으로 고치며 둘을 함께 넣는다).
+    {
+      const root = freshRoot("prev-schema-violation");
+      const node = () => makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } });
+      const first = runWriter(root, makeCareerInstance([node()]));
+      const filePath = path.join(root, "career.json");
+      const written = readJsonOrNull(filePath);
+      let tampered = null;
+      if (written !== null && Array.isArray(written.nodes) && written.nodes.length > 0) {
+        written.nodes[0].basis = "NOT_A_VALID_ENUM_VALUE";
+        written.nodes[0].locked = true;
+        tampered = JSON.stringify(written);
+        fs.writeFileSync(filePath, tampered, "utf8");
+      }
+      // `--force`를 준다. 이 경로의 핵심은 **강행해도 넘어가지 못한다**는 것이다 —
+      // 강행하면 스키마를 어기는 산출물이 기록되므로 이 HOLD에는 우회로가 없다.
+      const r = runWriter(root, makeCareerInstance([node()]), ["--force"]);
+      const ok =
+        first.status === 0 && tampered !== null &&
+        r.status === 3 &&
+        r.stderr.includes("[HOLD]") && r.stderr.includes("PREV_ARTIFACT_SCHEMA_VIOLATION") &&
+        r.stderr.includes("$.nodes[0].basis") &&
+        readTextOrNull(filePath) === tampered &&
+        readTextOrNull(`${filePath}.bak`) === null;
+      if (!ok) console.log(`    실제: first=${first.status} status=${r.status} bak=${readTextOrNull(`${filePath}.bak`) !== null} stderr=${r.stderr}`);
+      report(
+        ok,
+        "(WA-30) prev의 잠긴 노드에서 온 스키마 위반은 --force로도 [HOLD] PREV_ARTIFACT_SCHEMA_VIOLATION + exit 3이고 " +
+        "산출물도 .bak도 만들지 않는다(f029375 Minor 12 — exit 1의 '출력을 고쳐라'가 거짓 안내이던 경로)"
+      );
+    }
+
+    // ---- (WA-31) 허용 방향: draft 몫 위반은 여전히 exit 1이다 ----
+    //      이것이 없으면 「스키마 위반을 전부 exit 3으로 보내는」 구현이 (WA-30)을
+    //      통과한다. 그러면 5분기 계약이 반대 방향으로 무너진다 — 고칠 수 있는 오류가
+    //      전부 사람 확인으로 넘어가 exit 3의 신호가 희석된다.
+    {
+      const root = freshRoot("draft-schema-violation");
+      const bad = makeCareerInstance([{ ...makeFactCheckedNode({ id: "car:001" }), basis: "NOT_A_VALID_ENUM_VALUE" }]);
+      const r = runWriter(root, bad);
+      const ok =
+        r.status === 1 &&
+        r.stderr.includes("[SCHEMA]") &&
+        !r.stderr.includes("PREV_ARTIFACT_SCHEMA_VIOLATION") &&
+        readTextOrNull(path.join(root, "career.json")) === null;
+      if (!ok) console.log(`    실제: status=${r.status} stderr=${r.stderr}`);
+      report(
+        ok,
+        "(WA-31) 허용 방향: prev가 없는 draft 자신의 스키마 위반은 여전히 [SCHEMA] + exit 1이다(전부 exit 3으로 보내는 구현 방어)"
+      );
+    }
+
+    // ---- (WA-32) 규칙 1의 두 번째 경로 — draft에 없던 잠긴 생존자 ----
+    //      (WA-30)이 관측하는 것은 「draft가 같은 id로 덮어쓰려다 prev가 이긴」 경로다.
+    //      잠긴 노드가 **draft에 아예 없어서** 뒤에 붙는 경로는 코드가 다르고(마지막
+    //      루프) 인덱스도 draft 길이 뒤로 밀린다 — `prevDerived` 정렬이 어긋나면
+    //      정확히 여기서 오판이 난다. 그래서 별도로 본다.
+    {
+      const root = freshRoot("prev-schema-orphan");
+      const first = runWriter(root, makeCareerInstance([
+        makeFactCheckedNode({ id: "car:001" }),
+        makeFactCheckedNode({ id: "car:002", text: "잠글 노드." }),
+      ]));
+      const filePath = path.join(root, "career.json");
+      const written = readJsonOrNull(filePath);
+      let tampered = null;
+      if (written !== null && Array.isArray(written.nodes) && written.nodes.length === 2) {
+        written.nodes[1].basis = "NOT_A_VALID_ENUM_VALUE";
+        written.nodes[1].locked = true;
+        tampered = JSON.stringify(written);
+        fs.writeFileSync(filePath, tampered, "utf8");
+      }
+      // draft는 car:001만 담는다 — car:002는 draft에 없는 잠긴 생존자로 뒤에 붙는다.
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001" })]), ["--force"]);
+      const ok =
+        first.status === 0 && tampered !== null &&
+        r.status === 3 &&
+        r.stderr.includes("PREV_ARTIFACT_SCHEMA_VIOLATION") &&
+        r.stderr.includes("$.nodes[1].basis") &&
+        readTextOrNull(filePath) === tampered;
+      if (!ok) console.log(`    실제: first=${first.status} status=${r.status} stderr=${r.stderr}`);
+      report(
+        ok,
+        "(WA-32) draft에 없던 잠긴 생존자에서 온 위반도 같은 HOLD로 잡히고 인덱스가 draft 길이 뒤로 밀린 자리를 정확히 가리킨다(규칙 1의 두 번째 경로)"
       );
     }
 
