@@ -807,7 +807,7 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 
 - **문서가 적은 것**: 핸드오프가 「CLI 레벨 관측은 portable하게 만들 수 없어 함수 계약으로 대체했으므로 완전히 닫혔다고 보지 마라」고 적었다.
 - **실제**: 리뷰가 제안한 테스트가 그대로 존재한다. 손상된 `state.json`을 심고 `r.status === 4` + stderr `[REGISTRY]` 접두 + `career.json` 기록됨 + `state.json` 원문(`{broken`) 보존, 네 가지를 CLI 레벨에서 한 번에 단언한다. **닫혔다.**
-- **근거**: `tests/run-smoke.mjs:3265-3272` (WA-15).
+- **근거**: `tests/run-smoke.mjs`의 `(WA-15)`.
 
 **2. 「nodes 비배열 fail-open이 남아 있다」 (f029375 Major #1)**
 
@@ -848,14 +848,15 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 
 - **문서가 적은 것**: 이 문서 「게이트 C-2 후속」 절의 표의 표가 career·gap-report·plan의 `externalUrl` 칸을 **「없음」**으로 적고, 「출처를 기록할 자리가 없고 `additionalProperties: false`가 추가도 막는다」고 서술한다.
 - **실제**: 네 계층 **모두** `externalUrl` 프로퍼티와 `basis: "external" → required: ["externalUrl"]` 조건절을 갖는다. 커밋 `5f71c32`(2026-08-19 12:26, 예외 4번 ①)가 절이 들어온 지 22분 뒤에 고쳤는데 이 문서만 갱신되지 않았다. 표의 1열(`basis` enum에 `external`)과 3열(`additionalProperties: false`)은 여전히 맞고 **2열만 무효**다.
-- **근거**: `schemas/career.schema.json:187`·`:196`, `schemas/gap-report.schema.json:168`·`:177`, `schemas/knowledge-map.schema.json:164`·`:177`, `schemas/plan.schema.json:160`·`:169`. 관측은 `tests/run-smoke.mjs:539`(금지 방향 — `externalUrl` 없으면 FAIL)와 `:578-582`(허용 방향 — 커밋 근거 없이 URL 출처만 있는 노드가 통과).
-- **단서**: 그 스모크 루프는 career·knowledge-map·gap-report 3계층뿐이라(`tests/run-smoke.mjs:566`) **plan은 소스 확인만** 됐다. 그리고 이 절의 **(2)는 plan에서 아직 열려 있다** — 위 정정 5와 같은 지점이다. 부수 발견: `tests/run-smoke.mjs:913-915` 주석도 같은 낡은 서술을 담고 있다(정정 대상 아님, 기록만).
+- **근거**: `schemas/career.schema.json:187`·`:196`, `schemas/gap-report.schema.json:168`·`:177`, `schemas/knowledge-map.schema.json:164`·`:177`, `schemas/plan.schema.json:160`·`:169`. 관측은 `tests/run-smoke.mjs`의 `delete i.nodes[0].externalUrl` 케이스(금지 방향 — `externalUrl` 없으면 FAIL)와 「커밋 근거 없이 URL 출처만 있는 external 노드가 스키마를 통과함」 단언(허용 방향).
+- **단서**: 그 스모크 루프는 career·knowledge-map·gap-report 3계층뿐이라(`tests/run-smoke.mjs`의 `run(layer, NODE_CASES)` 호출) **plan은 소스 확인만** 됐다. 그리고 이 절의 **(2)는 plan에서 아직 열려 있다** — 위 정정 5와 같은 지점이다. 부수 발견: `tests/run-smoke.mjs`의 「담을 자리조차 없으므로」 주석도 같은 낡은 서술을 담고 있다(정정 대상 아님, 기록만).
+  **갱신(2026-08-25)**: (2)는 8번 ①이 닫았고(`plan.schema.json`의 evidence-빔 절 `const → enum`), 네 계층의 동형성은 이제 8번 ②의 교차 가드 `(SI-1)`~`(SI-4)`가 관측한다. **plan이 `NODE_CASES` 루프에 없는 것은 그대로다** — 교차 가드는 스키마 **구조**를 대조할 뿐 plan 인스턴스를 검증하지 않으므로, 「plan은 소스 확인만」은 여전히 참이다.
 
 **8. 반영 현황 「아직 열려 있다」 — 「`origin`·`verification` 기입 주체 규약에 집행 코드가 없다」**
 
 - **문서가 적은 것**: 이 문서 「반영 현황」의 「아직 열려 있다」 목록가 「집행 코드가 없다 — 현재는 스키마 description과 AC의 산문뿐이다. 슬라이스 B가 병합 로직을 만들 때 정적 린트로 승격할지 판단해야 한다」.
 - **실제**: 첫 문장이 사실과 반대다. `checkAuthorshipContract`가 생성 출력의 자기기입을 거부하고, `write-artifact.mjs`가 **병합보다 먼저** 이를 호출해 위반 시 exit 1로 아무 파일도 만들지 않는다. 이 불릿을 마지막으로 만진 커밋(`13c48e6`, 08-19)보다 집행 코드가 **나중**(`f029375` → `4cb236b`)이다. 같은 문서 B-7(`:485-487`)이 이미 「`verification`을 M-1에서 닫은 것과 같은 형태」라고 적어 자기 문서와도 어긋난다.
-- **근거**: `scripts/lib/artifact-contract.mjs:180`(`ORIGIN_SET_BY_TEMPLATE`)·`:238`(`VERIFICATION_SET_BY_TEMPLATE`)·`:425`(`NODE_ID_CHURN`); `scripts/write-artifact.mjs:322`(계약 검사 — 주석 「병합보다 **먼저** 본다」)·`:355`(`mergeArtifact`); `tests/run-smoke.mjs:3168`(WA-8 — exit 1 + 파일 미생성 + stderr에 `VERIFICATION_SET_BY_TEMPLATE`).
+- **근거**: `scripts/lib/artifact-contract.mjs:180`(`ORIGIN_SET_BY_TEMPLATE`)·`:238`(`VERIFICATION_SET_BY_TEMPLATE`)·`:425`(`NODE_ID_CHURN`); `scripts/write-artifact.mjs:322`(계약 검사 — 주석 「병합보다 **먼저** 본다」)·`:355`(`mergeArtifact`); `tests/run-smoke.mjs`의 `(WA-8)`(exit 1 + 파일 미생성 + stderr에 `VERIFICATION_SET_BY_TEMPLATE`).
 - **단서**: 여기서 승격 후보로 적었던 **「템플릿 본문 정적 린트」는 채택되지 않았다.** 집행 지점은 쓰기 경계의 런타임 검사이고 프롬프트 문안(`career-writer.md` 규칙 6, `fact-checker.md`)은 보조 방어다 — 그 근거가 `artifact-contract.mjs:136-139` 주석에 남아 있다.
 
 **9. 게이트 D-2 — 「T3(타인 커밋 PII) 설계 재검토를 10단계보다 앞에 완료하고 §6을 개정」**
@@ -874,7 +875,7 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 | **A-2** (`:23`) | AC-6에 (iii)(`isMerge === (parents.length >= 2)`)·(iv)(merge 픽스처 비공허성) 절을 추가하라 | 두 절 모두 AC-6에 들어가 있고 코드·픽스처로 관측된다 | `spec.md:161`; `scripts/lib/invariants.mjs:171`(`checkIsMergeOracleInvariant` → `EVIDENCE_INVARIANT_AC6_III_VIOLATION`)·`:307`(`checkMergeNonVacuous`); `--negative` 케이스 (15) `tests/fixtures-invalid/15-evidence-ismerge-parents-mismatch` PASS, `--golden`의 「300커밋 픽스처의 실제 원장에 머지 5건이 (iv) 비공허성을 만족함」 PASS |
 | **A-3** (`:24`) | `coverage.traversed`의 값 계약을 스키마 description에 못 박아라 | 문구가 들어가 있고(「예산·절단의 분모로 쓰지 않으며, `analyzed` 또는 `total`을 그대로 복사한 값이 될 수 없다」), 「값 계약이 있어도 읽는 조항이 없다」는 우려까지 재계산 불변식으로 해소됐다 | `schemas/evidence.schema.json:80`, `spec.md:186`; `scripts/lib/invariants.mjs:204`(원장 `commits[]`로 `traversed === total + excluded 건수` 독립 재계산 + `analyzed <= total <= traversed`)·`:292`(배선); `--negative` 케이스 `tests/fixtures-invalid/17-evidence-coverage-traversed-copied-from-total` → `EVIDENCE_INVARIANT_COVERAGE_TRAVERSED_VIOLATION` PASS |
 | **A-5** (`:26`) | Co-authored-by 트레일러의 P0 방침을 스키마 확정 전에 정하라 (「어떤 AC도 없다」) | 「원장에 기록하되 귀속 규칙은 두지 않는다」로 **확정**됐다 — 트레일러를 파싱해 `coAuthors[]`에 원문 문자열 배열로 기록(부재·파싱 실패 시 빈 배열), 저자 필터·`excluded` 판정·정량 집계 반영은 P1 명시 연기. AC도 생겼다 | `spec.md:186`(구현 2단계 확정문), `:280`(엣지 케이스 재확인), `:161`(AC-6의 비공허성 검사); `schemas/evidence.schema.json:213`·`:258`(`excluded: true` → `maxItems: 0`), `scripts/collect-git-facts.mjs:413`; 스모크의 T3 `coAuthors` 축소/대조군/비공허성 PASS. **같은 문서 `:173` 미검사 영역 표의 「Co-authored-by 트레일러」 행도 함께 낡았다** |
-| **B-1·B-2** (`:32-33`) | AC-21과 테스트 전략 [볼륨]의 `250` 하드코드가 **「올바른 구현을 FAIL시킨다」**(현재형 사실 주장) | 두 곳 모두 관계식으로 바뀌었다 — AC-21이 「`dropped_commits`는 250이 아니다. 절대값을 하드코딩하면 정확히 구현된 수집기가 오히려 FAIL 하므로 개수는 관계식으로만 적는다」를 명시하고 `traversed == 300`·`total ==` 픽스처 선언값·`analyzed == K == 50`을 못 박았다. 실측 `dropped_commits`는 **200**이다 | `spec.md:176`(AC-21), `:251`(테스트 전략 [볼륨]); `tests/run-smoke.mjs:5957`(`run1.coverage.total === declared.ownerTotal`)와 값 출처 `fixtures/make-fixture.mjs:845`; `--golden` 11 PASS / 0 FAIL |
+| **B-1·B-2** (`:32-33`) | AC-21과 테스트 전략 [볼륨]의 `250` 하드코드가 **「올바른 구현을 FAIL시킨다」**(현재형 사실 주장) | 두 곳 모두 관계식으로 바뀌었다 — AC-21이 「`dropped_commits`는 250이 아니다. 절대값을 하드코딩하면 정확히 구현된 수집기가 오히려 FAIL 하므로 개수는 관계식으로만 적는다」를 명시하고 `traversed == 300`·`total ==` 픽스처 선언값·`analyzed == K == 50`을 못 박았다. 실측 `dropped_commits`는 **200**이다 | `spec.md:176`(AC-21), `:251`(테스트 전략 [볼륨]); `tests/run-smoke.mjs`의 `run1?.coverage?.total === declared.ownerTotal` 단언과 값 출처 `fixtures/make-fixture.mjs`의 `ownerTotal`; `--golden` 11 PASS / 0 FAIL |
 
 **15. `README.md`가 `verify-evidence.mjs`의 exit 2를 INCONCLUSIVE로 단정한다**
 
@@ -965,7 +966,7 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 
 - **`spec.md`의 AC 체크박스 22건은 전부 `[ ]`이고, 역사 전체에서 `[x]`로 바뀐 커밋이 0건이다.** 이것이 「고의로 절대 체크하지 않는 닻」 관례인지 「갱신 누락」인지 이 정황만으로는 판별할 수 없어, 개별 AC를 정정 대상으로 올리지 않았다. 정정은 **사람이 실제로 `[x]`를 찍어 온 게이트류 문서**(이 문서의 게이트 A/B/C/E)에만 한정했다.
 - **각 AC의 「완전 관측」 여부를 절 단위로 전수 검증하지는 못했다.** 특히 AC-13(FactChecker 2회 재시도가 `career-from-git` 프롬프트에 온전히 반영됐는지), AC-18(「실제 프롬프트로 라우팅 오발동 없음」 — 자동화 흔적을 찾지 못했다), AC-16(노드 id 재사용 규칙이 CareerWriter 템플릿 상단에 고정돼 있는지)은 프롬프트 본문까지 열어보지 않았다. 스킬 프롬프트 '품질'이 아직 심사 대상이 아니라는 이 문서 자체의 고지와 일치해 낮은 우선순위로 남긴다.
-- **`plan` 계층의 절 오라클은 소스 확인만 됐다.** 스모크의 `NODE_CASES` 루프는 career·knowledge-map·gap-report 3계층뿐이다(`tests/run-smoke.mjs:566`).
+- **`plan` 계층의 절 오라클은 소스 확인만 됐다.** 스모크의 `NODE_CASES` 루프는 career·knowledge-map·gap-report 3계층뿐이다(`tests/run-smoke.mjs`의 `run(layer, NODE_CASES)` 호출). **2026-08-25에도 그대로다** — 8번 ②의 교차 가드는 스키마 구조만 대조하고 plan 인스턴스를 검증하지 않는다.
 - **`npm test`(스모크 3연속 실행)는 권한 분류기에 막혀 재현하지 못했다.** 개별 실행(기본 445 / `--negative` 33 / `--golden` 11, 전부 0 FAIL)은 관측했으나, README의 「`npm test`가 로컬에서 통과한다」 문장 자체는 이번 회차에 실측 재현하지 못했다.
 - **`/handoff resume`의 경로 없는 호출이 `docs/harness/handoff/`를 본다」는 `conventions.md` §9 서술은 이 레포 코드로 검증 불가**다(agent-harness 플러그인 동작이며 `docs/harness/**`는 gitignore돼 새 클론에 없다). 반증 증거가 없어 통과 처리했다.
 - **정리 실패 기록**: 1·2단계 명령 완비성을 실행으로 확인하는 과정에서 `~/.devcareer/career-forge-b1ed7ffb/`(레포 밖, 도구 기본 저장 위치)에 `evidence.json`·`git-facts.json`·`ledger-projection.json`이 남았고 삭제 명령이 권한 분류기에 막혔다. 레포에는 영향이 없지만, 다음 세션이 그 디렉터리를 실제 사용 이력으로 오인하지 않도록 적어 둔다.---
@@ -1290,6 +1291,87 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
    **왜 여기**: ③은 계층 키 집합의 세 번째 사본이고 **계층이 2개 느는 13번이 드리프트가 실제로
    나는 회차**다 — 가드를 계층 추가 **전에** 넣어야 그 가드가 무언가를 관측한다.
    **새 예외 불필요** — 예외 4번이 `plan.json`을 이미 대상 파일로 명시한다.
+
+   > **[완료] 실측 기록 (2026-08-25). ①~⑩ 전부 + 신설 ⑪. 커밋 4개.**
+   >
+   > **착수 전 재확인이 범위를 바꿨다 — ⑪을 신설했다.** 직전 핸드오프가 「8번의 첫 작업」으로
+   > 지정한 재확인(`schema-validate.mjs:172`의 fail-open을 7번의 로컬 헬퍼가 닫았는가)의 답은
+   > **「절반만」**이었다. 7번이 닫은 것은 **부재·파싱 실패** 두 축이고, 「판독도 파싱도 성공했는데
+   > 내용이 `null`」인 세 번째 축은 열려 있었다.
+   >
+   > - `validateInstance`는 `null`·`false`·`123`·`"abc"`·`[]`에 **오류 0건·경고 0건**을 돌려준다
+   >   (직접 실행). 정상 스키마는 오류를 낸다.
+   > - 격리 사본에서 `schemas/career.schema.json`을 `null`로 바꾸면 **433 PASS / 17 FAIL**이면서
+   >   거짓 초록 3건이 남았다 — 그중 하나가 「이게 깨지면 아래 절 단언이 전부 공허해진다」고
+   >   스스로 적어 둔 **절 오라클의 대조군 자신**이다.
+   > - `schemas/evidence.schema.json`을 `false`로 바꾸면 **438 PASS / 12 FAIL**, A-13 적합성 단언
+   >   6건이 전부 거짓 초록. 그 지점의 유일한 게이트가 `EVIDENCE_SCHEMA === null`인데
+   >   **`false === null`은 false**다.
+   > - **테스트만의 문제가 아니었다.** `write-artifact.mjs`가 계층 스키마를 맨 `readFileSync` +
+   >   `JSON.parse`로 읽어, 스키마가 `null`이면 「쓰기 직전 자기 스키마 검증」이 통째로 건너뛰어졌다.
+   >   실측: enum 위반 노드 2건이 **exit 0으로 기록**됐고 파일에 `status: "NOT_A_VALID_ENUM_VALUE"`가
+   >   남았다. 대조군(스키마 정상)은 exit 1 + 미기록이다.
+   >
+   > **⑪이 새 예외를 필요로 하지 않는 이유**: 결함이 남은 두 파일(`tests/run-smoke.mjs`·
+   > `scripts/write-artifact.mjs`)은 **둘 다 슬라이스 B 소유**다 — `write-artifact.mjs`는
+   > 구현 7단계가 만든 파일이다(`f029375`, 2026-08-19). 「근본 수정이 막혀 있어 우회로뿐이다」라는
+   > 콜드 리뷰의 전제는 `schema-validate.mjs`에만 적용되고 이 두 파일에는 적용되지 않았다.
+   > `schema-validate.mjs:172`의 비대칭은 규율대로 **그대로 두었다** — 바뀐 것은 「어떤 판독 경로도
+   > 그 함수에 그것이 조용히 받아들일 값을 넘기지 않는다」이다.
+   >
+   > **항목별 결산.**
+   >
+   > | | 상태 | 어떻게 |
+   > |---|---|---|
+   > | ⑪ | 완료 | `readRepoJsonSafe`에 형태 게이트 1개 — 호출부 18곳이 전부 `error !== null`로 게이트하므로 **한 점이 18곳을 닫는다.** `loadSchema`는 던지고 기존 `LAYER_SCHEMA_UNREADABLE` + exit 3 채널로 간다. `(SR-1)`~`(SR-11)` |
+   > | ① | 완료 | `plan.schema.json`의 evidence-빔 절 `const → enum`(D4, 예외 4번 미완 집행) |
+   > | ② | 완료 | `(SI-1)`~`(SI-4)` 교차 가드. **원문 JSON을 대조하지 않는다** — `allOf` 순서가 계층마다 다르고(knowledge-map만 evidence-빔 절이 0번) 그것은 무해하므로, 절을 조건으로 **찾아서** 구조를 비교한다 |
+   > | ③ | 완료 | `(AC-2b)` `EMPTY_REGISTRY_ARTIFACTS` ↔ `state.schema.json`의 `artifacts.required` |
+   > | ④ | 완료 | `(AC-2c)` `STATE_SCHEMA_VERSION` ↔ 스키마 `schemaVersion.default`. 그 필드는 `pattern`만 있고 `const`가 없어 **스키마 검증으로는 원리적으로 안 잡히는 축**이다 |
+   > | ⑤ | 완료 | `(WA-29)` CLI 관측. 세 보류 사유 중 이것만 함수 계약으로만 짚여 있었다 |
+   > | ⑥ | 완료 | `spec.md`의 「원문」 2곳 → A-9 마스킹 명시. **고친 쪽이 문서다** |
+   > | ⑦ | 완료 | 파생 리터럴 제거분은 **이미 반영돼 있었다**(착수 시 발견). 남아 있던 `finishMode` JSDoc 실측치 3건에 기준 명시 |
+   > | ⑧ | 완료 | 인용 8곳 → 라벨. 아래 별도 문단 |
+   > | ⑨ | 완료 | `negative`·`golden`은 도입(`0a42457`) 이래 **변경 0회**였다 — 「아직 안 적었다」가 아니라 그 두 모드가 `runCommonSections()`를 돌리지 않아 구조적으로 닿지 않는다. 그 사실을 적었다 |
+   > | ⑩ | 완료 | 세 호출부 `return finishMode(...)` + `@returns {never}` |
+   >
+   > **⑥의 유일한 실제 위험은 없었다.** `spec.md`는 기계 닻이지만 그 닻은 둘뿐이고
+   > (`checkSamplingMethodLiteralDrift`의 `samplingMethod` 정본 리터럴 — 구현 5단계 문단,
+   > `(R-8)`의 `EVIDENCE_BADGE`), **둘 다 구현 2단계의 `coAuthors` 문장과 다른 문단**이다.
+   > `scripts/`·`tests/`의 `spec.md` 참조를 전수 확인해 닫았다.
+   >
+   > **⑧ — 인용 7건이 아니라 8곳이었다.** 「정정 기록」 절의 `tests/run-smoke.mjs:` **리터럴**은
+   > 7건이 맞지만, 그중 한 줄이 파일명을 반복하지 않고 앞 인용에 편승한 두 번째 행 포인터
+   > (`:578-582`)라 **치환 대상은 8곳**이다. 리터럴만 세면 그 한 건을 빠뜨린다.
+   > 추가로 「작업 순서」 절 안(A-4·B-5 재반증 기록)에도 같은 형태의 낡은 인용이 1건 더 있어
+   > 함께 고쳤다 — ⑧의 문면은 「정정 기록」 절만 가리키지만 결함이 동일하다.
+   > 대체 라벨은 **전부 실제로 grep해 유일성을 확인**했고, `(WA-15)`·`(WA-8)`이 2건씩 걸리는 것은
+   > 같은 블록의 주석+report 두 줄이라 이 레포의 기존 라벨 관례와 일치한다.
+   >
+   > **변이 관측 — 새 가드가 공허하지 않다(격리 사본, 기준 465 PASS / 0 FAIL).**
+   >
+   > | 변이 | 결과 |
+   > |---|---|
+   > | plan의 evidence-빔 절을 `const`로 되돌림(①의 회귀) | **`(SI-3)`만** FAIL (464/1) |
+   > | gap-report 노드에서 `externalUrl` 삭제 | `(SI-1)` FAIL + 절 오라클 1건 (463/2) |
+   > | career의 `allOf` 순서 뒤바꿈(무해) | **전부 PASS** (465/0) — 오탐 없음 |
+   > | plan의 `basis` enum에 `commit` 추가 | **`(SI-4)`만** FAIL (464/1) |
+   >
+   > ⑪의 변이도 같은 방식으로 관측했다 — 위 두 스키마 파괴 변이가 수정 후 **407/54**·**441/20**이
+   > 되어 거짓 초록 9건이 전부 FAIL로 뒤집혔고, **총량 461이 양쪽에서 보존**됐다(단언이 사라진 것이
+   > 아니라 뒤집혔다). 프로덕션은 exit 3 + 미기록으로 바뀌었다.
+   >
+   > **정본 상수**: `default` 448 → 459(⑪) → 463(②) → 464(⑤) → 466(③④).
+   > 4게이트: lint 0 / **468** / 35 / 13, 전부 0 FAIL.
+   >
+   > **방법론 교훈 2건 — 다음 회차가 반복하지 않도록.**
+   > - **「닫혔다」는 조사 결과를 그대로 받지 마라.** 이 회차의 조사 에이전트는 ⑪의 전제 조건을
+   >   「closed」로 판정했고 근거로 든 파일:행도 전부 실재했다. 틀린 것은 **범위**였다 — 부재
+   >   변이만 주입해 보고 「fail-closed다」라고 결론지었고, 벡터의 정의에 있는 「비객체」는
+   >   주입하지 않았다. **적대 검증이 그것을 잡았고, 오케스트레이터가 직접 재현해 확인했다.**
+   > - **호출부 문자열이 아니라 헬퍼를 따라가라 — 7번이 배운 교훈이 여기서 또 필요했다.**
+   >   조사자가 「`run-smoke.mjs` 안 25곳이 전수」라고 적었으나 그 파일이 import한
+   >   `updateRegistry`의 본체에 맨 판독이 하나 더 있었다. 간접 호출부는 grep에 잡히지 않는다.
 9. **`computeArtifactContentHash`를 instance 부재에 fail-closed로.** 규모 S.
    콜드 리뷰가 suggestion으로 낮췄지만, 이 함수는 **없는 것에 대해 진짜처럼 보이는 무결성 토큰**
    (`'{}'`의 SHA-256)을 만든다 — 이 제품이 막으려는 실패의 원형이다.
@@ -1378,8 +1460,8 @@ career·gap-report·plan에서 `basis: "external"`을 선언하면 어떤 출처
 >   `~/.devcareer/<repo-key>/`, 대상 레포 내부 `<repo>/.devcareer/`는 명시 동의 시에만」이 있었다 —
 >   뒤늦게 낡은 것이 아니라 처음부터 미검사 선언이었다. B-5 — 「네 곳에 동일 문장으로 들어가 있음을
 >   확인했다」(스펙 반영 완료)와 「골든·러너 구현 시 이 조건을 코드로 옮긴다」(코드 이관)가 **서로
->   다른 대상**이므로 자기모순이 아니고, 코드 이관 쪽도 완료됐다(`tests/run-smoke.mjs:4340`이
->   `mergeIncluded: true`로 실행해 `:4350`에서 `CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN`을 요구).
+>   다른 대상**이므로 자기모순이 아니고, 코드 이관 쪽도 완료됐다(`tests/run-smoke.mjs`의 `(9) A-22`가
+>   `mergeIncluded: true`로 실행해 `CITATION_MERGE_HASH_NON_INFERENCE_BASIS_FORBIDDEN`을 요구).
 >
 > **이제 콜드 리뷰가 미검증 전제를 물려받을 위험은 닫혔다.** 남은 선행 조건은 없다.
 
@@ -1441,6 +1523,21 @@ suggestion 5. **기능 회귀 0건**이고 네 게이트를 리뷰 중 재실행
 **현행 결함은 아니다** — 격리 사본에서 스키마를 지운 변이로 3곳 모두 가드가 살아 단언 8건 전부 올바르게
 FAIL함을 실측했다. 두 조건(가드 누락 + 스키마 부재)이 겹쳐야 발현되는 **잠재** 벡터다.
 
+> **정정(2026-08-25) — 「현행 결함은 아니다」가 틀렸다. 발현 조건을 잘못 좁혔다.**
+> 위 두 문장은 **스키마 파일을 지우는 변이 하나만** 주입하고 내린 결론이다. 그런데 이 finding의
+> 문면 자체가 벡터를 「falsy·**비객체** 스키마」로 정의했고, 그 정의의 나머지 절반 —
+> **파일은 있고 파싱도 되는데 값이 `null`·`false`·스칼라** — 은 주입되지 않았다. 그 변이를
+> 실제로 넣어 보니 **가드가 누락되지 않은 상태에서도** 거짓 초록이 났다: `career.schema.json`을
+> `null`로 두면 3건, `evidence.schema.json`을 `false`로 두면 A-13 6건. 두 조건이 겹칠 필요가
+> 없었으므로 **잠재가 아니라 현행이었다.** 그리고 테스트 밖 — `write-artifact.mjs`의 쓰기 직전
+> 자기 검증 — 도 같은 이유로 건너뛰어져 위반 산출물이 exit 0으로 기록됐다.
+>
+> **처방도 한 대목이 틀렸다.** 아래 인용 블록은 「지금 택할 수단은 7번의 로컬 헬퍼뿐」이라고
+> 적는데, 그 전제(슬라이스 A라 근본 수정이 막혀 있다)는 `schema-validate.mjs`에만 해당한다.
+> 실제로 남아 있던 결함은 `run-smoke.mjs`와 `write-artifact.mjs` — **둘 다 슬라이스 B 파일** —
+> 의 판독부였고, 예외 표에 행을 추가하지 않고 그대로 고칠 수 있었다. 8번 ⑪이 그렇게 닫았다.
+> **`schema-validate.mjs:172` 자체는 여전히 손대지 않았다** — 그 규율은 지켜졌다.
+
 > **처방이 예외 표에 걸린다 — 이것이 이 항목의 핵심 제약이다.** `schema-validate.mjs`는
 > `slice_plan.md` 예외 5건 밖이고 직전 핸드오프 Do NOT이 이 파일 수정을 명시적으로 금지한다.
 > 따라서 근본 수정(`:172`를 `$ref` 분기와 대칭이 되게 fail-closed로)은 **예외 표에 행을 추가하고
@@ -1450,6 +1547,12 @@ FAIL함을 실측했다. 두 조건(가드 누락 + 스키마 부재)이 겹쳐�
 > 않는다. **「겸사겸사」 고치지 마라** — T4 이연 결정을 무효로 만드는 그 패턴이다.
 
 ### 8번에 추가할 것
+
+> **[완료] 2026-08-25 — ⑦~⑩ 전부 반영됐다.** 결산과 실측은 위 「작업 순서」 절 8번 항목 아래
+> 「[완료] 실측 기록 (2026-08-25)」에 있다(복제하지 않는다 — 복제가 곧 드리프트다).
+> 착수 시 발견 1건만 여기 남긴다: **⑦의 절반은 이미 반영돼 있었다** — 파생 리터럴
+> 「녹색일 때 447 / 35 / 13」은 이 절이 쓰이기 전에 이미 제거됐고 관계식만 남아 있었다.
+> 실제로 남아 있던 것은 `finishMode` JSDoc의 변이 실측치 3건뿐이다.
 
 - **⑦ `run-smoke.mjs:299` 주석의 녹색 기대치 `447` → `448`.** 같은 diff의 `:314`가 default를 445→446으로
   올렸으므로 실제 녹색 총량은 448이다(실행 확인). `finishMode` JSDoc의 변이 실측치(`:6541` 443/2,
