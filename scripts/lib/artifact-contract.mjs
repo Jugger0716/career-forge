@@ -88,15 +88,54 @@ function contentHashFields(bodyField) {
 /**
  * 산출물 본문의 contentHash를 계산한다(디스크에 쓰지 않는다).
  *
+ * **`instance`가 객체가 아니면 던진다(2026-08-25, 순서 9번).** 초판은 `layer`가
+ * 지원 범위 밖이면 명시적으로 던지면서 `instance`에 대해서는 아무것도 보지 않았다 —
+ * `instance?.[key]`가 전부 `undefined`를 대입하고 `JSON.stringify`가 undefined 값
+ * 프로퍼티를 생략하므로, **없는 본문에 대해 진짜처럼 보이는 64자 무결성 토큰**
+ * (`'{}'`의 SHA-256)을 조용히 돌려줬다. 이 제품이 막으려는 실패의 원형이고,
+ * 이 모듈이 표방하는 fail-closed 원칙과의 비대칭이었다.
+ *
+ * **실측(수정 전)**: `null`·`undefined`·`false`·`123`·`"abc"`·`[]`·`[{}]`·`{}`
+ * 여덟 입력이 **전부 같은 값** `44136fa3…caaff8a`를 돌려줬다.
+ *
+ * **배열이 별도 팔인 이유 — 취향이 아니다.** `typeof [] === "object"`이고
+ * `[] !== null`이라, `instance === null || typeof instance !== "object"` 형태의
+ * 2분기 가드로는 **배열만 조용히 통과한다**. 그리고 그 누수는 나머지 금지 방향
+ * 단언을 하나도 깨지 않으므로 게이트에 흔적이 남지 않는다. `(CH-7)`이 이 팔
+ * 하나만 관측한다.
+ *
+ * **형태 이름을 사유에 담는다.** 「객체가 아님」만으로는 어느 형태로 들어왔는지가
+ * 로그에서 사라진다 — 이 레포는 판독 실패에서 같은 규율을 반복해 왔다(`(SR-7)`).
+ *
+ * **술어를 import로 공유하지 않는다.** 같은 3분기 분류가 `write-artifact.mjs`의
+ * `loadSchema`와 `run-smoke.mjs`의 `jsonShapeViolation`에도 있지만, 이 파일은
+ * 헤더가 「순수 계약 모듈이 CLI에 의존하면 의존 방향이 뒤집힌다」고 못 박았고
+ * `write-artifact.mjs`가 이 파일을 import하는 방향이라 역방향은 순환이다.
+ * 세 줄을 다시 쓰는 것이 옳다.
+ *
+ * **가드가 보지 못하는 것(감추지 않는다)**: `Object.create(null)`·`new Date()`·
+ * 클래스 인스턴스는 `"object"`로 통과한다. 위 두 선례가 모두 여기까지만 보고
+ * `(SR-8)`이 그 분류를 못 박아 뒀다 — 더 좁히려면 그 선례부터 바꿔야 한다.
+ *
  * @param {string} layer `ARTIFACT_LAYERS`의 키 또는 `"evidence"`
  * @param {object} instance
  * @returns {string} 64자 SHA-256 hex
+ * @throws {Error} `layer`가 지원 밖이거나 `instance`가 객체가 아닐 때
  */
 export function computeArtifactContentHash(layer, instance) {
   const bodyField = layer === "evidence" ? EVIDENCE_BODY_FIELD : ARTIFACT_LAYERS[layer]?.bodyField;
   if (!bodyField) {
     throw new Error(
       `지원하지 않는 계층입니다: '${layer}' (지원: ${Object.keys(ARTIFACT_LAYERS).join(", ")}, evidence)`
+    );
+  }
+  // layer 가드 **뒤**다. 둘 다 어긋난 호출은 계층 문제를 먼저 보고하는 기존
+  // 우선순위를 보존한다 — `(AC-6)`이 `("nope", {})`로 그 축만 관측한다.
+  const shape = instance === null ? "null" : Array.isArray(instance) ? "array" : typeof instance;
+  if (shape !== "object") {
+    throw new Error(
+      `contentHash를 계산할 instance가 객체가 아닙니다(${shape}) — ` +
+      "부재를 '{}'의 해시로 강등하면 없는 본문에 대해 진짜처럼 보이는 64자 무결성 토큰이 만들어집니다."
     );
   }
   const canonical = {};
