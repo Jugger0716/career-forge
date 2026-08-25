@@ -84,8 +84,14 @@ export const EMPTY_REGISTRY_ARTIFACTS = Object.freeze({
   plan: null,
 });
 
-/** state.json 자신의 형식 버전(state.schema.json의 default와 같은 값). */
-const STATE_SCHEMA_VERSION = "0.1.0";
+/**
+ * state.json 자신의 형식 버전(state.schema.json의 default와 같은 값).
+ *
+ * **export 하는 이유(2026-08-25)**: 「같은 값」이라는 이 주석이 유일한 집행 수단이었다 —
+ * 스키마의 `schemaVersion`은 `pattern`만 강제하고 `const`가 아니라 두 값이 갈려도
+ * 스키마 검증이 통과한다. `(AC-2c)`가 이 상수를 직접 읽어 대조한다.
+ */
+export const STATE_SCHEMA_VERSION = "0.1.0";
 
 /**
  * 계층 스키마를 판독한다. **판독·파싱·형태 중 하나라도 실패하면 던진다.**

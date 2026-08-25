@@ -69,7 +69,13 @@ import {
   mergeArtifact,
 } from "../scripts/lib/artifact-contract.mjs";
 import { projectWithReport, EVIDENCE_FILE_NAME } from "../scripts/project-ledger.mjs";
-import { inspectPreviousArtifact, updateRegistry, loadSchema } from "../scripts/write-artifact.mjs";
+import {
+  inspectPreviousArtifact,
+  updateRegistry,
+  loadSchema,
+  EMPTY_REGISTRY_ARTIFACTS,
+  STATE_SCHEMA_VERSION,
+} from "../scripts/write-artifact.mjs";
 import {
   computeRepoKeyForPath,
   getRepoToplevel,
@@ -464,7 +470,15 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   // 이력: (DH-1d) 445 → 446. 7번 C2의 A-21 판독 전제 단언 446 → 447.
   //       7번 C9의 (SP-1b) 프롬프트 판독 전제 단언 447 → 448.
   //       8번 ⑪의 (SR-1)~(SR-11) 안전 판독 형태 오라클 448 → 459.
-  default: 459,
+  //       8번 ②의 (SI-1)~(SI-4) 스키마 동형성 교차 가드 459 → 463.
+  //       8번 ⑤의 (WA-29) PREV_ARTIFACT_HASH_MISSING CLI 관측 463 → 464.
+  //       8번 ③④의 (AC-2b)(AC-2c) 계층 키·버전 드리프트 가드 464 → 466.
+  default: 466,
+  // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
+  //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
+  //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
+  //       않는다. **이 두 값이 움직이는 변경은 그래서 예외적이고, 움직였다면 negative 픽스처나
+  //       골든 오라클 자체가 바뀐 것이다.** 그때 이 줄에 사유를 적어라.
   negative: 33,
   golden: 11,
 });
@@ -785,6 +799,130 @@ function runSafeReadShapeOracleSmoke() {
     }
   } finally {
     fs.rmSync(fake, { recursive: true, force: true });
+  }
+}
+
+/** `basis`/`externalUrl` 계약을 갖는 네 계층. 이 목록 자체가 가드의 대상 집합이다. */
+const BASIS_LAYERS = Object.freeze(["career", "knowledge-map", "gap-report", "plan"]);
+
+/**
+ * 계층 스키마에서 노드 정의(`$defs`의 `*Node`)를 찾는다. 이름이 계층마다 다르므로
+ * (`careerNode`·`knowledgeNode`·`gapNode`·`planNode`) 표를 두지 않고 접미사로 찾는다 —
+ * 표를 두면 계층이 느는 13번에 그 표가 네 번째 사본이 된다.
+ */
+function nodeDefOf(schema) {
+  const defs = schema?.$defs;
+  if (defs === undefined || defs === null) return null;
+  const key = Object.keys(defs).find((k) => k.endsWith("Node"));
+  return key === undefined ? null : defs[key];
+}
+
+/** `{const: x}` 또는 `{enum: [...]}`을 **정렬된 허용값 배열**로 정규화한다. 둘 다 아니면 null. */
+function allowedValuesOf(clause) {
+  if (clause === undefined || clause === null || typeof clause !== "object") return null;
+  if (typeof clause.const === "string") return [clause.const];
+  if (Array.isArray(clause.enum)) return [...clause.enum].sort();
+  return null;
+}
+
+/**
+ * 네 계층 스키마의 `basis`/`externalUrl` 절이 **서로 동형인지**를 관측한다(8번 ②).
+ *
+ * **왜 필요한가.** `basis: "external"`을 표현 가능하게 만든 커밋(`5f71c32`)은 네 파일을 한꺼번에
+ * 고쳤지만, 그 뒤 「`evidence`가 비면 `basis`는?」 절을 완화할 때 **plan 하나가 빠졌다** —
+ * 나머지 셋은 `enum: ["insufficient","external"]`인데 plan만 `const: "insufficient"`로 남아
+ * 다섯 달 가까이 아무도 보지 못했다(정정 5 / 결정 D4). 같은 계약이 네 파일에 손으로 복제되는
+ * 한 이 종류의 드리프트는 반드시 재발하고, **계층이 2개 느는 13번이 그 회차다.**
+ * 가드를 계층 추가 **전에** 넣어야 그 가드가 무언가를 관측한다.
+ *
+ * **원문 JSON을 대조하지 않는다 — 파싱된 구조를 본다.** `allOf` 항목 순서가 계층마다 다르다
+ * (knowledge-map만 evidence-빔 절이 0번이고 나머지 셋은 1번). JSON Schema에서 `allOf`는
+ * 순서 무관이므로 이것은 **무해한 복사 드리프트**이고, 텍스트 diff로 짜면 그 무해한 차이가
+ * 오탐 FAIL이 된다. 그래서 절을 조건으로 **찾아서** 비교한다.
+ *
+ * **서로 비교하지 않고 정본 리터럴과 비교한다.** 「네 계층이 서로 같다」는 **두 미지값의 `===`**
+ * 형태라, 추출이 전부 실패해 넷 다 `null`이 되면 **우연히 PASS**한다 — 이 아크가 반복해서
+ * 닫아 온 바로 그 모양이다. 그래서 각 계층을 기대 리터럴에 대고 보고, 추출 실패는 그 자체로
+ * 위반이다.
+ *
+ * **career의 `commit`은 초과분이 아니라 의도다.** career만 커밋을 직접 근거로 쓸 수 있고
+ * 나머지 셋은 파생 추론이라 `commit`을 쓸 수 없다 — 각 스키마의 `basis` description이 그 이유를
+ * 적고 있다. 그래서 (SI-4)는 「전부 동일」이 아니라 계층별 기대 집합과 대조한다.
+ */
+function runSchemaIsomorphismOracleSmoke() {
+  console.log("[스키마 동형성 교차 가드] 네 계층의 basis/externalUrl 절이 손으로 복제된 채 갈라지지 않았는가(8번 ②)");
+
+  const tracker = makeReadTracker();
+  const nodes = {};
+  const bases = {};
+  for (const layer of BASIS_LAYERS) {
+    const schema = tracker.readJson(SCHEMA_REL(layer));
+    nodes[layer] = nodeDefOf(schema);
+    bases[layer] = schema?.$defs?.basis ?? null;
+    // 판독은 됐는데 구조가 기대와 다른 경우도 **사유**로 남긴다 — 예외가 아니다.
+    if (schema !== null && nodes[layer] === null) tracker.note(SCHEMA_REL(layer), "$defs에 *Node 정의가 없음");
+  }
+  const blameAll = tracker.blameFor(BASIS_LAYERS.map((l) => SCHEMA_REL(l)));
+
+  /** `allOf`에서 `pick`이 참을 돌려주는 첫 절을 찾는다. 순서에 기대지 않는다. */
+  const clauseWhere = (layer, pick) => (nodes[layer]?.allOf ?? []).find(pick) ?? null;
+
+  // ---- (SI-1) externalUrl 프로퍼티 ----
+  {
+    const missing = BASIS_LAYERS.filter((l) => nodes[l]?.properties?.externalUrl === undefined);
+    const ok = blameAll === "" && missing.length === 0;
+    if (!ok) console.log(`    실제: ${blameAll !== "" ? blameAll : `externalUrl 없는 계층 ${JSON.stringify(missing)}`}`);
+    report(ok, "(SI-1) 네 계층 노드 정의가 전부 externalUrl 프로퍼티를 갖는다(basis:external을 담을 자리)");
+  }
+
+  // ---- (SI-2) basis:"external" → required:["externalUrl"] ----
+  {
+    const bad = BASIS_LAYERS.filter((l) => {
+      const c = clauseWhere(l, (x) => x?.if?.properties?.basis?.const === "external");
+      return !Array.isArray(c?.then?.required) || !c.then.required.includes("externalUrl");
+    });
+    const ok = blameAll === "" && bad.length === 0;
+    if (!ok) console.log(`    실제: ${blameAll !== "" ? blameAll : `external→required 절이 없거나 어긋난 계층 ${JSON.stringify(bad)}`}`);
+    report(ok, "(SI-2) 네 계층 전부 basis:\"external\"이면 externalUrl을 required로 만드는 조건절을 갖는다(allOf 순서 무관)");
+  }
+
+  // ---- (SI-3) evidence가 비면 basis 허용 집합 — 8번 ①의 회귀 가드 ----
+  {
+    const EXPECTED = ["external", "insufficient"]; // 정렬 기준. **정본 리터럴이지 서로 비교가 아니다.**
+    const actual = Object.fromEntries(
+      BASIS_LAYERS.map((l) => {
+        const c = clauseWhere(l, (x) => x?.if?.properties?.evidence?.maxItems === 0);
+        return [l, allowedValuesOf(c?.then?.properties?.basis)];
+      })
+    );
+    const bad = BASIS_LAYERS.filter((l) => JSON.stringify(actual[l]) !== JSON.stringify(EXPECTED));
+    const ok = blameAll === "" && bad.length === 0;
+    if (!ok) console.log(`    실제: ${blameAll !== "" ? blameAll : JSON.stringify(actual)}`);
+    report(
+      ok,
+      "(SI-3) 네 계층 전부 「evidence가 비면 basis는 insufficient 또는 external」이다" +
+      "(plan만 const로 남아 있던 드리프트의 회귀 가드 — 예외 4번 ②의 집행 상태)"
+    );
+  }
+
+  // ---- (SI-4) basis enum ----
+  {
+    // career만 commit을 쓸 수 있다 — 파생 추론 계층 셋은 쓸 수 없고, 각 스키마의
+    // basis description이 그 이유를 적고 있다. 「전부 동일」로 짜면 그 의도를 지우게 된다.
+    const EXPECTED = {
+      career: ["commit", "external", "inference", "insufficient"],
+      "knowledge-map": ["external", "inference", "insufficient"],
+      "gap-report": ["external", "inference", "insufficient"],
+      plan: ["external", "inference", "insufficient"],
+    };
+    const actual = Object.fromEntries(BASIS_LAYERS.map((l) => [l, allowedValuesOf(bases[l])]));
+    const bad = BASIS_LAYERS.filter((l) => JSON.stringify(actual[l]) !== JSON.stringify(EXPECTED[l]));
+    const ok = blameAll === "" && bad.length === 0;
+    if (!ok) console.log(`    실제: ${blameAll !== "" ? blameAll : JSON.stringify(actual)}`);
+    report(
+      ok,
+      "(SI-4) 네 계층의 $defs.basis enum이 정본과 일치한다(career만 commit을 갖는 것은 의도된 비대칭)"
+    );
   }
 }
 
@@ -2443,6 +2581,49 @@ function runArtifactContractOracleSmoke() {
     report(ok, "(AC-2) ARTIFACT_LAYERS의 stateKey 집합이 state.schema.json의 artifacts 키(evidence 제외)와 일치");
   }
 
+  // ---- (AC-2b) EMPTY_REGISTRY_ARTIFACTS ↔ state.schema.json (8번 ③) ----
+  //      **계층 키 집합의 세 번째 사본이다.** (AC-2)가 잡는 것은 `ARTIFACT_LAYERS`의
+  //      stateKey이고, 스키마의 `artifacts.required`가 정본인데, `EMPTY_REGISTRY_ARTIFACTS`는
+  //      **어느 쪽과도 대조되지 않은 채** `updateRegistry`가 새 레지스트리를 만들 때 쓰는
+  //      골격이다(콜드 리뷰 f029375가 「참조는 자기 파일 한 곳뿐」이라고 지적했다).
+  //      키가 하나 빠지면 required 위반으로 시끄럽게 깨지지만, 키가 **더 있으면**
+  //      `additionalProperties`가 없는 한 조용히 통과한다.
+  //
+  //      **왜 지금인가**: 계층이 2개 느는 13번이 이 드리프트가 실제로 나는 회차다.
+  //      가드를 계층 추가 **전에** 넣어야 그 가드가 무언가를 관측한다. 지금은 두 집합이
+  //      정확히 일치하므로(실측) 이 단언은 오늘 아무것도 잡지 않는다 — 그것이 정상이다.
+  //
+  //      (AC-2)와 달리 evidence를 **제외하지 않는다.** `EMPTY_REGISTRY_ARTIFACTS`는
+  //      evidence를 포함하고 스키마의 required도 포함하므로, 여기서 빼면 비교가 어긋난다.
+  {
+    const { json: stateSchema, error: stateError } = readRepoJsonSafe(SCHEMA_REL("state"));
+    const required = stateSchema?.properties?.artifacts?.required;
+    const schemaKeys = Array.isArray(required) ? [...required].sort() : null;
+    const mine = Object.keys(EMPTY_REGISTRY_ARTIFACTS).sort();
+    const ok = schemaKeys !== null && JSON.stringify(mine) === JSON.stringify(schemaKeys);
+    if (!ok) {
+      const why = stateError !== null ? stateError : (schemaKeys === null ? `${SCHEMA_REL("state")} properties.artifacts.required 경로가 없음` : "");
+      console.log(`    실제: ${why} empty=${JSON.stringify(mine)} schema=${JSON.stringify(schemaKeys)}`);
+    }
+    report(ok, "(AC-2b) EMPTY_REGISTRY_ARTIFACTS의 키 집합이 state.schema.json의 artifacts.required와 일치(계층 키 세 번째 사본의 드리프트 가드)");
+  }
+
+  // ---- (AC-2c) STATE_SCHEMA_VERSION ↔ state.schema.json의 default (8번 ④) ----
+  //      두 값이 갈리면 `updateRegistry`가 **스키마가 예시로 내건 것과 다른 버전**을
+  //      새 state.json에 적는다. `schemaVersion`은 `pattern`만 강제하고 `const`가 아니라
+  //      어떤 값이든 통과하므로 스키마 검증으로는 절대 드러나지 않는다 — 「검사해서
+  //      통과」가 아니라 「검사 대상이 아니라 통과」다.
+  {
+    const { json: stateSchema, error: stateError } = readRepoJsonSafe(SCHEMA_REL("state"));
+    const schemaDefault = stateSchema?.properties?.schemaVersion?.default;
+    const ok = typeof schemaDefault === "string" && schemaDefault === STATE_SCHEMA_VERSION;
+    if (!ok) {
+      const why = stateError !== null ? stateError : (schemaDefault === undefined ? `${SCHEMA_REL("state")} properties.schemaVersion.default 경로가 없음` : "");
+      console.log(`    실제: ${why} 코드=${JSON.stringify(STATE_SCHEMA_VERSION)} 스키마=${JSON.stringify(schemaDefault)}`);
+    }
+    report(ok, "(AC-2c) STATE_SCHEMA_VERSION이 state.schema.json의 schemaVersion default와 일치(pattern만 있고 const가 없어 스키마 검증으로는 안 잡히는 축)");
+  }
+
   // ---- (AC-3) 해시 알고리즘의 닻이 모듈 밖에 있는가 ----
   //      같은 evidence 객체에 대해 content-hash.mjs의 정본 함수와 바이트
   //      동일한 값을 내야 한다. 이 단언이 없으면 새 모듈에서 해시 알고리즘·
@@ -3916,6 +4097,46 @@ function runWriteArtifactOracleSmoke() {
         unknown.existence === "unknown" && unknown.hold?.code === "PREV_ARTIFACT_UNREADABLE";
       if (!ok) console.log(`    실제: absent=${absent.existence} present=${present.existence} unknown=${unknown.existence}`);
       report(ok, "(WA-24) inspectPreviousArtifact는 absent/present/unknown 세 상태를 구분한다(읽기 실패를 '있음'으로 단정하지 않는다)");
+    }
+
+    // ---- (WA-29) contentHash가 없는 prev를 CLI 레벨에서 관측한다(8번 ⑤) ----
+    //      **f029375 Minor 8의 잔여분.** `inspectPreviousArtifact`의 세 보류 사유 중
+    //      PREV_ARTIFACT_UNREADABLE은 (WA-21)이, PREV_ARTIFACT_EDITED는 (WA-20)이
+    //      **실행해서** 봤는데 PREV_ARTIFACT_HASH_MISSING만 함수 계약으로만 짚여
+    //      있었다 — 즉 그 분기가 실제 CLI에서 exit 3을 내는지, 그리고 그때 정말로
+    //      아무것도 덮어쓰지 않는지는 한 번도 관측되지 않았다. 세 사유가 같은
+    //      채널(exit 3 + [HOLD])을 쓰기로 한 계약이므로 셋 다 같은 깊이로 봐야 한다.
+    //
+    //      **prev를 손으로 조립하지 않고 진짜 산출물에서 파생시킨다.** 골격을 손으로
+    //      쓰면 「contentHash가 없다」와 「그 밖의 필드도 스키마를 어긴다」가 뭉개져,
+    //      exit 3이 정말 해시 부재 때문인지 다른 위반 때문인지 구별되지 않는다.
+    //      정상 쓰기 → contentHash만 제거 → 재호출이면 바뀐 변수가 하나다.
+    {
+      const root = freshRoot("hash-missing");
+      const first = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      const filePath = path.join(root, "career.json");
+      const written = readJsonOrNull(filePath);
+      let tampered = null;
+      if (written !== null) {
+        delete written.contentHash;
+        tampered = JSON.stringify(written);
+        fs.writeFileSync(filePath, tampered, "utf8");
+      }
+      const r = runWriter(root, makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]));
+      // 판정 방향이 전부 양수형이다 — 첫 쓰기가 실패하면 `written`이 null이 되고
+      // `tampered`도 null이라 아래 세 조건이 스스로 false가 된다. 음수형(`!==`)을
+      // 쓰면 두 미지값이 우연히 같아져 통과할 수 있다.
+      const ok =
+        first.status === 0 && tampered !== null &&
+        r.status === 3 &&
+        r.stderr.includes("[HOLD]") && r.stderr.includes("PREV_ARTIFACT_HASH_MISSING") &&
+        readTextOrNull(filePath) === tampered;
+      if (!ok) console.log(`    실제: first=${first.status} status=${r.status} stderr=${r.stderr}`);
+      report(
+        ok,
+        "(WA-29) contentHash가 없는 prev는 CLI에서 [HOLD] PREV_ARTIFACT_HASH_MISSING + exit 3이고 " +
+        "기존 파일을 한 바이트도 덮어쓰지 않는다(f029375 Minor 8 잔여 — 세 보류 사유가 같은 깊이로 관측된다)"
+      );
     }
 
     // ---- (WA-25) updateRegistry가 실패를 예외가 아니라 반환값으로 보고하는가 ----
@@ -7015,6 +7236,12 @@ async function runSectionAsync(label, fn) {
  * 여러 건이 **실행조차 되지 않아도** 「결과: N PASS / 0 FAIL」이 초록으로 보였고, 줄어든
  * 총량을 사람이 눈으로 대조해야만 알아챌 수 있었다. 그 육안 대조는 실제로 실패했다.
  *
+ * **아래 실측치 3건은 전부 `default = 445` 기준이다(2026-08-21 측정).** 정본 상수가 그 뒤로
+ * 445 → 448 → 459 → 463으로 올랐으므로 **지금 트리에서 재현하면 수치가 그만큼 어긋난다** —
+ * 회귀로 오독하지 마라. 여기 남는 것은 절대 수치가 아니라 **관계**다(가드가 FAIL했는가 아닌가,
+ * 몇 건이 사라졌는가). 수치를 갱신하지 않는 이유는 그것이 이 주석을 다음 커밋에 또 낡게 만드는
+ * 바로 그 습관이기 때문이다 — 정본은 아래 `EXPECTED_ASSERTIONS_BEFORE_GUARDS` 한 곳뿐이다.
+ *
  * **두 가드의 관계 — 실측으로 좁힌 것이다. 「서로를 감시한다」고 읽지 마라.**
  * 초판 주석이 그렇게 적었는데 변이로 **반증됐다**(2026-08-21):
  *
@@ -7032,6 +7259,9 @@ async function runSectionAsync(label, fn) {
  * 드러나므로, 그 완화를 되돌릴 근거가 게이트에 남지 않는다는 점도 함께 기록한다.
  *
  * @param {"default"|"negative"|"golden"} mode
+ * @returns {never} `process.exit`으로 끝난다 — **돌아오지 않는다.** 세 호출부가 전부
+ *   `return finishMode(...)` 형태인 것은 이 계약이 깨질 때(반환값을 돌려주게 바뀔 때)
+ *   모드가 서로의 경로로 흘러내리지 않게 하려는 것이다.
  */
 function finishMode(mode) {
   // 가드 자신을 세기 **전**의 총량. 아래 두 report() 호출이 이 수를 바꾸므로 먼저 잡는다.
@@ -7076,6 +7306,7 @@ function runCommonSections() {
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
   // 아래 절의 「기준 인스턴스가 적합함」류 단언이 공허해지므로 먼저 관측한다.
   runSection("안전 판독 형태 오라클(비객체 스키마 fail-closed)", runSafeReadShapeOracleSmoke);
+  runSection("스키마 동형성 교차 가드(8번 ②)", runSchemaIsomorphismOracleSmoke);
   runSection("스키마 절 단위 오라클(게이트 A-5)", runSchemaClauseOracleSmoke);
   runSection("시크릿 스캔 절 단위 오라클(게이트 C-1)", runSecretScanOracleSmoke);
   runSection("allow-list 절 단위 오라클(게이트 C-2)", runExternalSourceOracleSmoke);
@@ -7123,20 +7354,25 @@ async function main() {
   // 함께 돈다.
   if (golden) {
     runSection("골든 게이트", runGoldenGate);
-    finishMode("golden");
+    // **`return`이 붙어 있는 이유(2026-08-25).** `finishMode`는 지금 `process.exit`으로 끝나므로
+    // `return`이 없어도 동작이 같다. 그러나 그 함수를 **테스트 가능하게** 만드는 압력(exit 대신
+    // 종료 코드를 반환)이 이 파일에 이미 있고, 그 변경을 하는 순간 `return`이 없으면 golden 모드가
+    // 아래 negative 분기와 default 경로로 **조용히 흘러내린다** — 그러면 총량 가드가 golden 11이
+    // 아니라 default 기대값과 비교되며 엉뚱하게 FAIL한다. 제어 흐름을 지금 고정해 그 함정을 없앤다.
+    return finishMode("golden");
   }
 
   if (negative) {
     // A-36: 공통 섹션은 기본 모드가 이미 실행하므로 여기서는 재실행하지
     // 않는다 — negative 스위트 고유의 단언만 돈다.
     await runSectionAsync("negative 스위트", runNegativeSuite);
-    finishMode("negative");
+    return finishMode("negative"); // 위 golden 분기의 주석과 같은 이유.
   }
 
   runCommonSections();
   await runSectionAsync("기본 스모크", runDefaultSmoke);
 
-  finishMode("default");
+  return finishMode("default");
 }
 
 main().catch((e) => {
