@@ -473,7 +473,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       8번 ②의 (SI-1)~(SI-4) 스키마 동형성 교차 가드 459 → 463.
   //       8번 ⑤의 (WA-29) PREV_ARTIFACT_HASH_MISSING CLI 관측 463 → 464.
   //       8번 ③④의 (AC-2b)(AC-2c) 계층 키·버전 드리프트 가드 464 → 466.
-  default: 466,
+  //       9번의 (CH-1)~(CH-8) instance 부재 fail-closed 466 → 474.
+  default: 474,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -2668,6 +2669,128 @@ function runArtifactContractOracleSmoke() {
     let threw = false;
     try { computeArtifactContentHash("nope", {}); } catch { threw = true; }
     report(threw, "(AC-6) 미지원 계층의 contentHash 요청은 던진다(조용한 스킵 금지)");
+  }
+
+  // ---- (CH-1)~(CH-8) instance 부재 fail-closed (순서 9번) ----
+  //
+  //      **왜 이 절이 있는가.** `computeArtifactContentHash`는 `layer`가 지원 밖이면
+  //      던지면서 `instance`에 대해서는 아무것도 보지 않았다 — `instance?.[key]`가 전부
+  //      undefined를 대입하고 JSON.stringify가 undefined 값 프로퍼티를 생략하므로,
+  //      **없는 본문에 대해 진짜처럼 보이는 64자 무결성 토큰**을 조용히 돌려줬다.
+  //      실측(수정 전): null·undefined·false·123·"abc"·[]·[{}]·{} 여덟 입력이 전부
+  //      같은 값 44136fa3…caaff8a(= `'{}'`의 SHA-256)였다.
+  //
+  //      **양방향으로 본다.** 금지 방향만 두면 게이트가 너무 넓어져 정상 객체까지 막는
+  //      회귀를 놓친다. `(CH-1)`이 허용 방향을 **정본 리터럴 해시**에 대고 먼저 고정한다 —
+  //      「수정 전후가 서로 같다」가 아니라 「기록된 값과 같다」여야 한다. 서로 비교는
+  //      두 미지값의 `===`라 양쪽이 함께 틀어지면 우연히 PASS한다(8번 ②가 닫은 모양).
+  const EMPTY_CANONICAL_SHA256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+
+  // ---- (CH-1) 허용 방향: 정상 instance는 기존과 바이트 동일한 해시 ----
+  //      픽스처 파일이 아니라 **자기완결 리터럴**을 쓴다. 픽스처가 바뀌면 이 앵커가
+  //      함께 움직여 「가드가 해시를 바꾸지 않았다」를 더 이상 증명하지 못한다.
+  //      아래 상수는 가드를 넣기 **전** 트리에서 측정한 값이다(2026-08-25).
+  {
+    const inst = {
+      schemaVersion: "1.0.0",
+      generatedAt: "2026-08-25T00:00:00Z",
+      sourceRepoHead: "a".repeat(40),
+      contentHash: "b".repeat(64),
+      coverage: { analyzed: 2, total: 3, traversed: 3 },
+      truncated: { reason: "none", dropped_commits: 0 },
+      nodes: [{ id: "car:001", text: "고정 서술.", basis: "commit", evidence: [`commit:${"c".repeat(40)}`] }],
+    };
+    const EXPECTED = "f0d138b418c272ba738a7428cb55408714a5c0403d299e19c131e101cd0ffd23";
+    const got = computeArtifactContentHash("career", inst);
+    const ok = got === EXPECTED;
+    if (!ok) console.log(`    실제: ${got} (기대 ${EXPECTED} — 가드가 해시 산식을 바꿨다)`);
+    report(ok, "(CH-1) 허용 방향: 정상 instance의 contentHash가 가드 도입 전과 바이트 동일(정본 리터럴 대조)");
+  }
+
+  // ---- (CH-2)~(CH-6) 금지 방향: 객체가 아닌 스칼라 5종 ----
+  //      사유에 **형태 이름**이 들어가야 한다 — 「객체가 아님」만으로는 어느 형태로
+  //      들어왔는지가 로그에서 사라진다((SR-7)과 같은 규율).
+  {
+    const CASES = [
+      ["CH-2", null, "null"],
+      ["CH-3", undefined, "undefined"],
+      ["CH-4", false, "boolean"],
+      ["CH-5", 123, "number"],
+      ["CH-6", "abc", "string"],
+    ];
+    for (const [label, value, shape] of CASES) {
+      let msg = null;
+      let returned;
+      try { returned = computeArtifactContentHash("career", value); } catch (e) { msg = e.message; }
+      const ok = msg !== null && msg.includes("객체가 아닙니다") && msg.includes(shape);
+      if (!ok) console.log(`    실제(${shape}): ${msg === null ? `던지지 않고 ${returned}를 돌려줬다` : msg}`);
+      report(ok, `(${label}) 금지 방향: instance가 ${shape}이면 던진다(형태 이름 포함 — '{}'의 해시로 강등하지 않는다)`);
+    }
+  }
+
+  // ---- (CH-7) 금지 방향: 배열 ----
+  //      **따로 두는 이유는 취향이 아니다.** `typeof [] === "object"`이고 `[] !== null`
+  //      이라, 가드를 `instance === null || typeof instance !== "object"` 2분기로 짜면
+  //      **배열만 조용히 통과한다** — 그리고 그 누수는 (CH-2)~(CH-6)을 하나도 깨지
+  //      않으므로 게이트에 흔적이 남지 않는다. 즉 `Array.isArray` 팔을 지우는 변이를
+  //      관측하는 단언은 이것 하나뿐이다. 빈 배열과 비지 않은 배열을 함께 본다 —
+  //      `[{}]`는 「원소가 있으니 본문이 있다」는 착각이 가장 잘 드는 형태다.
+  {
+    const bad = [];
+    for (const value of [[], [{}], [1, 2]]) {
+      let msg = null;
+      let returned;
+      try { returned = computeArtifactContentHash("career", value); } catch (e) { msg = e.message; }
+      if (!(msg !== null && msg.includes("객체가 아닙니다") && msg.includes("array"))) {
+        bad.push(`${JSON.stringify(value)} → ${msg === null ? `${returned}` : msg}`);
+      }
+    }
+    if (bad.length > 0) console.log(`    실제: ${bad.join(" / ")}`);
+    report(bad.length === 0, "(CH-7) 금지 방향: instance가 배열이면 던진다(2분기 가드가 조용히 새는 유일한 형태 — Array.isArray 팔의 단독 관측점)");
+  }
+
+  // ---- (CH-8) 전제 고정: 병렬 재구현은 **여전히** fail-open이다 ----
+  //      `content-hash.mjs`의 `computeEvidenceContentHash`는 같은 절차의 독립
+  //      재구현인데 가드가 하나도 없다(layer 가드조차 없다). L0 프로덕션 쓰기
+  //      (`collect-git-facts.mjs`)와 검증(`invariants.mjs`)이 쓰는 것은 **이쪽**이다.
+  //
+  //      **그런데 이 파일은 슬라이스 A라 고칠 수 없다**(`9e1cdd2`, 2026-08-18 생성 —
+  //      `artifact-contract.mjs`·`write-artifact.mjs`는 `f029375`가 만든 슬라이스 B
+  //      파일이라 달랐다). 예외 표에 행을 추가하는 조건은 「그 항목이 회차 작업을
+  //      실제로 막을 때」인데 **막지 않는다** — 두 프로덕션 호출부가 모두 상위에서
+  //      가드된다(`collect-git-facts.mjs`는 evidence를 지역에서 조립하고,
+  //      `checkContentHashInvariant`는 `typeof evidence?.contentHash !== "string"`으로
+  //      조기 반환한다. 둘 다 코드로 확인했다). 그래서 **고치지 않고 못 박는다.**
+  //
+  //      **이 단언이 PASS라는 것은 결함이 살아 있다는 뜻이다.** 누군가 저 함수를
+  //      fail-closed로 고치면 여기가 FAIL하고, 그것은 회귀가 아니라 「이 우회로가
+  //      아직 필요한지 다시 판단하라」는 신호다 — `(SR-9)`와 같은 성격이다.
+  //      이 단언이 없으면 「computeArtifactContentHash가 fail-closed다」를 읽은
+  //      다음 회차가 **이 부류가 통째로 닫혔다고 상속한다.**
+  //      **던지는 호출을 try/catch 없이 적으면 안 된다 — 실측으로 배웠다.** 초판은
+  //      `computeEvidenceContentHash(null)`을 맨몸으로 불렀고, 그 함수를 fail-closed로
+  //      고치는 변이(M5)에서 **섹션이 통째로 중단돼** 이 절 뒤 38건이 함께 죽고 사유에
+  //      라벨조차 남지 않았다(436 PASS / 3 FAIL — 중단 가드·총량 가드만 빨개졌다).
+  //      트립와이어가 자기 이름으로 울리지 못하면 트립와이어가 아니다. `(AC-6)`의
+  //      `try { … } catch` 형태를 따른다.
+  {
+    const hashOrThrow = (v) => {
+      try { return computeEvidenceContentHash(v); } catch (e) { return `THREW:${e.message}`; }
+    };
+    const permissive = [null, undefined, false, 123, "abc", []].every(
+      (v) => hashOrThrow(v) === EMPTY_CANONICAL_SHA256
+    );
+    const strict = hashOrThrow({ schemaVersion: "1.0.0" }) !== EMPTY_CANONICAL_SHA256;
+    const ok = permissive && strict;
+    if (!ok) {
+      console.log(`    실제: permissive=${permissive} strict=${strict} — 비객체 응답 ${JSON.stringify([null, undefined, false, 123, "abc", []].map(hashOrThrow).map((s) => s.slice(0, 24)))}`);
+      console.log("    이 단언의 FAIL은 회귀가 아닐 수 있다: content-hash.mjs가 fail-closed로 고쳐졌다면 이 우회로가 아직 필요한지 다시 판단하라((SR-9)와 같은 성격).");
+    }
+    report(
+      ok,
+      "(CH-8) 전제 고정: computeEvidenceContentHash는 비객체에 여전히 '{}'의 해시를 돌려준다" +
+      "(content-hash.mjs는 슬라이스 A 수정 금지 — 이 비대칭은 닫힌 것이 아니라 못 박아 둔 것이다)"
+    );
   }
 
   // ---- (AC-7) (g) 금지 방향: draft 단계가 verification을 기입하면 위반 ----
