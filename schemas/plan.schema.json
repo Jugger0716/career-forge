@@ -170,7 +170,7 @@
         },
         {
           "if": { "properties": { "evidence": { "maxItems": 0 } } },
-          "then": { "properties": { "basis": { "const": "insufficient" } } }
+          "then": { "properties": { "basis": { "enum": ["insufficient", "external"] } } }
         },
         {
           "if": { "properties": { "type": { "const": "coding-problem" } } },
