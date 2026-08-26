@@ -93,6 +93,7 @@ import {
   projectLedgerForSkills,
   checkStorageBoundary,
   STATE_DIR_NAME,
+  STATE_FILE_NAME,
 } from "../scripts/lib/store.mjs";
 import { collectGitFacts, _internal as collectorInternal } from "../scripts/collect-git-facts.mjs";
 import { computeSampling, CANONICAL_SAMPLING_METHOD_LITERAL } from "../scripts/lib/sampling.mjs";
@@ -483,7 +484,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       12번의 (RG-1)~(RG-3) 루트 CLAUDE.md 색인 가드 487 → 490.
   //       13번 (a)의 (RR-1)~(RR-9) 레지스트리 판독·AC-22 스테일 축 490 → 499.
   //       13번 (b)의 (RM-1)~(RM-8) knowledge-map·gap-report 렌더 진입점 499 → 509.
-  default: 509,
+  //       13번 (c)의 (SG-1)~(SG-8) skill-gap 배선(0단계 스테일·D3·쓰기/렌더) 509 → 517.
+  default: 517,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -8455,6 +8457,238 @@ function runLayerRenderSmoke() {
   }
 }
 
+/**
+ * skill-gap 오케스트레이션 배선 — 순서 13번 (c).
+ *
+ * **왜 SP-* 절과 따로 있는가.** 저 절은 `skills/**` **전체**에 거는 공통 요구이고,
+ * 여기는 skill-gap 하나에만 있는 배선(0단계 스테일 판정 · D3 · 두 계층 쓰기·렌더)을 본다.
+ * 저기에 섞으면 career-from-git이 없는 요구를 받아 오탐이 난다.
+ *
+ * **이 절의 대부분은 소스 스캔이고, 그 한계를 감추지 않는다** — SP-* 계열과 같은
+ * **보조 방어**다. 문서가 명령을 적었다고 오케스트레이션이 그것을 부른다는 보장은 없다.
+ * 집행은 각 스크립트의 종료 코드가 하고, 그 종료 코드가 사용자 판단으로 이어지는지는
+ * **사람이 도그푸딩(AC-20)에서만** 확인할 수 있다.
+ *
+ * **다만 (SG-3)은 그 한계를 한 축에서 넘는다** — SP-10과 같은 모양으로, 문서에서 명령을
+ * 추출해 **실제로 실행**하고 판정에 도달하는지 본다. 인자가 모자라면 그 전에 죽는다.
+ */
+function runSkillGapWiringSmoke() {
+  console.log("[skill-gap 배선 오라클] 0단계 스테일 판정·D3·두 계층 쓰기/렌더가 절차서에 배선됐는가 (순서 13번 (c))");
+
+  const SKILL_REL = "skills/skill-gap/SKILL.md";
+  const TEMPLATE_RELS = [
+    "skills/skill-gap/templates/knowledge-mapper.md",
+    "skills/skill-gap/templates/gap-analyzer.md",
+    "skills/skill-gap/templates/gap-fact-checker.md",
+  ];
+
+  const tracker = makeReadTracker();
+  const skillText = tracker.readText(SKILL_REL) ?? "";
+  for (const rel of TEMPLATE_RELS) tracker.readText(rel);
+
+  // ---- (SG-1) 전제: 대상이 실재하고 전부 판독됐는가 ----
+  //      아래 금지·허용 방향은 텍스트가 빈 문자열이면 전부 공허해진다 —
+  //      SP-1/SP-1b가 세운 선례를 그대로 따른다.
+  {
+    const rels = [SKILL_REL, ...TEMPLATE_RELS];
+    const failed = rels.filter((r) => tracker.failed(r));
+    const ok = failed.length === 0 && skillText.length > 0;
+    if (!ok) console.log(`    실제: 판독 실패 ${JSON.stringify(tracker.blameFor(rels))}`);
+    report(
+      ok,
+      `(SG-1) 전제: skill-gap 문서 ${rels.length}건(절차서 1 + 템플릿 3)이 실재하고 전부 판독됐다` +
+      "(판독 실패를 '위반 0건'으로 집계하지 않는다)"
+    );
+  }
+
+  /** 펜스 코드 블록만 뽑는다 — 명령은 줄바꿈으로 이어지므로 줄 단위로는 못 본다. */
+  const fenced = (text) => {
+    const blocks = [];
+    let cur = null;
+    for (const line of text.split("\n")) {
+      if (/^\s*```/.test(line)) {
+        if (cur === null) cur = [];
+        else { blocks.push(cur.join("\n")); cur = null; }
+        continue;
+      }
+      if (cur !== null) cur.push(line);
+    }
+    return blocks;
+  };
+  const skillBlocks = fenced(skillText);
+  const blocksWith = (cmd) => skillBlocks.filter((b) => b.includes(cmd));
+
+  const REGISTRY_CMD = "node scripts/read-registry.mjs";
+  const registryBlocks = blocksWith(REGISTRY_CMD);
+
+  // ---- (SG-2) 0단계 배선: 스테일 판정을 실제로 부르는가 ----
+  //      **이것이 없으면 (a)가 만든 CLI는 아무도 부르지 않는 코드다.** AC-22가
+  //      요구하는 「오래된 근거 경고」는 그 호출 지점에서만 생기고, 절차서가 그것을
+  //      적지 않으면 스크립트가 있다는 사실만으로는 아무 일도 일어나지 않는다.
+  {
+    const withLayer = registryBlocks.filter((b) => b.includes("--layer career"));
+    const ok = registryBlocks.length >= 1 && withLayer.length >= 1;
+    if (!ok) console.log(`    실제: read-registry 호출 블록 ${registryBlocks.length}건 / --layer career 동반 ${withLayer.length}건`);
+    report(
+      ok,
+      "(SG-2) 절차서가 `node scripts/read-registry.mjs --layer career` 호출 블록을 담는다 — " +
+      "AC-22의 스테일 경고는 이 호출 지점에서만 생긴다(없으면 (a)의 CLI가 죽은 코드다)"
+    );
+  }
+
+  // ---- (SG-3) 그 명령이 **실제로 판정에 도달하는가** ----
+  //      SP-10과 같은 축이다. (SG-2)는 「적혀 있는가」까지만 보므로 인자 이름이
+  //      바뀌거나 조합이 무효가 되면 다시 초록으로 통과한다. 여기서는 추출해 실행하고
+  //      **판정 줄**을 요구한다 — 인자가 모자라면 exit 2로 그 전에 죽는다.
+  //
+  //      치환표에 없는 자리표시자가 남으면 FAIL이다(SP-10과 같은 드리프트 가드).
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-sg3-"));
+    try {
+      const repoDir = path.join(tmp, "repo");
+      crInitRepo(repoDir);
+      crWriteFile(repoDir, "README.md", "# fixture\n");
+      crGit(repoDir, ["add", "-A"]);
+      const head = crCommitWithDates(repoDir, "chore: init", "2026-08-26T00:00:00Z", "2026-08-26T00:00:00Z");
+
+      const rootDir = path.join(tmp, "store", STATE_DIR_NAME);
+      fs.mkdirSync(rootDir, { recursive: true });
+      const { fileName: careerFile } = ARTIFACT_LAYERS.career;
+      fs.writeFileSync(path.join(rootDir, careerFile), JSON.stringify({ schemaVersion: "0.1.0", sourceRepoHead: head }), "utf8");
+      fs.writeFileSync(path.join(rootDir, STATE_FILE_NAME), JSON.stringify({
+        schemaVersion: STATE_SCHEMA_VERSION,
+        updatedAt: "2026-08-26T00:00:00Z",
+        artifacts: { ...EMPTY_REGISTRY_ARTIFACTS, career: { path: careerFile, schemaVersion: "0.1.0", generatedBySkill: "career-from-git" } },
+      }), "utf8");
+
+      const SUBST = { "<저장 루트>": rootDir, "<레포 경로>": repoDir };
+      const failures = [];
+      for (const block of registryBlocks) {
+        let cmd = block.split("\\\n").join(" ").split("\n").join(" ");
+        cmd = cmd.replace(/\[[^\]]*\]/g, " ");
+        for (const [ph, val] of Object.entries(SUBST)) cmd = cmd.split(ph).join(val);
+        const leftover = cmd.match(/<[^>]*>/g) ?? [];
+        if (leftover.length > 0) {
+          failures.push(`치환표에 없는 자리표시자 ${JSON.stringify(leftover)}`);
+          continue;
+        }
+        const tokens = cmd.trim().split(/\s+/);
+        const argv = tokens.slice(tokens.indexOf("scripts/read-registry.mjs") + 1);
+        const ran = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "read-registry.mjs"), ...argv], {
+          cwd: REPO_ROOT, encoding: "utf8",
+        });
+        const out = `${ran.stdout ?? ""}${ran.stderr ?? ""}`;
+        // 신선한 픽스처를 놓았으므로 [FRESH] exit 0이 기대값이다. 인자가 모자라면
+        // exit 2로 그 전에 죽고, 그때 나오는 것은 [INPUT_ERROR]다.
+        if (ran.status !== 0 || !out.includes("[FRESH]")) {
+          failures.push(`판정에 도달하지 못했다(exit=${ran.status}) — ${out.slice(0, 200).split("\n").join(" ")}`);
+        }
+      }
+      const ok = registryBlocks.length >= 1 && failures.length === 0;
+      if (!ok) console.log(`    실제: 호출 블록 ${registryBlocks.length}건 / 실패 ${JSON.stringify(failures)}`);
+      report(
+        ok,
+        "(SG-3) 절차서에서 추출한 스테일 판정 명령을 **전부** 실제로 실행하면 인자 검증을 통과해 " +
+        "[FRESH] exit 0까지 도달한다(적혀 있는가가 아니라 도는가)"
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // ---- (SG-4) 네 종료 코드를 문서화하고 3과 4를 **다른 조치**로 가르는가 ----
+  //      뭉뚱그리면 (a)가 코드를 나눈 이유가 절차서에서 사라진다. exit 3은 사용자
+  //      판단이고 exit 4는 재수집 안내다 — 둘을 같은 칸에 적으면 스테일 경고가
+  //      「그냥 계속」으로 소비된다.
+  {
+    const hasAllCodes = ["FRESH", "STALE", "UNRESOLVED"].every((k) => skillText.includes(k)) ||
+      ["신선", "스테일", "판정 불가"].every((k) => skillText.includes(k));
+    const separatesThreeAndFour =
+      /exit 3/.test(skillText) && /exit 4/.test(skillText) &&
+      skillText.includes("계속/중단") && skillText.includes("재수집");
+    const ok = hasAllCodes && separatesThreeAndFour;
+    if (!ok) console.log(`    실제: 코드 열거=${hasAllCodes} 3·4 구별=${separatesThreeAndFour}`);
+    report(
+      ok,
+      "(SG-4) 절차서가 스테일 판정의 세 판정을 열거하고 exit 3(사용자 계속/중단 판단)과 " +
+      "exit 4(재수집 안내)를 **다른 조치**로 가른다(뭉뚱그리면 (a)가 코드를 나눈 이유가 사라진다)"
+    );
+  }
+
+  const VERIFIER_CMD = "node scripts/verify-evidence.mjs";
+  const verifyBlocks = blocksWith(VERIFIER_CMD);
+
+  // ---- (SG-5) D3 잔여 절반: 저자를 config에서 읽는가 ----
+  //      (SP-9)는 `--identity`도 허용한다 — 단발 실행 경로가 있기 때문이다. 그러나
+  //      결정 D3은 스킬 경로에서 **config를 정본으로 삼는다**고 정했고, 손으로 넘기면
+  //      0단계에서 확정한 집합과 갈릴 수 있다. 그 갈림은 저자 대조 축을 조용히 약화시킨다.
+  {
+    const offenders = verifyBlocks.filter((b) => !b.includes("--config"));
+    const ok = verifyBlocks.length >= 1 && offenders.length === 0;
+    if (!ok) console.log(`    실제: 인용 검증 블록 ${verifyBlocks.length}건 중 --config 누락 ${offenders.length}건`);
+    report(
+      ok,
+      "(SG-5) skill-gap의 인용 검증 호출이 --config로 저자를 읽는다(결정 D3의 잔여 절반 — " +
+      "손으로 조립하면 0단계 확정 집합과 갈릴 수 있다)"
+    );
+  }
+
+  // ---- (SG-6) 상위 계층을 함께 넘기는가 ----
+  //      스펙 8단계 (b): 계층을 하나씩 넘기면 checkLayerRefs가 그 노드를 위반이 아니라
+  //      `unverifiable`로 분류한다 — AC-14의 「미해결 참조 0건」이 참이 아니라 **미검증**
+  //      인데도 리포트상 위반 0건으로 보인다. `--out-dir`이 그 갈래를 닫는다.
+  {
+    const offenders = verifyBlocks.filter((b) => !b.includes("--out-dir"));
+    const ok = verifyBlocks.length >= 1 && offenders.length === 0;
+    if (!ok) console.log(`    실제: 인용 검증 블록 ${verifyBlocks.length}건 중 --out-dir 누락 ${offenders.length}건`);
+    report(
+      ok,
+      "(SG-6) 인용 검증 호출이 --out-dir로 전 계층을 함께 넘긴다(스펙 8단계 (b) — 상위 계층이 빠지면 " +
+      "위반이 아니라 unverifiable로 새어 위반 0건처럼 보인다)"
+    );
+  }
+
+  /** 절차서에서 `<명령> --layer X` 형태의 계층 이름을 뽑는다. */
+  const layersOf = (cmd) => {
+    const found = new Set();
+    for (const b of blocksWith(cmd)) {
+      for (const m of b.matchAll(/--layer\s+([a-z-]+)/g)) found.add(m[1]);
+    }
+    return found;
+  };
+  const writeLayers = layersOf("node scripts/write-artifact.mjs");
+  const renderLayers = layersOf("node scripts/render-markdown.mjs");
+
+  // ---- (SG-7) 쓰는 계층이 전부 유효한 계층 이름인가 ----
+  //      **닻은 ARTIFACT_LAYERS다.** 절차서에 오타가 있으면 그 명령은 실행 시
+  //      exit 2로 죽는데, 그 사실은 사람이 돌려 보기 전까지 드러나지 않는다.
+  {
+    const invalid = [...writeLayers].filter((l) => !ARTIFACT_LAYERS[l]);
+    const ok = writeLayers.size >= 1 && invalid.length === 0;
+    if (!ok) console.log(`    실제: 쓰기 계층 ${JSON.stringify([...writeLayers])} / 유효하지 않음 ${JSON.stringify(invalid)}`);
+    report(
+      ok,
+      `(SG-7) 절차서의 쓰기 경계 호출이 다루는 계층 ${JSON.stringify([...writeLayers])}이 전부 ARTIFACT_LAYERS의 유효한 키다` +
+      "(닻은 표이지 이 파일의 리터럴이 아니다)"
+    );
+  }
+
+  // ---- (SG-8) 쓴 계층을 전부 사용자 표면에도 내는가 ----
+  //      **집합을 문서에서 파생한다.** 리터럴로 두 계층을 적으면 세 번째 계층이 늘 때
+  //      이 단언이 따라가지 않는다. 쓰기만 하고 렌더하지 않는 계층이 생기면 그 산출물은
+  //      JSON에만 존재하고, 강등 배지·커버리지·절단 고지가 사용자에게 닿지 않는다.
+  {
+    const unrendered = [...writeLayers].filter((l) => !renderLayers.has(l));
+    const ok = writeLayers.size >= 1 && renderLayers.size >= 1 && unrendered.length === 0;
+    if (!ok) console.log(`    실제: 쓰기 ${JSON.stringify([...writeLayers])} / 렌더 ${JSON.stringify([...renderLayers])} / 렌더 누락 ${JSON.stringify(unrendered)}`);
+    report(
+      ok,
+      "(SG-8) 절차서가 쓰는 계층은 전부 렌더 호출도 갖는다(쓰기만 하고 사용자 표면에 내지 않는 계층이 없다 — " +
+      "배지·커버리지·절단 고지가 닿는 유일한 표면이다)"
+    );
+  }
+}
+
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
@@ -8477,6 +8711,7 @@ function runCommonSections() {
   runSection("루트 지침 오라클(순서 12번)", runRootGuideSmoke);
   runSection("레지스트리 판독 오라클(구현 8단계·AC-22)", runRegistryReaderSmoke);
   runSection("계층 렌더 진입점 오라클(순서 13번 (b))", runLayerRenderSmoke);
+  runSection("skill-gap 배선 오라클(순서 13번 (c))", runSkillGapWiringSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);
