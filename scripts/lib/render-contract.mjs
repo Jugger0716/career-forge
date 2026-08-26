@@ -170,3 +170,38 @@ export const RENDER_REQUIRED_ELEMENTS = Object.freeze([
     },
   },
 ]);
+
+/**
+ * **일부 계층에만 있는 필드**의 렌더 계약(순서 13번 (b)).
+ *
+ * `RENDER_REQUIRED_ELEMENTS`와 나눠 두는 이유는 하나다 — 저 목록은 career 오라클이
+ * 전량 루프로 돌리므로, 여기 것을 섞으면 career에서 **항상 참인 단언 두 개**가 늘어난다.
+ * 공허 PASS를 라벨째 늘리는 것은 이 레포가 반복해서 지운 형태다. 그래서 이 목록은
+ * 그 필드를 실제로 담은 계층의 오라클만 소비한다.
+ *
+ * `applies(instance)`가 거짓이면 그 계층에서는 **검사 대상이 아니다**(공허 PASS가 아니라
+ * 애초에 돌지 않는다). 호출부가 그 구분을 하도록 `probe`와 분리해 둔다.
+ */
+export const LAYER_FIELD_ELEMENTS = Object.freeze([
+  {
+    id: "topic",
+    why: "knowledge-map·gap-report의 주제명 — 없으면 노드가 무엇에 대한 것인지 표면에서 사라진다",
+    applies: (instance) => (instance?.nodes ?? []).some((nd) => typeof nd?.topic === "string" && nd.topic !== ""),
+    probe: (md, instance) =>
+      (instance?.nodes ?? []).every((nd) => !nd?.topic || md.includes(nd.topic)),
+  },
+  {
+    id: "parent-refs",
+    why: "상위 계층 참조 — 빠지면 AC-14가 검사하는 계층 참조 무결성이 사용자 표면에서 통째로 사라진다",
+    applies: (instance) => (instance?.nodes ?? []).some((nd) => Array.isArray(nd?.parentRefs) && nd.parentRefs.length > 0),
+    probe: (md, instance) =>
+      (instance?.nodes ?? []).every((nd) => (nd?.parentRefs ?? []).every((ref) => md.includes(ref))),
+  },
+  {
+    id: "self-assessment",
+    why: "갭 리포트의 자가진단 원문 — 빠지면 '무엇과 대조한 갭인가'가 사라져 근거 없는 지적 목록이 된다",
+    applies: (instance) => (instance?.nodes ?? []).some((nd) => typeof nd?.selfAssessment === "string" && nd.selfAssessment !== ""),
+    probe: (md, instance) =>
+      (instance?.nodes ?? []).every((nd) => !nd?.selfAssessment || md.includes(nd.selfAssessment)),
+  },
+]);

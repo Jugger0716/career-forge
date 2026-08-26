@@ -59,6 +59,7 @@ import {
   EVIDENCE_BADGE,
   TRUNCATION_NOTICE_PREFIX,
   RENDER_REQUIRED_ELEMENTS,
+  LAYER_FIELD_ELEMENTS,
 } from "../scripts/lib/render-contract.mjs";
 import { renderLayer } from "../scripts/render-markdown.mjs";
 import {
@@ -481,7 +482,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       11번의 (WC-1)~(WC-6)·(AC-46) config 쓰기 주체(D3) 480 → 487.
   //       12번의 (RG-1)~(RG-3) 루트 CLAUDE.md 색인 가드 487 → 490.
   //       13번 (a)의 (RR-1)~(RR-9) 레지스트리 판독·AC-22 스테일 축 490 → 499.
-  default: 499,
+  //       13번 (b)의 (RM-1)~(RM-8) knowledge-map·gap-report 렌더 진입점 499 → 509.
+  default: 509,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -2468,14 +2470,21 @@ function runRenderContractOracleSmoke() {
   }
 
   // ---- (R-10) 미지원 계층은 조용히 넘어가지 않는다 ----
+  //
+  //      **실재하는 계층 이름을 쓰지 않는다(2026-08-26, 순서 13번 (b)에서 고침).**
+  //      초판은 `knowledge-map`을 「미지원」 예시로 하드코딩했고, (b)가 그 계층을
+  //      등록하는 순간 이 단언이 FAIL했다 — 가드가 제 일을 한 것이지만, 계층이
+  //      늘 때마다 여기가 낡는 결합은 남길 이유가 없다. 이 단언이 보는 것은
+  //      **모르는 이름에 던지는가**라는 성질 하나이고, **등록된 집합이 무엇인가**는
+  //      (RM-1)이 소유한다. 두 축을 한 단언에 묶으면 어느 쪽이 깨졌는지 알 수 없다.
   {
     let threw = false;
     try {
-      renderLayer("knowledge-map", baseInstance);
+      renderLayer("no-such-layer", baseInstance);
     } catch {
       threw = true;
     }
-    report(threw, "(R-10) 미지원 계층 렌더 요청은 던진다(조용한 스킵 금지 — A-34와 같은 형태)");
+    report(threw, "(R-10) 등록되지 않은 계층 이름은 조용히 넘어가지 않고 던진다(A-34와 같은 형태 — 등록 집합 자체는 (RM-1)이 본다)");
   }
 }
 
@@ -8243,6 +8252,209 @@ function runRegistryReaderSmoke() {
   }
 }
 
+/**
+ * knowledge-map·gap-report 렌더 진입점 — 순서 13번 (b).
+ *
+ * **이 절은 내용의 정확성을 묻지 않는다 — 물을 수 없기 때문이다.** 두 계층의
+ * 인스턴스는 아직 픽스처 밖에 존재하지 않으므로 「내가 만든 픽스처를 내가 렌더했다」는
+ * 자기충족이 그대로 남아 있다(`render-markdown.mjs` 초판 헤더가 세 계층을 미루며 든
+ * 근거가 정확히 그것이었다). 그래서 여기서 묻는 것은 둘뿐이다.
+ *
+ *   (i) **계약 요소**가 출력에 실재하는가 — 계약 목록의 정본은 이 파일이 아니라
+ *       `render-contract.mjs`이므로 자기충족이 아니다.
+ *   (ii) **계층 중립성** — 같은 인스턴스를 세 계층으로 렌더하면 제목 줄을 뺀 본문이
+ *        **바이트 동일**한가. 이것은 픽스처 내용과 **무관하게** 성립해야 하는 구조
+ *        성질이라, 픽스처를 아무리 잘못 만들어도 이 단언은 속지 않는다.
+ *
+ * 내용이 실제로 옳은지는 도그푸딩(AC-20)만 답할 수 있고, 그 사실을 감추지 않는다.
+ */
+function runLayerRenderSmoke() {
+  console.log("[계층 렌더 진입점 오라클] knowledge-map·gap-report 렌더와 계층 중립성 (구현 8단계·순서 13번 (b))");
+
+  const ISO = "2026-08-26T00:00:00Z";
+  const baseHead = {
+    schemaVersion: "1.0.0",
+    generatedAt: ISO,
+    sourceRepoHead: "a".repeat(40),
+    contentHash: "b".repeat(64),
+    coverage: {
+      analyzed: 7,
+      total: 9,
+      traversed: 12,
+      period: { since: "2026-01-01", until: "2026-08-01" },
+      exclusions: { bots: true, vendoredPaths: true, mergeIncluded: false, selectedIdentities: ["owner@example.com"] },
+      samplingMethod: "none:full-scan",
+    },
+    truncated: { reason: "none", dropped_commits: 0 },
+  };
+
+  const knowledgeMap = {
+    ...structuredClone(baseHead),
+    nodes: [{
+      id: "km:001",
+      basis: "inference",
+      evidence: [{ ledgerId: `commit:${"c".repeat(40)}`, path: "src/retry.ts" }],
+      parentRefs: ["car:001"],
+      verification: { status: "refuted", attempts: 2, reasonCode: "UNSUPPORTED_CLAIM" },
+      origin: "generated",
+      locked: false,
+      topic: "Exponential Backoff",
+      text: "재시도 간격을 지수적으로 늘리는 설계를 적용한 흔적이 있다.",
+    }],
+  };
+
+  const gapReport = {
+    ...structuredClone(baseHead),
+    nodes: [{
+      id: "gap:001",
+      basis: "inference",
+      evidence: [{ ledgerId: `commit:${"c".repeat(40)}`, path: "src/retry.ts" }],
+      parentRefs: ["km:001"],
+      verification: { status: "verified", attempts: 1, reasonCode: null },
+      origin: "generated",
+      locked: false,
+      topic: "Jitter",
+      text: "백오프에 지터를 넣은 흔적이 없어 동시 재시도 몰림에 취약할 수 있다.",
+      selfAssessment: "재시도는 써 봤지만 지터는 들어만 봤다.",
+    }],
+  };
+
+  const LAYERS = [
+    { layer: "knowledge-map", title: "지식맵", instance: knowledgeMap, schema: "knowledge-map" },
+    { layer: "gap-report", title: "갭 리포트", instance: gapReport, schema: "gap-report" },
+  ];
+
+  // ---- (RM-8) 픽스처를 세계로 착각하지 않는다 ----
+  //      "렌더는 되지만 스키마는 어기는" 물건으로 계약을 확인하면, 렌더러가 옳은지가
+  //      아니라 내가 만든 물건이 렌더되는지만 보게 된다(기존 렌더 오라클의 규율).
+  for (const { layer, instance, schema } of LAYERS) {
+    const { json: layerSchema, error } = readRepoJsonSafe(path.join("schemas", `${schema}.schema.json`));
+    const errors = layerSchema === null ? [`스키마 판독 실패: ${error}`] : validateInstance(layerSchema, instance);
+    const ok = errors.length === 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(errors.slice(0, 5))}`);
+    report(ok, `(RM-8/${layer}) 이 절이 쓰는 픽스처가 ${schema}.schema.json에 적합하다(픽스처를 세계로 착각하지 않는다)`);
+  }
+
+  // ---- (RM-1) 등록된 계층 집합 — plan의 부재는 누락이 아니라 이연이다 ----
+  //      `LAYER_TITLES`는 export되지 않으므로 `renderLayer`가 던지는 메시지가 그 집합을
+  //      드러내는 유일한 표면이다. 거기서 읽는다 — 사본을 만들면 정본이 둘로 갈린다.
+  //
+  //      **CLI가 아니라 모듈을 부른다.** CLI는 `--in` 판독을 계층 검사보다 **먼저** 하므로
+  //      존재하지 않는 파일을 주면 `ENOENT`가 먼저 나고 계층 메시지는 아예 도달하지 않는다
+  //      (초판이 그렇게 써서 FAIL했고, 그 FAIL이 순서를 알려 줬다). CLI 쪽 exit 2는 아래
+  //      (RM-7)의 왕복이 실재하는 파일로 따로 관측한다.
+  {
+    let message = null;
+    try {
+      renderLayer("plan", gapReport);
+    } catch (e) {
+      message = String(e.message ?? e);
+    }
+    const ok =
+      message !== null &&
+      message.includes("career") &&
+      message.includes("knowledge-map") &&
+      message.includes("gap-report") &&
+      !message.includes("plan(") &&
+      !/지원:.*plan/.test(message);
+    if (!ok) console.log(`    실제: ${message === null ? "던지지 않았다(조용한 스킵)" : message}`);
+    report(
+      ok,
+      "(RM-1) 등록 계층은 career·knowledge-map·gap-report 셋이고 plan은 조용히 넘어가지 않고 던진다 — " +
+      "plan의 부재는 누락이 아니라 슬라이스 C 이연이며, LAYER_TITLES에 한 줄을 더하면 이 단언이 되묻는다"
+    );
+  }
+
+  // ---- (RM-2) 계층 중립성: 제목 줄만 다르고 본문은 바이트 동일 ----
+  //      이 절에서 자기충족을 피하는 축이다. 픽스처 내용이 무엇이든 성립해야 하며,
+  //      renderNode가 계층을 보고 분기하는 순간 깨진다.
+  {
+    const bodyOf = (layer, instance) => renderLayer(layer, instance).split("\n").slice(1).join("\n");
+    const bodies = ["career", "knowledge-map", "gap-report"].map((l) => bodyOf(l, gapReport));
+    const titles = ["career", "knowledge-map", "gap-report"].map((l) => renderLayer(l, gapReport).split("\n")[0]);
+    const bodiesIdentical = bodies[0] === bodies[1] && bodies[1] === bodies[2];
+    const titlesDistinct = new Set(titles).size === 3;
+    const ok = bodiesIdentical && titlesDistinct;
+    if (!ok) console.log(`    실제: 본문 동일=${bodiesIdentical} 제목=${JSON.stringify(titles)}`);
+    report(
+      ok,
+      "(RM-2) 계층 중립성: 같은 인스턴스를 세 계층으로 렌더하면 제목 줄만 다르고 본문은 바이트 동일하다 " +
+      "(renderNode가 계층으로 분기하면 여기서 깨진다 — 픽스처 내용과 무관하게 성립해야 하는 구조 성질)"
+    );
+  }
+
+  // ---- (RM-3) 두 계층이 공통 계약 요소를 전부 만족하는가 ----
+  for (const { layer, instance } of LAYERS) {
+    const md = renderLayer(layer, instance);
+    const missing = RENDER_REQUIRED_ELEMENTS.filter((el) => !el.probe(md, instance)).map((el) => el.id);
+    const ok = missing.length === 0;
+    if (!ok) console.log(`    실제: 빠진 요소=${JSON.stringify(missing)}\n${md}`);
+    report(
+      ok,
+      `(RM-3/${layer}) RENDER_REQUIRED_ELEMENTS ${RENDER_REQUIRED_ELEMENTS.length}건이 전부 출력에 실재한다` +
+      "(계약 목록의 정본은 render-contract.mjs이므로 자기충족이 아니다)"
+    );
+  }
+
+  // ---- (RM-4)~(RM-6) 계층 고유 필드 — 「진입점만 늘리면 된다」가 틀렸던 지점 ----
+  //      표 두 줄만 늘렸다면 이 셋이 전부 출력에서 사라진 채 녹색이었다.
+  //      `applies`가 거짓이면 **검사 대상이 아니므로 단언을 만들지 않는다** —
+  //      공허 PASS를 라벨째 늘리지 않는다.
+  {
+    const LABELS = {
+      "topic": "RM-4",
+      "parent-refs": "RM-5",
+      "self-assessment": "RM-6",
+    };
+    for (const el of LAYER_FIELD_ELEMENTS) {
+      const targets = LAYERS.filter(({ instance }) => el.applies(instance));
+      // 대상이 0건이면 이 절의 픽스처가 그 필드를 담지 않은 것이고, 그것은
+      // 「통과」가 아니라 **관측 공백**이다. 조용히 넘기지 않고 FAIL시킨다.
+      if (targets.length === 0) {
+        report(false, `(${LABELS[el.id]}/${el.id}) 관측 공백: 이 절의 픽스처 어느 것도 '${el.id}'를 담지 않아 검사 대상이 0건이다`);
+        continue;
+      }
+      const failed = targets.filter(({ layer, instance }) => !el.probe(renderLayer(layer, instance), instance)).map((t) => t.layer);
+      const ok = failed.length === 0;
+      if (!ok) console.log(`    실제: 빠진 계층=${JSON.stringify(failed)}`);
+      report(
+        ok,
+        `(${LABELS[el.id]}/${el.id}) 대상 ${targets.length}계층(${targets.map((t) => t.layer).join("·")})의 출력에 실재: ${el.why}`
+      );
+    }
+  }
+
+  // ---- (RM-7) CLI 왕복 — 모듈만 통과하고 CLI가 막히는 상태를 만들지 않는다 ----
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-render-"));
+    try {
+      const inPath = path.join(tmp, "gap-report.json");
+      const outPath = path.join(tmp, "gap-report.md");
+      fs.writeFileSync(inPath, JSON.stringify(gapReport), "utf8");
+      const r = spawnSync(
+        process.execPath,
+        [path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "gap-report", "--in", inPath, "--out", outPath],
+        { encoding: "utf8" }
+      );
+      let md = null;
+      try { md = fs.readFileSync(outPath, "utf8"); } catch { /* 부재가 곧 FAIL이다 */ }
+      const ok =
+        r.status === 0 &&
+        md !== null &&
+        md.startsWith("# 갭 리포트") &&
+        md.includes("재시도는 써 봤지만 지터는 들어만 봤다.");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${(r.stderr ?? "").slice(0, 250)} md=${String(md).slice(0, 200)}`);
+      report(
+        ok,
+        "(RM-7) CLI 왕복: --layer gap-report가 exit 0으로 파일을 쓰고 그 안에 제목과 자가진단 원문이 실린다" +
+        "(모듈만 통과하고 CLI 진입점이 막히는 상태를 만들지 않는다)"
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+}
+
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
@@ -8264,6 +8476,7 @@ function runCommonSections() {
   runSection("config 쓰기 주체 오라클(결정 D3)", runConfigWriterSmoke);
   runSection("루트 지침 오라클(순서 12번)", runRootGuideSmoke);
   runSection("레지스트리 판독 오라클(구현 8단계·AC-22)", runRegistryReaderSmoke);
+  runSection("계층 렌더 진입점 오라클(순서 13번 (b))", runLayerRenderSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);
