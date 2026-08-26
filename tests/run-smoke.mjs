@@ -479,7 +479,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       9번의 (CH-1)~(CH-8) instance 부재 fail-closed 466 → 474.
   //       10번의 (AC-43)~(AC-45)·(WA-30)~(WA-32) prev 유래 스키마 위반 전용 HOLD 474 → 480.
   //       11번의 (WC-1)~(WC-6)·(AC-46) config 쓰기 주체(D3) 480 → 487.
-  default: 487,
+  //       12번의 (RG-1)~(RG-3) 루트 CLAUDE.md 색인 가드 487 → 490.
+  default: 490,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3887,8 +3888,12 @@ function runIgnoredPathReferenceSmoke() {
   const tracked = ls.status === 0 ? ls.stdout.trim().split("\n").filter(Boolean) : [];
 
   // 스캔 대상: 죽은 경로가 게이트를 깨는 표면만.
+  // **루트 `CLAUDE.md`를 스캔 집합에 넣는다(순서 12번).** 이 파일은 추적되고 **모든 세션이
+  // 읽는다** — 그 안에서 추적되지 않는 도구 디렉터리를 가리키면 새 클론의 세션이 없는
+  // 파일로 안내받는다. 이 가드가 막으려는 「워킹 트리는 녹색인데 새 클론에서만 깨진다」의
+  // 가장 비싼 형태다(사람이 아니라 다음 세션 전체가 잘못된 곳을 본다).
   const scanned = tracked.filter(
-    (f) => f.endsWith(".mjs") || f === "README.md" || (f.startsWith("skills/") && f.endsWith(".md"))
+    (f) => f.endsWith(".mjs") || f === "README.md" || f === "CLAUDE.md" || (f.startsWith("skills/") && f.endsWith(".md"))
   );
   // 스캔 대상을 **한 번만** 판독해 보관한다(초판은 DH-1b와 DH-1c가 각자 전량을 다시 읽어
   // 같은 파일을 두 번 열었다). 판독 실패는 **빈 문자열로 강등하지 않고** 목록에 남긴다 —
@@ -7887,6 +7892,75 @@ function runConfigWriterSmoke() {
   }
 }
 
+/**
+ * 루트 `CLAUDE.md`의 문서 색인이 실재하는 경로를 가리키는가 — 순서 12번.
+ *
+ * **왜 이 절이 따로 있는가.** `validate-plugin.mjs`의 `checkDocPathReferences`가 같은 검사를
+ * 하지만 대상이 `README.md`와 각 스킬의 `SKILL.md`뿐이라 루트 `CLAUDE.md`는 **그 집합 밖**이다.
+ * 그 파일은 슬라이스 A이고 예외 표에도 없으므로 대상 목록을 넓히지 않았다 — 대신 같은
+ * 검사를 슬라이스 B 파일인 여기 세운다.
+ *
+ * **추출 규칙을 일부러 좁게 잡았다.** `extractPathReferences`는 export돼 있지 않아 재사용할
+ * 수 없고, 그 정교한 규칙(코드펜스 제거·URL 배제·접두사 표)을 여기 베끼면 **같은 판정의
+ * 사본이 둘**이 된다. 그래서 흉내내지 않고, 백틱 안에서 레포 최상위 디렉터리로 시작하는
+ * 토큰만 본다. 놓치는 형태가 있지만 **틀린 판정을 내지는 않는다** — 이 절이 잡으려는 것은
+ * 「색인이 가리키는 문서가 사라졌다」 하나다.
+ *
+ * **이 파일이 왜 중요한가.** 모든 세션이 읽는 색인이라, 경로 하나가 썩으면 그 뒤의 모든
+ * 세션이 없는 파일을 찾는다. 사람이 한 번 헤매는 것과 달리 **비용이 세션마다 반복된다.**
+ */
+function runRootGuideSmoke() {
+  console.log("[루트 지침 오라클] CLAUDE.md의 문서 색인이 실재하는 경로를 가리키는가(순서 12번)");
+
+  const REL = "CLAUDE.md";
+  const { text, error } = readRepoTextSafe(REL);
+
+  // ---- (RG-1) 전제: 파일이 실재하고 읽힌다 ----
+  {
+    const ok = error === null && typeof text === "string" && text.length > 0;
+    if (!ok) console.log(`    실제: ${error ?? "내용이 비었다"}`);
+    report(ok, `(RG-1) 전제: 루트 ${REL}이 실재하고 판독된다(이것이 실패하면 아래 단언은 공허하다)`);
+  }
+
+  // ---- (RG-2) 색인이 가리키는 레포 경로가 전부 실재하는가 ----
+  {
+    const TOP_DIRS = ["docs/", "scripts/", "schemas/", "skills/", "tests/", "fixtures/", "references/"];
+    const body = text ?? "";
+    const refs = [...new Set(
+      [...body.matchAll(/`([^`\n]+)`/g)]
+        .map((m) => m[1].trim())
+        .filter((c) => TOP_DIRS.some((d) => c.startsWith(d)))
+        .filter((c) => /^[\w.\-/]+$/.test(c))
+    )];
+    const missing = refs.filter((r) => !fs.existsSync(path.join(REPO_ROOT, r)));
+    const ok = error === null && refs.length >= 1 && missing.length === 0;
+    if (!ok) {
+      console.log(`    실제: ${error !== null ? error : `참조 ${refs.length}건 / 부재 ${JSON.stringify(missing)}`}`);
+    }
+    report(
+      ok,
+      `(RG-2) ${REL}이 백틱으로 가리키는 레포 경로가 전부 실재한다(참조 0건이면 색인이 비었다는 뜻이므로 그것도 FAIL)`
+    );
+  }
+
+  // ---- (RG-3) 전역 지침과 중복하지 않는가 ----
+  //      12번의 완료 조건이 「전역 `CLAUDE.md`와 중복되는 언어·라우팅 규약은 넣지
+  //      않는다」였다. 중복은 곧 드리프트다 — 두 곳에 적으면 한쪽만 고쳐진다.
+  //      **금지 방향만 두면 빈 파일이 통과하므로** (RG-2)가 허용 방향을 받친다.
+  {
+    const body = text ?? "";
+    const FORBIDDEN = [
+      ["기계적 수집", "서브에이전트 모델 라우팅(전역 소관)"],
+      ["sonnet", "모델 티어 지정(전역 소관)"],
+      ["/handoff resume", "세션 연속성 절차(전역 소관)"],
+    ];
+    const hits = FORBIDDEN.filter(([needle]) => body.includes(needle)).map(([, why]) => why);
+    const ok = error === null && hits.length === 0;
+    if (!ok) console.log(`    실제: ${error !== null ? error : `전역 지침과 중복 ${JSON.stringify(hits)}`}`);
+    report(ok, `(RG-3) ${REL}이 전역 지침 소관(모델 라우팅·세션 연속성)을 복제하지 않는다(두 곳에 적으면 갈린다)`);
+  }
+}
+
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
@@ -7906,6 +7980,7 @@ function runCommonSections() {
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("config 쓰기 주체 오라클(결정 D3)", runConfigWriterSmoke);
+  runSection("루트 지침 오라클(순서 12번)", runRootGuideSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);
