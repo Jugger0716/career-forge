@@ -10,7 +10,8 @@ Claude Code 플러그인이다. 모든 인용의 실재성은 LLM이 아니라 �
 > **된 것**: L0 수집기(`scripts/collect-git-facts.mjs`)·인용 검증기
 > (`scripts/verify-evidence.mjs`)·Layer 1 기계 검증(`scripts/validate-plugin.mjs`)과
 > 7개 JSON Schema(`schemas/`)에 더해, 산출물 쓰기 경계(`scripts/write-artifact.mjs`)·
-> 원장 투영(`scripts/project-ledger.mjs`)·마크다운 렌더(`scripts/render-markdown.mjs`)와
+> 설정 쓰기 경계(`scripts/write-config.mjs`)·원장 투영(`scripts/project-ledger.mjs`)·
+> 마크다운 렌더(`scripts/render-markdown.mjs`)와
 > 경력 계층 스킬(`skills/career-from-git/`)이 구현·배선돼 있다. `npm run lint`와
 > `npm test`가 로컬에서 그대로 통과한다(아래 "빠른 시작"의 명령을 그대로 복사해 실행하면
 > 재현된다).
@@ -69,6 +70,7 @@ claude --plugin-dir /path/to/career-forge
 | `scripts/render-markdown.mjs` (JSON → 사용자 대면 `.md` 렌더러) | **구현됨** | 배지·커버리지 수치·절단 고지를 `scripts/lib/render-contract.mjs`의 계약대로 렌더한다. 배지는 `verification`에서만 파생한다. |
 | `scripts/write-artifact.mjs` (산출물이 디스크에 닿는 유일한 경로) | **구현됨** | 기입 주체 검사 → 재생성 병합 → 쓰기 직전 자기 스키마 검증 → 원자적 쓰기 → 레지스트리 갱신. 5분기 종료 코드. |
 | `scripts/project-ledger.mjs` (원장 → LLM 컨텍스트 투영) | **구현됨** | 범위 밖 커밋을 뺀 투영만 프롬프트에 들어간다. |
+| `scripts/write-config.mjs` (`config.json`이 디스크에 닿는 유일한 경로) | **구현됨** | 범위 확정 대화의 결과를 쓰기 직전 `config.schema.json`으로 자기 검증한 뒤 원자적으로 쓴다. `schemaVersion`·`updatedAt`만 스스로 채우고, 나머지는 스키마에 default가 있어도 채우지 않는다 — 무엇을 수집하고 무엇이 산출물에 남는지는 사용자 결정이다. 종료 코드 0/2. |
 | `skills/career-from-git/` (슬래시 명령) | **구현됨** | 범위 확정 대화 → 수집 → 투영 → 생성 → 2단 팩트체크 → 인용 검증 → 렌더까지의 오케스트레이션 절차와 템플릿 2종. |
 | *skills/skill-gap/*, *skills/prep-plan/* (슬래시 명령) | **미구현** | 지식맵·갭 리포트·학습 계획 계층. 디렉터리 자체가 이 레포에 없다. |
 | `references/sources.json` | **구현됨** | `basis: external` 노드의 URL allow-list. `scripts/verify-evidence.mjs`가 대조한다. |
