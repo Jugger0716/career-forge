@@ -480,7 +480,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       10번의 (AC-43)~(AC-45)·(WA-30)~(WA-32) prev 유래 스키마 위반 전용 HOLD 474 → 480.
   //       11번의 (WC-1)~(WC-6)·(AC-46) config 쓰기 주체(D3) 480 → 487.
   //       12번의 (RG-1)~(RG-3) 루트 CLAUDE.md 색인 가드 487 → 490.
-  default: 490,
+  //       13번 (a)의 (RR-1)~(RR-9) 레지스트리 판독·AC-22 스테일 축 490 → 499.
+  default: 499,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -7961,6 +7962,287 @@ function runRootGuideSmoke() {
   }
 }
 
+/**
+ * state.json 레지스트리 판독과 AC-22 「오래된 근거」 경고 — 순서 13번 (a).
+ *
+ * **이 절이 관측하는 것은 「레지스트리를 읽는 주체가 실재하는가」다.**
+ * `write-artifact.mjs`가 레지스트리를 쓰고 `state.schema.json`이 「스킬은
+ * 레지스트리로 상위 산출물을 찾는다」를 계약으로 적어 뒀지만, **읽는 쪽
+ * 프로덕션 호출자가 0건**이었다 — `write-config.mjs`가 닫은 갈래(소비자만
+ * 있고 생산자가 없음)의 정확한 거울상이다.
+ *
+ * **(RR-1)은 손으로 조립한 state.json을 쓰지 않는다.** 실제 생산자
+ * (`write-artifact.mjs`)가 쓴 것을 소비한다 — 하드코딩하면 「생산자와 소비자가
+ * 같은 모양에 합의했는가」가 검사에서 통째로 빠지고, 한쪽만 바뀌어도 이 절은
+ * 계속 녹색이다.
+ *
+ * **(RR-3)~(RR-7)이 이 절의 무게중심이다.** 판정 불가를 FRESH로 강등하지 않는
+ * 다섯 경로이며, 각각 **자기 사유 코드를 달고** 나와야 한다. 사유 없이 exit 4만
+ * 맞으면 「어느 경로로 판정을 포기했는가」를 구별할 수 없고, 그러면 한 분기가
+ * 죽어도 다른 분기가 그 자리를 메워 관측이 통과한다.
+ */
+function runRegistryReaderSmoke() {
+  console.log("[레지스트리 판독 오라클] state.json → 산출물 파일의 sourceRepoHead ↔ 현재 HEAD (구현 8단계·AC-22)");
+
+  const READ_REGISTRY = path.join(REPO_ROOT, "scripts", "read-registry.mjs");
+  const WRITE_ARTIFACT = path.join(REPO_ROOT, "scripts", "write-artifact.mjs");
+  const COLLECTOR = path.join(REPO_ROOT, "scripts", "collect-git-facts.mjs");
+  const VERIFIER = path.join(REPO_ROOT, "scripts", "verify-evidence.mjs");
+  const ISO = "2026-08-26T00:00:00Z";
+
+  // 이 절의 판독도 **절대 경로** 대상이라 파일 상단의 `readRepoTextSafe`(레포 루트
+  // 기준 상대 경로)를 쓸 수 없다 — `runConfigWriterSmoke`와 같은 사정, 같은 대가다.
+  const readJsonAt = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-registry-"));
+  try {
+    // ---- 픽스처: 커밋 1개짜리 레포 + 저장 루트 ----
+    const repoDir = path.join(tmp, "repo");
+    crInitRepo(repoDir);
+    crWriteFile(repoDir, "README.md", "# fixture\n");
+    crGit(repoDir, ["add", "-A"]);
+    const head1 = crCommitWithDates(repoDir, "chore: initial commit", ISO, ISO);
+
+    const root = path.join(tmp, "store", STATE_DIR_NAME);
+    fs.mkdirSync(root, { recursive: true });
+
+    const collected = spawnSync(
+      process.execPath,
+      [COLLECTOR, "--repo", repoDir, "--identity", OWNER_EMAIL, "--out", root],
+      { encoding: "utf8" }
+    );
+    const evidence = readJsonAt(path.join(root, "evidence.json"));
+
+    // draft — `coverage.isShallowClone`은 원장에만 있는 필드라 떨어낸다(career
+    // 스키마는 additionalProperties:false다). `verification`·`locked`의 기입 주체는
+    // 병합이므로 draft에는 담지 않는다(담으면 AUTHORSHIP 위반으로 exit 1이다).
+    const firstCommit = (evidence?.commits ?? []).find((c) => c.excluded !== true);
+    const coverage = { ...(evidence?.coverage ?? {}) };
+    delete coverage.isShallowClone;
+    const draftPath = path.join(tmp, "draft.json");
+    fs.writeFileSync(draftPath, JSON.stringify({
+      schemaVersion: evidence?.schemaVersion,
+      sourceRepoHead: evidence?.sourceRepoHead,
+      coverage,
+      truncated: evidence?.truncated,
+      nodes: [{
+        id: "car:001",
+        basis: "commit",
+        evidence: [{ ledgerId: firstCommit?.id, path: (firstCommit?.files ?? [])[0]?.path }],
+        origin: "generated",
+        text: "픽스처 레포의 README를 작성했다.",
+      }],
+    }), "utf8");
+
+    const written = spawnSync(
+      process.execPath,
+      [WRITE_ARTIFACT, "--layer", "career", "--draft", draftPath, "--root", root,
+       "--stage", "draft", "--skill", "career-from-git", "--generated-at", ISO],
+      { encoding: "utf8" }
+    );
+
+    const run = (args) => {
+      const r = spawnSync(process.execPath, [READ_REGISTRY, ...args], { encoding: "utf8" });
+      return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    };
+
+    /** 원본 루트를 건드리지 않고 state.json·career.json 사본 루트를 만든다. */
+    const cloneRoot = (tag) => {
+      const dst = path.join(tmp, tag, STATE_DIR_NAME);
+      fs.mkdirSync(dst, { recursive: true });
+      for (const f of ["state.json", "career.json"]) {
+        try {
+          fs.copyFileSync(path.join(root, f), path.join(dst, f));
+        } catch {
+          // 없으면 그 부재 자체가 그 케이스의 입력이다.
+        }
+      }
+      return dst;
+    };
+
+    // ---- (RR-1) 허용 방향: 생산자가 쓴 레지스트리를 소비자가 실제로 읽는가 ----
+    {
+      const r = run(["--root", root, "--repo", repoDir, "--layer", "career"]);
+      const state = readJsonAt(path.join(root, "state.json"));
+      const ok =
+        collected.status === 0 &&
+        written.status === 0 &&
+        state?.artifacts?.career?.path === "career.json" &&
+        r.status === 0 &&
+        r.stdout.includes("[FRESH]") &&
+        r.stdout.includes(head1);
+      if (!ok) {
+        console.log(`    실제: 수집=${collected.status} 쓰기=${written.status} 판독=${r.status}`);
+        console.log(`    stderr: ${(written.stderr + r.stderr).slice(0, 400)}`);
+      }
+      report(
+        ok,
+        "(RR-1) 왕복: write-artifact.mjs가 갱신한 state.json만으로 read-registry.mjs가 career.json을 찾아 " +
+        "현재 HEAD와 대조하고 [FRESH] exit 0에 도달한다(레지스트리 판독 주체가 실재한다)"
+      );
+    }
+
+    // ---- (RR-7) 정본 축: 레지스트리는 sourceRepoHead를 **가질 수 없다** ----
+    //      「레지스트리 값이 아니라 산출물 파일 값이 정본」(스펙 8단계·AC-16)이
+    //      규약이 아니라 **구조**임을 관측한다. state.schema.json이
+    //      additionalProperties:false이므로 그 값을 레지스트리에 넣는 순간
+    //      스키마 위반이 되고, 이 CLI는 판정을 포기한다.
+    {
+      const dst = cloneRoot("head-in-registry");
+      const s = readJsonAt(path.join(dst, "state.json"));
+      s.artifacts.career.sourceRepoHead = head1;
+      fs.writeFileSync(path.join(dst, "state.json"), JSON.stringify(s), "utf8");
+      const r = run(["--root", dst, "--repo", repoDir, "--layer", "career"]);
+      const ok = r.status === 4 && r.stderr.includes("STATE_SCHEMA_VIOLATION");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(RR-7) 정본 축: state.json에 sourceRepoHead를 넣으면 STATE_SCHEMA_VIOLATION + exit 4다 — " +
+        "레지스트리는 그 값을 **구조적으로** 가질 수 없으므로 '파일이 정본'이 규약이 아니라 스키마다"
+      );
+    }
+
+    // ---- (RR-6) 레지스트리 캐시가 파일과 갈리면 경로도 못 믿는다 ----
+    {
+      const dst = cloneRoot("version-drift");
+      const s = readJsonAt(path.join(dst, "state.json"));
+      s.artifacts.career.schemaVersion = "9.9.9";
+      fs.writeFileSync(path.join(dst, "state.json"), JSON.stringify(s), "utf8");
+      const r = run(["--root", dst, "--repo", repoDir, "--layer", "career"]);
+      const ok = r.status === 4 && r.stderr.includes("REGISTRY_SCHEMA_VERSION_DRIFT");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(RR-6) 레지스트리 캐시 schemaVersion이 산출물 파일과 갈리면 REGISTRY_SCHEMA_VERSION_DRIFT + exit 4다" +
+        "(state.schema.json이 '동일해야 한다'고 적고도 집행 코드가 없던 축)"
+      );
+    }
+
+    // ---- (RR-5) 레지스트리는 멀쩡한데 가리킨 파일이 없다 ----
+    {
+      const dst = cloneRoot("artifact-gone");
+      fs.rmSync(path.join(dst, "career.json"), { force: true });
+      const r = run(["--root", dst, "--repo", repoDir, "--layer", "career"]);
+      const ok = r.status === 4 && r.stderr.includes("ARTIFACT_UNREADABLE");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(RR-5) 레지스트리 항목은 있는데 그 경로의 산출물이 없으면 ARTIFACT_UNREADABLE + exit 4다" +
+        "(레지스트리 항목의 존재를 파일의 존재로 읽지 않는다)"
+      );
+    }
+
+    // ---- (RR-4) 아직 만들어지지 않은 계층 ----
+    {
+      const r = run(["--root", root, "--repo", repoDir, "--layer", "knowledge-map"]);
+      const ok = r.status === 4 && r.stderr.includes("LAYER_NOT_REGISTERED");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(RR-4) 레지스트리 항목이 null인 계층은 LAYER_NOT_REGISTERED + exit 4다('아직 없음'을 '최신'으로 읽지 않는다)"
+      );
+    }
+
+    // ---- (RR-3) state.json 부재 — 이 절의 핵심 ----
+    //      스펙 8단계의 「예외 중단 없이 재수집 안내 후 정상 종료」를 exit 0으로
+    //      구현하면 「최신임을 확인했다」와 「확인하지 못했다」가 같은 코드가 된다.
+    {
+      const empty = path.join(tmp, "no-state", STATE_DIR_NAME);
+      fs.mkdirSync(empty, { recursive: true });
+      const r = run(["--root", empty, "--repo", repoDir, "--layer", "career"]);
+      const ok =
+        r.status === 4 &&
+        r.stderr.includes("STATE_MISSING") &&
+        r.stdout.includes("[UNRESOLVED]") &&
+        !r.stdout.includes("[FRESH]");
+      if (!ok) console.log(`    실제: exit=${r.status} stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`);
+      report(
+        ok,
+        "(RR-3) state.json 부재는 STATE_MISSING + exit 4이고 **[FRESH]를 출력하지 않는다** — " +
+        "'확인하지 못함'을 '최신임'으로 강등하지 않는다(절대 규칙: 판독 실패를 빈 값·default로 강등 금지)"
+      );
+    }
+
+    // ---- (RR-8) 저장 경계 밖 --root ----
+    {
+      const outside = path.join(tmp, "outside-boundary");
+      fs.mkdirSync(outside, { recursive: true });
+      const r = run(["--root", outside, "--repo", repoDir, "--layer", "career"]);
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("[INPUT_ERROR]") &&
+        r.stderr.includes(STATE_DIR_NAME) &&
+        r.stderr.includes("판정을 시도하지 않았습니다");
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        `(RR-8) 경로에 ${STATE_DIR_NAME} 세그먼트가 없는 --root는 exit 2이고 판정을 시도하지 않는다(입력 오류와 판정 불가를 가른다)`
+      );
+    }
+
+    // ---- 커밋을 하나 더 쌓는다: 여기부터 산출물이 낡는다 ----
+    crWriteFile(repoDir, "README.md", "# fixture\n\nsecond\n");
+    crGit(repoDir, ["add", "-A"]);
+    const head2 = crCommitWithDates(repoDir, "docs: second commit", ISO, ISO);
+
+    // ---- (RR-2) 금지 방향: 낡은 산출물 ----
+    {
+      const r = run(["--root", root, "--repo", repoDir, "--layer", "career"]);
+      const ok =
+        r.status === 3 &&
+        r.stdout.includes("[STALE]") &&
+        r.stdout.includes(head1) &&
+        r.stdout.includes(head2) &&
+        r.stderr.includes("사용자의 결정");
+      if (!ok) console.log(`    실제: exit=${r.status} stdout=${r.stdout.slice(0, 300)}`);
+      report(
+        ok,
+        "(RR-2) 산출물의 sourceRepoHead가 현재 HEAD와 다르면 exit 3 + [STALE]이고 **두 해시를 모두 보고한다** " +
+        "(계속/중단은 사용자 결정 — write-artifact.mjs의 exit 3과 같은 성격)"
+      );
+    }
+
+    // ---- (RR-9) 두 스테일 축이 서로 다른 것을 본다 ----
+    //      원장만 재수집하면 evidence는 신선해지고 산출물은 낡은 채로 남는다.
+    //      그 상태에서 verify-evidence는 stale:false를, read-registry는 exit 3을
+    //      낸다. **한쪽을 봤다고 다른 쪽을 본 것이 아니다** — read-registry.mjs
+    //      헤더가 그렇게 주장하는데, 주장만 있고 관측이 없으면 다음 회차가
+    //      「이미 verify-evidence가 본다」로 이 파일을 지운다.
+    {
+      const recollected = spawnSync(
+        process.execPath,
+        [COLLECTOR, "--repo", repoDir, "--identity", OWNER_EMAIL, "--out", root],
+        { encoding: "utf8" }
+      );
+      const reportPath = path.join(tmp, "verify-report.json");
+      const verified = spawnSync(
+        process.execPath,
+        [VERIFIER, "--repo", repoDir, "--evidence", path.join(root, "evidence.json"),
+         "--identity", OWNER_EMAIL, "--artifact", `career=${path.join(root, "career.json")}`,
+         "--out", reportPath],
+        { encoding: "utf8" }
+      );
+      const vr = readJsonAt(reportPath);
+      const rr = run(["--root", root, "--repo", repoDir, "--layer", "career"]);
+
+      const ledgerFresh =
+        vr?.sourceRepoHeadStaleness?.checked === true && vr?.sourceRepoHeadStaleness?.stale === false;
+      const ok = recollected.status === 0 && ledgerFresh && rr.status === 3;
+      if (!ok) {
+        console.log(`    실제: 재수집=${recollected.status} 검증=${verified.status} read-registry=${rr.status}`);
+        console.log(`    원장 스테일: ${JSON.stringify(vr?.sourceRepoHeadStaleness ?? null)}`);
+      }
+      report(
+        ok,
+        "(RR-9) 원장만 재수집한 상태에서 verify-evidence는 checked:true/stale:false(원장 신선)를, " +
+        "read-registry는 exit 3(산출물 낡음)을 낸다 — 두 스테일 축은 서로 다른 것을 보므로 한쪽으로 대체할 수 없다"
+      );
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
@@ -7981,6 +8263,7 @@ function runCommonSections() {
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
   runSection("config 쓰기 주체 오라클(결정 D3)", runConfigWriterSmoke);
   runSection("루트 지침 오라클(순서 12번)", runRootGuideSmoke);
+  runSection("레지스트리 판독 오라클(구현 8단계·AC-22)", runRegistryReaderSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);
