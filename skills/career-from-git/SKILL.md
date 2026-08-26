@@ -58,7 +58,26 @@ FactChecker만 상위 티어인 이유는 그것이 이 파이프라인에서 �
    이메일을 쓰는 것이 정상이므로 단일 선택을 강요하지 않는다.
 2. **참조 범위.** `HEAD`(현재 브랜치)인지 `all`(모든 참조)인지.
 3. **머지 커밋 포함 여부**와 **기간**(생략 가능).
-4. 확정 결과를 설정 파일에 저장한다(`schemas/config.schema.json` 형식).
+4. **수집 범위 나머지를 함께 확정한다 — 파일로 쓰는 것은 1단계 **뒤**다.**
+   `config.json`의 required는 아홉이고 위 1~3이 덮는 것은 `identitySelection`·`scope`
+   둘뿐이다. 나머지도 여기서 사용자에게 확정받아라:
+
+   - `budget.maxCommits` — 수집 상한. **1단계의 `--max-commits`로 그대로 넘어간다**
+     (넘기지 않으면 수집기 기본값 1000이 쓰여 확정한 값이 무시된다).
+   - `exclusions.bots` / `.vendoredPaths` — 봇·vendored 경로 제외 여부.
+     끄려면 1단계에 `--no-bots-exclude` / `--no-vendored-exclude`를 함께 넘긴다.
+   - `storage.root` / `.repoOptIn` — 저장 루트를 홈으로 할지 대상 레포 안으로 할지.
+     레포 안은 **명시 동의가 있을 때만**이고, 1단계에 `--storage repo --repo-opt-in`을
+     함께 넘겨야 실제로 그리로 간다.
+   - `includeDiff` / `snippetQuoting` — **오늘은 아무 효과가 없는 P0 자리표시자다**
+     (`schemas/config.schema.json`의 description과 콜드 리뷰 A-38 참조 — 수집기는
+     `void includeDiff;`로 버린다). required라서 담아야 할 뿐이니, **효과가 있는 것처럼
+     사용자에게 설명하지 마라.** 둘 다 `false`가 P0 기본이다.
+
+   **왜 파일 쓰기가 1단계 뒤인가.** `write-config.mjs`는 `--root <저장 루트>`를 받는데,
+   그 값은 **1단계 출력이 알려 준다.** 여기서 경로를 지어내면 경계 검사(`.devcareer`
+   세그먼트 유무)만 통과하고 **원장과 다른 루트에 고아 `config.json`이 exit 0으로
+   기록된다** — 실측으로 확인된 경로다. 값을 확정하는 것은 여기, 쓰는 것은 1단계 뒤다.
 
 저자 선택을 건너뛰고 전체를 수집하는 경로(`--all-identities`)는 탐색·테스트
 전용이다. 실서비스 경로에서 쓰지 마라 — 그것이 「추측 금지」 게이트를
@@ -69,11 +88,40 @@ FactChecker만 상위 티어인 이유는 그것이 이 파이프라인에서 �
 ```sh
 node scripts/collect-git-facts.mjs --repo <레포 경로> \
   --identity <선택된 이메일> [--identity ...] \
-  [--ref all] [--merge-included] [--since <날짜>] [--until <날짜>]
+  [--ref all] [--merge-included] [--since <날짜>] [--until <날짜>] \
+  [--max-commits <n>] [--no-bots-exclude] [--no-vendored-exclude] \
+  [--storage home|repo] [--repo-opt-in]
 ```
+
+**0단계에서 확정한 값을 여기 전부 넘겨라.** 이 스크립트는 `config.json`을 읽지
+않는다 — 넘기지 않은 값은 확정 여부와 무관하게 **수집기 기본값**이 쓰인다
+(`--max-commits` 미지정 시 1000, `--storage` 미지정 시 홈 루트). 확정만 받고
+넘기지 않으면 사용자는 자기가 정한 범위로 수집됐다고 믿게 된다.
 
 stdout 마지막 줄들이 **원장 경로와 저장 루트**를 보고한다. 이후 단계의 경로는
 **그 출력에서 받아 쓴다** — 손으로 조립하지 마라.
+
+### 1-b. 설정 파일 기록 — 저장 루트를 알게 된 직후
+
+0단계에서 확정한 값을 파일로 남긴다. 직접 쓰지 말고 이 명령을 쓴다 —
+`config.json`이 디스크에 닿는 유일한 경로다(결정 D3).
+
+```sh
+node scripts/write-config.mjs --in <설정 입력.json> --root <1단계가 보고한 저장 루트>
+```
+
+`--in`에는 0단계에서 확정한 값을 `schemas/config.schema.json` 형식으로 담는다.
+**`schemaVersion`과 `updatedAt`은 담지 마라** — 그 둘의 주인은 이 명령이고 담아도
+덮어써진다. **나머지 일곱은 스키마에 default가 있어도 반드시 담아라**: 이 명령은
+채우지 않고 exit 2로 거부한다. 기계가 대신 고르면 사용자가 확정하지 않은 범위 위에
+그 뒤의 모든 근거가 선다.
+
+종료 코드는 0(기록) / 2(입력 오류 — **아무것도 쓰지 않았다**) 둘뿐이다. exit 2면
+`[INPUT_ERROR]` 줄이 어느 필드가 빠졌는지 경로(`$.budget` 등)로 알려 준다.
+
+**`--root`는 반드시 1단계 출력에서 받아라.** 이 명령의 경계 검사는 경로에
+`.devcareer` 세그먼트가 있는지만 본다 — 지어낸 경로도 통과하고, 없던 디렉터리를
+만들어 **원장과 다른 루트에 고아 설정 파일을 exit 0으로 기록한다.**
 
 ### 2. 투영 — LLM 컨텍스트에 넣을 형태로 좁힌다
 
@@ -172,15 +220,19 @@ node scripts/write-artifact.mjs --layer career --draft <판정 실린 JSON> \
 
 ```sh
 node scripts/verify-evidence.mjs --repo <레포 경로> \
-  --identity <선택된 이메일> [--identity ...] \
+  --config <저장 루트>/config.json \
   --evidence <원장 경로> --artifact career=<저장 루트>/career.json \
   --sources references/sources.json
 ```
 
-**저자를 반드시 넘겨라.** `--identity`(또는 `--config`)가 없으면 이 스크립트는
-검증 축에 도달하기 **전에** `selectedIdentities가 비어 있습니다`로 exit 2한다 —
-즉 아래에서 설명하는 반증이 **한 번도 실행되지 않은 채** 「검증했다」고 말하게
-된다. 값은 0단계에서 사용자가 고른 이메일 그대로다.
+**저자를 반드시 넘겨라.** `--config`도 `--identity`도 없으면 이 스크립트는 검증
+축에 도달하기 **전에** `selectedIdentities가 비어 있습니다`로 exit 2한다 — 즉
+아래에서 설명하는 반증이 **한 번도 실행되지 않은 채** 「검증했다」고 말하게 된다.
+
+**`--config`를 쓴다(결정 D3).** 1-b가 기록한 파일에서 `identitySelection.selected`를
+읽으므로 이메일을 손으로 다시 조립하지 않는다 — 손으로 넘기면 0단계에서 확정한
+집합과 여기 넘긴 집합이 갈릴 수 있고, 그 갈림은 **저자 대조 축을 조용히 약화시킨다.**
+`--identity`는 config 없이 단발로 돌릴 때만 쓴다(둘을 함께 주면 합집합이 된다).
 
 **왜 필수인가.** `--stage fact-checked`는 호출자가 넘기는 **라벨**이다.
 오케스트레이션이 FactChecker를 실제로 띄우지 않고 이 값만 넘기면 쓰기 경계는

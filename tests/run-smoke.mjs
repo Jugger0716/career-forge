@@ -77,6 +77,8 @@ import {
   EMPTY_REGISTRY_ARTIFACTS,
   STATE_SCHEMA_VERSION,
 } from "../scripts/write-artifact.mjs";
+import { CONFIG_SCHEMA_VERSION } from "../scripts/write-config.mjs";
+import { CONFIG_FILE_NAME } from "../scripts/lib/store.mjs";
 import {
   computeRepoKeyForPath,
   getRepoToplevel,
@@ -476,7 +478,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       8번 ③④의 (AC-2b)(AC-2c) 계층 키·버전 드리프트 가드 464 → 466.
   //       9번의 (CH-1)~(CH-8) instance 부재 fail-closed 466 → 474.
   //       10번의 (AC-43)~(AC-45)·(WA-30)~(WA-32) prev 유래 스키마 위반 전용 HOLD 474 → 480.
-  default: 480,
+  //       11번의 (WC-1)~(WC-6)·(AC-46) config 쓰기 주체(D3) 480 → 487.
+  default: 487,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3771,6 +3774,24 @@ function runSkillPromptContractSmoke() {
       for (const { fileName } of Object.values(ARTIFACT_LAYERS)) {
         fs.writeFileSync(path.join(rootDir, fileName), JSON.stringify({ schemaVersion: "0.1.0", nodes: [] }), "utf8");
       }
+      // **7단계가 `--config`로 저자를 넘기게 바뀌었다(순서 11번 / 결정 D3).** 그러면
+      // 이 하네스도 그 파일을 놓아 줘야 한다 — 실제로 이 절이 그 변경을 먼저 잡았다
+      // (문서화된 명령이 없는 파일을 가리켜 ENOENT + exit 2로 죽었다). 그것이 이 축의
+      // 존재 이유이므로 하네스를 맞추는 것이지 가드를 무르는 것이 아니다.
+      //
+      // **파일명 상수를 쓴다.** 리터럴을 적으면 `store.mjs`가 이름을 바꿀 때 이 절이
+      // 조용히 ENOENT로 돌아온다.
+      //
+      // 내용은 `verify-evidence`가 실제로 읽는 필드 하나(`identitySelection.selected`)만
+      // 담는다 — **여기서 스키마 적합성까지 요구하지 않는다.** 이 절이 묻는 것은
+      // 「문서화된 명령이 인자 검증을 통과하는가」이고, 진짜 쓰기 주체의 왕복은
+      // `(WC-1)`이 따로 관측한다. 둘을 겹치면 한쪽이 바뀔 때 두 곳이 함께 빨개져
+      // 어느 계약이 깨졌는지가 뭉개진다.
+      fs.writeFileSync(
+        path.join(rootDir, CONFIG_FILE_NAME),
+        JSON.stringify({ identitySelection: { candidates: [], selected: ["sp10@example.com"] } }),
+        "utf8"
+      );
 
       const SUBST = {
         "<레포 경로>": REPO_ROOT,
@@ -7614,6 +7635,258 @@ function finishMode(mode) {
 // --negative"를 단독으로 돌려 negative 픽스처 하나만 빠르게 확인하려는
 // 개발자 워크플로도 이 변경으로 실제로 빨라진다(공통 섹션의 git 서브프로세스
 // 수백 개를 더 이상 다시 스폰하지 않는다).
+/**
+ * `config.json` 쓰기 주체 오라클 — 순서 11번 / 결정 D3.
+ *
+ * **왜 이 절이 있는가.** `store.mjs`가 `readConfig`/`writeConfig` 계약을 갖고 있었지만
+ * **프로덕션 호출자가 0건**이었다 — 스펙과 스키마가 정의한 `config.json`을 실제로
+ * 만드는 주체가 레포에 없었고, 소비자(`verify-evidence --config`)만 있었다.
+ * 그 비대칭 아래에서는 「설정이 잘못됐다」가 「인자를 빠뜨렸다」로 오진된다.
+ *
+ * **완료 조건이 왕복이다.** 새 CLI가 파일을 쓰고, 그 파일 **하나만으로**
+ * `verify-evidence`가 `selectedIdentities`를 채워 exit 0에 도달하는 것을 본다.
+ * `--identity`를 함께 주면 config가 실제로 쓰였는지 알 수 없으므로 **주지 않는다** —
+ * 그리고 `(WC-2)`가 대조군으로 「config가 없으면 그 자리에서 죽는다」를 고정한다.
+ * 둘이 짝일 때만 「config가 identity의 출처였다」가 증명된다.
+ *
+ * **금지 방향을 두 갈래로 나눈다.** default가 **없는** required(`budget`)와
+ * default가 **있는** required(`snippetQuoting`)를 따로 본다 — 후자가 통과하면
+ * 이 CLI가 스키마 default로 사용자 결정을 조용히 대신 채운다는 뜻이다.
+ * 한 갈래만 보면 그 설계 결정이 관측되지 않는다.
+ *
+ * **`snippetQuoting`을 표본으로 쓰는 이유는 「위험해서」가 아니라 「default가 있어서」다.**
+ * 그 필드는 오늘 아무 효과가 없는 P0 자리표시자다(스키마 description·콜드 리뷰 A-38).
+ * 여기서 필요한 것은 **default가 선언된 required** 하나뿐이고, 그 조건을 만족하는 필드 중
+ * 하나가 이것일 뿐이다 — 효과를 현재형으로 주장하지 않는다.
+ */
+function runConfigWriterSmoke() {
+  console.log("[config 쓰기 주체 오라클] writeConfig를 감싸는 CLI가 실제로 쓰고, 그 파일만으로 검증기가 identity를 채우는가(D3)");
+
+  const WRITE_CONFIG = path.join(REPO_ROOT, "scripts", "write-config.mjs");
+  const VERIFIER = path.join(REPO_ROOT, "scripts", "verify-evidence.mjs");
+  const COLLECTOR = path.join(REPO_ROOT, "scripts", "collect-git-facts.mjs");
+  const FIXED_AT = "2026-08-25T00:00:00Z";
+
+  // 이 절의 판독은 **절대 경로** 대상이라 파일 상단의 `readRepoTextSafe`(레포 루트
+  // 기준 상대 경로)를 쓸 수 없다. 다른 절의 지역 헬퍼를 import해 오지도 않는다 —
+  // 이 레포는 절 단위 독립성을 반복해 우선해 왔고, 대가는 두 줄뿐이다.
+  const readTextAt = (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } };
+  const readJsonAt = (p) => { const t = readTextAt(p); if (t === null) return null; try { return JSON.parse(t); } catch { return null; } };
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-config-"));
+  try {
+    const repoDir = path.join(tmp, "repo");
+    buildSingleCommit(repoDir);
+
+    const root = path.join(tmp, "store", STATE_DIR_NAME);
+    fs.mkdirSync(root, { recursive: true });
+
+    const collected = spawnSync(
+      process.execPath,
+      [COLLECTOR, "--repo", repoDir, "--identity", OWNER_EMAIL, "--out", root],
+      { encoding: "utf8" }
+    );
+    const evPath = path.join(root, "evidence.json");
+
+    /** 스키마를 만족하는 설정 입력. 키 하나를 빼는 변형으로 금지 방향을 만든다. */
+    const baseInput = () => ({
+      identitySelection: { candidates: [], selected: [OWNER_EMAIL] },
+      scope: { ref: "HEAD", mergeIncluded: false, since: null, until: null },
+      budget: { maxCommits: 50 },
+      includeDiff: false,
+      exclusions: { bots: true, vendoredPaths: true },
+      storage: { root: "home", repoOptIn: false },
+      snippetQuoting: false,
+    });
+
+    const runWriteConfig = (input, targetRoot, tag) => {
+      const inPath = path.join(tmp, `in-${tag}.json`);
+      fs.writeFileSync(inPath, JSON.stringify(input), "utf8");
+      const res = spawnSync(
+        process.execPath,
+        [WRITE_CONFIG, "--in", inPath, "--root", targetRoot, "--updated-at", FIXED_AT],
+        { encoding: "utf8" }
+      );
+      return { status: res.status, stderr: res.stderr ?? "" };
+    };
+
+    // ---- (WC-1) 허용 방향: 왕복이 실제로 성립하는가 ----
+    //      `--identity`를 **주지 않는다.** 주면 config가 쓰였는지 알 수 없다.
+    let cfgPath = null;
+    {
+      const w = runWriteConfig(baseInput(), root, "ok");
+      cfgPath = path.join(root, "config.json");
+      const written = readJsonAt(cfgPath);
+
+      // 인용이 실제 커밋을 가리키는 산출물을 만들어 exit 0까지 간다 — 산출물이
+      // 0건이면 게이트 C-5가 INCONCLUSIVE로 떨어뜨려 왕복이 성립하지 않는다.
+      const ev = readJsonAt(evPath);
+      const commit = (ev?.commits ?? []).find((c) => c.excluded !== true);
+      const file = (commit?.files ?? [])[0];
+      const careerPath = path.join(root, "career.json");
+      if (ev !== null && commit !== undefined && file !== undefined) {
+        fs.writeFileSync(careerPath, JSON.stringify({
+          schemaVersion: "1.0.0",
+          generatedAt: FIXED_AT,
+          sourceRepoHead: ev.sourceRepoHead,
+          contentHash: "b".repeat(64),
+          coverage: ev.coverage,
+          truncated: ev.truncated,
+          nodes: [{
+            id: "car:001",
+            basis: "commit",
+            evidence: [{ ledgerId: commit.id, path: file.path }],
+            verification: { status: "verified", attempts: 1, reasonCode: null },
+            origin: "generated",
+            locked: false,
+            text: "초기 커밋으로 픽스처 레포의 README를 작성했다.",
+          }],
+        }), "utf8");
+      }
+
+      const verified = spawnSync(
+        process.execPath,
+        [VERIFIER, "--repo", repoDir, "--evidence", evPath, "--config", cfgPath,
+         "--artifact", `career=${careerPath}`, "--out-dir", root],
+        { encoding: "utf8" }
+      );
+
+      const ok =
+        collected.status === 0 &&
+        w.status === 0 &&
+        written !== null &&
+        written.updatedAt === FIXED_AT &&
+        typeof written.schemaVersion === "string" &&
+        verified.status === 0;
+      if (!ok) {
+        console.log(`    실제: 수집=${collected.status} write-config=${w.status} 검증=${verified.status}`);
+        console.log(`    stderr: ${(w.stderr + verified.stderr).slice(0, 400)}`);
+      }
+      report(
+        ok,
+        "(WC-1) 왕복: write-config.mjs가 config.json을 쓰고, --identity 없이 그 파일만으로 " +
+        "verify-evidence가 selectedIdentities를 채워 exit 0에 도달한다(D3 완료 조건)"
+      );
+    }
+
+    // ---- (WC-2) 대조군: config가 없으면 바로 그 자리에서 죽는가 ----
+    //      이것이 없으면 (WC-1)의 exit 0이 「config 덕분」인지 「원래 identity가
+    //      필요 없었던 것」인지 구별되지 않는다 — 두 미지값의 통과다.
+    {
+      const careerPath = path.join(root, "career.json");
+      const without = spawnSync(
+        process.execPath,
+        [VERIFIER, "--repo", repoDir, "--evidence", evPath,
+         "--artifact", `career=${careerPath}`, "--out-dir", root],
+        { encoding: "utf8" }
+      );
+      const ok = without.status === 2 && (without.stderr ?? "").includes("selectedIdentities가 비어 있습니다");
+      if (!ok) console.log(`    실제: exit=${without.status} stderr=${(without.stderr ?? "").slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-2) 대조군: 같은 호출에서 --config를 빼면 selectedIdentities가 비어 exit 2다" +
+        "(WC-1의 exit 0이 config 덕분임을 고정한다)"
+      );
+    }
+
+    // ---- (WC-3) 금지 방향: default가 **없는** required 누락 ----
+    {
+      const input = baseInput();
+      delete input.budget;
+      const target = path.join(tmp, "no-budget", STATE_DIR_NAME);
+      fs.mkdirSync(target, { recursive: true });
+      const r = runWriteConfig(input, target, "no-budget");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("[INPUT_ERROR]") &&
+        r.stderr.includes("budget") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-3) 금지 방향: required 하나가 빠진 입력은 [INPUT_ERROR] + exit 2이고 **파일이 생기지 않는다**"
+      );
+    }
+
+    // ---- (WC-4) 금지 방향: default가 **있는** required도 채우지 않는가 ----
+    //      스키마가 `snippetQuoting`에 default:false를 두었지만 이 CLI는 쓰지 않는다.
+    //      채우면 「스키마가 권하는 값」이 곧 「사용자가 확정한 값」으로 둔갑한다.
+    {
+      const input = baseInput();
+      delete input.snippetQuoting;
+      const target = path.join(tmp, "no-sq", STATE_DIR_NAME);
+      fs.mkdirSync(target, { recursive: true });
+      const r = runWriteConfig(input, target, "no-sq");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("snippetQuoting") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-4) 금지 방향: 스키마에 default가 있는 required(snippetQuoting)도 CLI가 채우지 않는다" +
+        "(「스키마가 권하는 값」이 「사용자가 확정한 값」으로 둔갑하지 않는다)"
+      );
+    }
+
+    // ---- (WC-5) 금지 방향: 저장 경계 밖 --root ----
+    {
+      const outside = path.join(tmp, "outside-boundary");
+      fs.mkdirSync(outside, { recursive: true });
+      const r = runWriteConfig(baseInput(), outside, "outside");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("[INPUT_ERROR]") &&
+        r.stderr.includes(STATE_DIR_NAME) &&
+        readTextAt(path.join(outside, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        `(WC-5) 금지 방향: 경로에 ${STATE_DIR_NAME} 세그먼트가 없는 --root는 exit 2이고 쓰지 않는다(쓰기 경계)`
+      );
+    }
+
+    // ---- (WC-6) 스탬프의 주인이 CLI인가 ----
+    //      입력이 `updatedAt`을 실어 보내도 CLI 값이 이겨야 한다. 지면 호출자가
+    //      「언제 확정한 설정인가」를 과거로 왜곡할 수 있다.
+    {
+      const input = baseInput();
+      input.updatedAt = "1999-01-01T00:00:00Z";
+      input.schemaVersion = "9.9.9";
+      const target = path.join(tmp, "stamp", STATE_DIR_NAME);
+      fs.mkdirSync(target, { recursive: true });
+      const r = runWriteConfig(input, target, "stamp");
+      const written = readJsonAt(path.join(target, "config.json"));
+      const ok =
+        r.status === 0 &&
+        written !== null &&
+        written.updatedAt === FIXED_AT &&
+        written.schemaVersion === CONFIG_SCHEMA_VERSION;
+      if (!ok) console.log(`    실제: exit=${r.status} written=${JSON.stringify(written)}`);
+      report(
+        ok,
+        "(WC-6) 입력이 실은 updatedAt·schemaVersion을 CLI 값이 덮어쓴다(두 필드의 주인은 CLI다)"
+      );
+    }
+
+    // ---- (AC-46) CONFIG_SCHEMA_VERSION ↔ config.schema.json의 default ----
+    //      (AC-2c)와 같은 축이다. 그 필드는 `pattern`만 강제하고 `const`가 아니라
+    //      **어떤 버전 문자열이든 스키마 검증을 통과한다** — 즉 「검사해서 통과」가
+    //      아니라 「검사 대상이 아니라 통과」다. 갈려도 조용하다.
+    {
+      const { json: schema, error } = readRepoJsonSafe("schemas/config.schema.json");
+      const schemaDefault = schema?.properties?.schemaVersion?.default;
+      const ok = typeof schemaDefault === "string" && schemaDefault === CONFIG_SCHEMA_VERSION;
+      if (!ok) {
+        console.log(`    실제: ${error !== null ? error : ""} 코드=${JSON.stringify(CONFIG_SCHEMA_VERSION)} 스키마=${JSON.stringify(schemaDefault)}`);
+      }
+      report(ok, "(AC-46) CONFIG_SCHEMA_VERSION이 config.schema.json의 schemaVersion default와 일치(pattern만 있고 const가 없어 스키마 검증으로는 안 잡히는 축)");
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function runCommonSections() {
   runSection("스키마 검증기 스모크", runSchemaValidatorSmoke);
   // 판독 헬퍼의 형태 게이트는 아래 절들이 **기대는 전제**다 — 그 전제가 깨지면
@@ -7632,6 +7905,7 @@ function runCommonSections() {
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
+  runSection("config 쓰기 주체 오라클(결정 D3)", runConfigWriterSmoke);
   runSection("computeSampling 단위 오라클(임무 1)", runSamplingUnitSmoke);
   runSection("churn 파생식 오라클(임무 2)", runChurnDerivationOracleSmoke);
   runSection("git.mjs -z 실경로 스모크(임무 2)", runGitZRealPathSmoke);
