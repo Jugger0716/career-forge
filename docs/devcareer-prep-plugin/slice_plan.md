@@ -36,8 +36,13 @@
 > |---|---|---|
 > | `scripts/write-artifact.mjs` · `scripts/lib/artifact-contract.mjs` | 산출물 쓰기 경계와 순수 계약 모듈 | 구현 7단계(`f029375`) |
 > | `scripts/write-config.mjs` | `config.json` 쓰기 주체 | 구현 7단계 · **결정 D3**(순서 11번) |
+> | `scripts/read-registry.mjs` | `state.json` 레지스트리 **판독** 주체 + AC-22 스테일 판정 | 구현 8단계(순서 13번 (a)) |
 >
-> 셋 다 슬라이스 B가 만든 파일이므로 이후 회차가 고칠 때 예외 표에 행을 더할 필요가 없다.
+> 넷 다 슬라이스 B가 만든 파일이므로 이후 회차가 고칠 때 예외 표에 행을 더할 필요가 없다.
+>
+> **`read-registry.mjs`가 왜 필요했는지는 이 표가 담지 못한다** — 레지스트리를 **쓰는**
+> 주체(`write-artifact.mjs`)만 있고 **읽는** 프로덕션 호출자가 0건이었다. `write-config.mjs`가
+> 닫은 갈래(소비자만 있고 생산자가 없음)의 거울상이며, 그래서 두 행이 나란히 있다.
 
 > **예외 4번의 근거 (2026-08-19 추가).** 예외 3번(allow-list 대조 축)을 구현하고 나서
 > `basis: "external"`인 노드를 만들어 보려 했더니 **어느 계층에서도 만들 수 없었다.**
