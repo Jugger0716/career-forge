@@ -14,17 +14,33 @@
 // import해야 검사가 자기충족이 되지 않는다(렌더러가 자기 리터럴을 자기가
 // 확인하는 구조를 피한다).
 //
-// **범위(사용자 확정): career 계층만.** 다만 본체(renderArtifactMarkdown)는
-// 계층 중립이다 — knowledge-map·gap-report는 구현 8단계에서 진입점만 늘리면
-// 되고 배지·커버리지·절단 로직을 다시 쓰지 않는다. 지금 세 계층을 다 렌더하지
-// 않는 이유는 그 두 계층의 인스턴스가 아직 픽스처 밖에 존재하지 않아, 검사가
-// "내가 만든 픽스처를 내가 렌더했다"는 자기충족이 되기 때문이다.
+// **범위: career · knowledge-map · gap-report 세 계층(2026-08-26, 순서 13번 (b)).**
+// `plan`은 슬라이스 C 소관이라 **의도적으로 등록하지 않는다** — 조용한 누락이
+// 아니고, 오라클이 그 미등록을 단언으로 고정한다.
+//
+// **초판의 「진입점만 늘리면 된다」는 틀렸다 — 고치면서 실측했다.** 본체
+// (renderArtifactMarkdown)가 계층 중립인 것은 맞지만, `renderNode`가 두 새 계층에만
+// 있는 필드(`topic`·`parentRefs`·`selfAssessment`)를 **하나도 렌더하지 않았다.**
+// 표 두 줄만 늘렸다면 **자가진단이 사용자 눈에 닿지 않는 갭 리포트**와 상위 참조가
+// 보이지 않는 지식맵이 나왔을 것이다 — AC-14의 계층 참조 무결성이 표면에서 사라지고,
+// SKILL.md가 배지에 대해 적어 둔 「그 표면에서 빠지면 사용자에게는 없었던 일이 된다」가
+// 그대로 재발한다. 그래서 세 필드를 **존재 시 렌더**로 더했다. `externalUrl`이 이미
+// 쓰던 관례를 그대로 따르며, **계층별 분기는 넣지 않았다** — 넣는 순간 「계층 중립」이
+// 거짓이 되고 오라클의 바이트 동일 단언이 FAIL한다.
+//
+// **자기충족 위험은 사라지지 않았다 — 우회했을 뿐이다.** 두 계층의 인스턴스는 아직
+// 픽스처 밖에 없으므로 「내가 만든 픽스처를 내가 렌더했다」는 문제는 그대로다. 그래서
+// 오라클은 **내용의 정확성**을 묻지 않는다: (i) 계약 요소 목록의 정본은
+// render-contract.mjs이고, (ii) 「같은 인스턴스를 세 계층으로 렌더하면 제목 줄을 뺀
+// 본문이 바이트 동일」은 픽스처 내용과 무관하게 성립해야 하는 **구조** 성질이다.
+// 내용이 실제로 옳은지는 픽스처가 아니라 도그푸딩(AC-20)만 답할 수 있다.
 //
 // **이 렌더러는 게이트가 아니다.** 산출물을 만드는 쪽이며, 출력이 계약을
 // 만족하는지는 tests/run-smoke.mjs의 렌더 계약 오라클이 본다.
 //
 // 사용법(CLI):
 //   node scripts/render-markdown.mjs --layer career --in <career.json> [--out <career.md>]
+//     --layer: career | knowledge-map | gap-report (미지원 계층은 exit 2)
 //     --out 생략 시 stdout으로 출력한다.
 //
 // 종료 코드: 0 = 렌더 성공 / 2 = 입력 오류(파일 부재·JSON 파싱 실패·미지원
@@ -41,9 +57,17 @@ import {
   formatTruncation,
 } from "./lib/render-contract.mjs";
 
-/** 지금 진입점이 있는 계층. 본체는 계층 중립이므로 늘리는 비용은 이 표 한 줄이다. */
+/**
+ * 진입점이 있는 계층. 본체는 계층 중립이므로 **이 표가 늘어나는 것 자체는** 한 줄이다 —
+ * 다만 새 계층에만 있는 필드는 `renderNode`가 함께 알아야 한다(파일 헤더 참조).
+ *
+ * `plan`이 없는 것은 누락이 아니라 슬라이스 C 이연이다. 오라클이 그 사실을 단언으로
+ * 고정하므로, 여기에 한 줄을 더하면 그 단언이 FAIL하며 「의도한 추가인가」를 되묻는다.
+ */
 const LAYER_TITLES = Object.freeze({
-  career: "경력 기술서",
+  "career": "경력 기술서",
+  "knowledge-map": "지식맵",
+  "gap-report": "갭 리포트",
 });
 
 /**
@@ -51,6 +75,12 @@ const LAYER_TITLES = Object.freeze({
  *
  * 배지는 `badgeForNode`가 돌려준 것만 붙인다 — 이 함수 안에 basis를 보고
  * 배지를 만드는 분기를 넣으면 AC-13 (ii)를 어긴다.
+ *
+ * **계층을 인자로 받지 않는다 — 의도다.** 계층에 따라 다른 필드를 내야 하는
+ * 경우에도 「계층이 무엇인가」가 아니라 「그 필드가 있는가」로 분기한다
+ * (`externalUrl`이 처음부터 그렇게 돼 있었고, `topic`·`parentRefs`·
+ * `selfAssessment`도 같다). 계층 인자를 받는 순간 세 계층의 출력이 갈릴 수
+ * 있고, 오라클의 「제목 줄을 뺀 본문이 바이트 동일」 단언이 그것을 FAIL시킨다.
  */
 function renderNode(node) {
   const lines = [];
@@ -63,7 +93,11 @@ function renderNode(node) {
   lines.push(typeof node?.text === "string" && node.text !== "" ? node.text : "_(본문 미기재)_");
   lines.push("");
 
-  const meta = [`근거 등급: ${basisLabel(node?.basis)}`];
+  const meta = [];
+  // `topic`은 knowledge-map·gap-report에만 있다. **계층으로 분기하지 않고 존재로 분기한다** —
+  // 계층을 보는 순간 이 함수가 계층 중립이 아니게 되고, 오라클의 바이트 동일 단언이 FAIL한다.
+  if (typeof node?.topic === "string" && node.topic !== "") meta.push(`주제: ${node.topic}`);
+  meta.push(`근거 등급: ${basisLabel(node?.basis)}`);
   const status = node?.verification?.status;
   const attempts = node?.verification?.attempts;
   meta.push(
@@ -87,6 +121,19 @@ function renderNode(node) {
     // 보고하고(게이트 C-5), 사용자 표면에서도 같은 사실이 보여야 한다.
     lines.push("- 근거 커밋: 없음");
   }
+
+  // 상위 계층 참조. **이것이 빠지면 AC-14가 검사하는 계층 참조 무결성이 사용자
+  // 표면에서 통째로 사라진다** — 검증은 돌았는데 무엇을 근거로 삼았는지가 보이지
+  // 않는 상태이고, SKILL.md가 배지에 대해 적어 둔 실패와 같은 형태다.
+  const parentRefs = Array.isArray(node?.parentRefs) ? node.parentRefs : [];
+  if (parentRefs.length > 0) lines.push(`- 상위 참조: ${parentRefs.join(", ")}`);
+
+  // 자가진단 원문. 갭 리포트에서 이 값이 표면에 없으면 「무엇과 대조한 갭인가」가
+  // 사라져 리포트가 근거 없는 지적 목록이 된다.
+  if (typeof node?.selfAssessment === "string" && node.selfAssessment !== "") {
+    lines.push(`- 자가진단: ${node.selfAssessment}`);
+  }
+
   lines.push("");
   return lines;
 }
