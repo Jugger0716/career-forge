@@ -221,8 +221,7 @@ node scripts/write-artifact.mjs --layer career --draft <판정 실린 JSON> \
 ```sh
 node scripts/verify-evidence.mjs --repo <레포 경로> \
   --config <저장 루트>/config.json \
-  --evidence <원장 경로> --artifact career=<저장 루트>/career.json \
-  --sources references/sources.json
+  --evidence <원장 경로> --artifact career=<저장 루트>/career.json
 ```
 
 **저자를 반드시 넘겨라.** `--config`도 `--identity`도 없으면 이 스크립트는 검증

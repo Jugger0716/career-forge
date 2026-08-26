@@ -24,7 +24,7 @@ description: 이미 만들어진 경력 기술서(career 계층)를 입력으로
 1. **상위 계층이 먼저 있어야 한다.** 지식맵은 career 노드를 참조하고, 갭 리포트는
    지식맵 노드를 참조한다. 그 참조 무결성은 AC-14가 검사하며, **상위 산출물을 함께
    넘기지 않으면 위반이 아니라 `unverifiable`로 분류된다** — 리포트상 위반 0건인데
-   사실은 미검증인 상태다. 그래서 7단계는 `--out-dir`로 전 계층을 함께 넘긴다.
+   사실은 미검증인 상태다. 그래서 8단계는 `--out-dir`로 전 계층을 함께 넘긴다.
 2. **근거 등급에 `commit`이 없다.** 지식과 갭은 git에 존재하는 사실이 아니므로
    `inference`(근거 커밋을 나열한다) 또는 `external`(allow-list 안의 URL)만 쓸 수
    있고, 둘 다 아니면 `insufficient`다.
@@ -80,7 +80,7 @@ HEAD와 대조한다(레지스트리 값이 아니라 파일 값이 정본이다
 
 ### 1. 설정 판독 — 저자를 손으로 다시 조립하지 마라
 
-`career-from-git`의 1-b단계가 기록한 `config.json`이 저장 루트에 있다. 7단계의 인용
+`career-from-git`의 1-b단계가 기록한 `config.json`이 저장 루트에 있다. 8단계의 인용
 검증이 그 파일에서 저자를 읽으므로(**결정 D3**), 여기서 이메일을 손으로 모으지 않는다.
 없으면 `career-from-git`을 먼저 돌리라고 안내하고 멈춘다 — 기계가 대신 채우면 사용자가
 확정하지 않은 범위 위에 그 뒤의 모든 근거가 선다.
@@ -156,8 +156,7 @@ node scripts/write-artifact.mjs --layer gap-report --draft <판정 실린 JSON> 
 ```sh
 node scripts/verify-evidence.mjs --repo <레포 경로> \
   --config <저장 루트>/config.json \
-  --evidence <원장 경로> --out-dir <저장 루트> \
-  --sources references/sources.json
+  --evidence <원장 경로> --out-dir <저장 루트>
 ```
 
 **`--out-dir`을 쓴다.** 계층을 하나씩 넘기면 상위 계층이 빠진 호출이 생기고, 그러면
@@ -169,10 +168,12 @@ node scripts/verify-evidence.mjs --repo <레포 경로> \
 축에 도달하기 **전에** `selectedIdentities가 비어 있습니다`로 exit 2한다 — 즉 반증이
 한 번도 실행되지 않은 채 「검증했다」고 말하게 된다.
 
-**`--sources`를 쓴다.** `basis: "external"` 노드의 `externalUrl`이 allow-list 안에
-있는지 대조하는 축(구현 8단계 (a))이 이 인자 없이는 돌지 않는다. 이 계층들은
-`external`을 실제로 쓰는 유일한 계층이므로 여기서 빠뜨리면 그 축은 대상 0건인
-검사가 된다.
+**`--sources`를 붙이지 마라 — 기본값이 더 안전하다.** `basis: "external"` 노드의
+`externalUrl`을 allow-list와 대조하는 축(구현 8단계 (a))은 **인자 없이도 돈다**:
+스크립트가 자기 위치 기준으로 `references/sources.json`을 찾는다. 반대로 그 경로를
+상대경로로 넘기면 **사용자 레포에서 실행될 때 풀리지 않아** `EXTERNAL_ALLOWLIST_UNREADABLE`
+FAIL이 난다(실측). 이 계층들은 `external`을 실제로 쓰는 유일한 계층이라 그 FAIL을
+가장 먼저 만나는 것도 여기다. **다른 allow-list를 쓰려는 것이 아니면 생략하라.**
 
 exit 1(FAIL)이나 exit 2면 **사용자에게 보고하고 멈춘다.** exit 2는
 `[INPUT_ERROR]`(인자·파일 문제)와 `[INCONCLUSIVE]`(검증을 완결하지 못함) **둘 다**에

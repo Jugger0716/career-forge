@@ -485,7 +485,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       13번 (a)의 (RR-1)~(RR-9) 레지스트리 판독·AC-22 스테일 축 490 → 499.
   //       13번 (b)의 (RM-1)~(RM-8) knowledge-map·gap-report 렌더 진입점 499 → 509.
   //       13번 (c)의 (SG-1)~(SG-8) skill-gap 배선(0단계 스테일·D3·쓰기/렌더) 509 → 517.
-  default: 517,
+  //       13번 (d)의 (SP-11) 프롬프트 명령의 cwd 상대경로 인자 517 → 518.
+  default: 518,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3781,11 +3782,32 @@ function runSkillPromptContractSmoke() {
       const rootDir = path.join(tmp, STATE_DIR_NAME);
       fs.mkdirSync(rootDir, { recursive: true });
       const evidencePath = path.join(rootDir, EVIDENCE_FILE_NAME);
+
+      // **블록 실행과 양성 대조가 같은 cwd를 쓴다 — 변이 Q3가 강제했다.** 둘을 따로
+      // 적으면 블록 실행만 레포 루트로 되돌려도 대조는 계속 무장 상태라, 상대경로가
+      // 우연히 풀리는데 「감지할 수 있다」가 참으로 남는다. 한 변수로 묶으면 되돌리는
+      // 순간 대조가 함께 눈이 멀고 (SP-11)이 그 사실을 FAIL로 낸다.
+      const RUN_CWD = tmp;
       fs.writeFileSync(evidencePath, JSON.stringify({ schemaVersion: "0.1.0", commits: [] }), "utf8");
       // 계층별 산출물 자리를 **표에서 파생해** 만든다. 하드코딩하면 구현 8단계가
       // knowledge-map 호출 블록을 들고 들어올 때 이 절이 조용히 깨진다.
+      //
+      // **노드를 비워 두지 않는다(2026-08-26).** `nodes: []`이면 external 노드가 0건이라
+      // allow-list 판독 실패가 위반이 되지 않고(`loadSourceAllowlist` JSDoc), 그러면 아래
+      // (SP-11)이 공허하게 통과한다. allow-list 축이 하중을 받도록 노드 하나를 담는다.
+      // URL은 `references/sources.json`에서 **뽑아 쓴다** — 리터럴을 적으면 allow-list가
+      // 바뀔 때 이 픽스처만 낡아 (SP-11)이 엉뚱한 이유로 빨개진다. 노드가 실제로 실렸는지는
+      // 이 변수가 아니라 (SP-11)의 **양성 대조**가 확인한다(변이 Q2가 그 구별을 강제했다).
+      const { json: allowlistJson } = readRepoJsonSafe(path.join("references", "sources.json"));
+      const allowedUrl = (allowlistJson?.sources ?? [])[0]?.url ?? null;
       for (const { fileName } of Object.values(ARTIFACT_LAYERS)) {
-        fs.writeFileSync(path.join(rootDir, fileName), JSON.stringify({ schemaVersion: "0.1.0", nodes: [] }), "utf8");
+        fs.writeFileSync(path.join(rootDir, fileName), JSON.stringify({
+          schemaVersion: "0.1.0",
+          nodes: allowedUrl === null ? [] : [{
+            id: "sp10:001", basis: "external", evidence: [], externalUrl: allowedUrl,
+            origin: "generated", locked: false, text: "SP-10 하네스 노드",
+          }],
+        }), "utf8");
       }
       // **7단계가 `--config`로 저자를 넘기게 바뀌었다(순서 11번 / 결정 D3).** 그러면
       // 이 하네스도 그 파일을 놓아 줘야 한다 — 실제로 이 절이 그 변경을 먼저 잡았다
@@ -3818,6 +3840,7 @@ function runSkillPromptContractSmoke() {
       // 「블록이 2개」라는 이유로 FAIL한다 — 새 호출을 검사하는 것이 아니라 검사
       // 자체가 고장 나는 형태다. (SP-6b)와 같은 「대상 전부」 모양으로 맞춘다.
       const failures = [];
+      const outputs = [];
       for (const { file, block } of verifierBlocks) {
         let cmd = block.split("\\\n").join(" ").split("\n").join(" ");
         cmd = cmd.replace(/\[[^\]]*\]/g, " ");
@@ -3831,11 +3854,23 @@ function runSkillPromptContractSmoke() {
         // 찾아 자른다 — 앞에 `node` 말고 다른 것이 붙어도 따라간다.
         const tokens = cmd.trim().split(/\s+/);
         const argv = tokens.slice(tokens.indexOf("scripts/verify-evidence.mjs") + 1);
+        // **cwd를 레포 루트로 두지 않는다(2026-08-26).** 이 스킬들은 **사용자의 레포**에서
+        // 실행되므로 실제 cwd는 이 레포가 아니다. `cwd: REPO_ROOT`로 돌리면 프롬프트가 적은
+        // **cwd 상대경로** 인자(`--sources references/sources.json` 같은)가 우연히 풀려
+        // 통과하고, 그 명령은 실사용에서만 깨진다 — 이 절이 막으려던 「문서화된 명령이 실제로
+        // 도는가」의 정확한 반대다. 임시 디렉터리에서 돌려 그 우연을 없앤다.
+        //
+        // **cwd만 바꿔서는 아무것도 FAIL하지 않는다 — 실측했다.** 이 절이 요구하는 것은
+        // `citations:` 줄 하나이고, allow-list 판독 실패는 external 노드가 0건이면 위반이
+        // 아니기 때문이다(`loadSourceAllowlist` JSDoc). 그래서 아래 (SP-11)이 external 노드를
+        // 담은 픽스처로 그 축을 비공허하게 만든다. **cwd 변경은 (SP-11)의 전제이지 그 자체로
+        // 관측이 아니다** — 초판 주석은 측정 전에 「즉시 FAIL했다」라고 적었고 그것은 거짓이었다.
         const ran = spawnSync(process.execPath, [path.join(REPO_ROOT, "scripts", "verify-evidence.mjs"), ...argv], {
-          cwd: REPO_ROOT,
+          cwd: RUN_CWD,
           encoding: "utf8",
         });
         const out = `${ran.stdout ?? ""}${ran.stderr ?? ""}`;
+        outputs.push({ file, out });
         if (!out.includes("[verify-evidence] citations:")) {
           failures.push(`${file}: 검증 축에 도달하지 못했다 — ${out.slice(0, 200).split("\n").join(" ")}`);
         }
@@ -3843,6 +3878,52 @@ function runSkillPromptContractSmoke() {
       const ok = verifierBlocks.length >= 1 && failures.length === 0;
       if (!ok) console.log(`    실제: 호출 블록 ${verifierBlocks.length}건 / 실패 ${JSON.stringify(failures)}`);
       report(ok, "(SP-10) 프롬프트에서 추출한 인용 검증 명령을 **전부** 실제로 실행하면 인자 검증을 통과해 검증 축까지 도달한다");
+
+      // ---- (SP-11) 명령이 **자기 인자가 풀리지 않아** 실패하지는 않는가 ----
+      //      **이 스킬들은 사용자의 레포에서 실행된다.** 프롬프트가 적은 인자에 cwd 상대경로가
+      //      섞이면 이 레포 안에서는 우연히 풀리고 실사용에서만 깨진다. 위 실행이 임시 cwd에서
+      //      도는 이유가 그것이고, 여기서 그 결과를 판정한다.
+      //
+      //      판정 대상을 `EXTERNAL_ALLOWLIST_UNREADABLE` 하나로 좁힌다 — 이 오류는 픽스처
+      //      내용이 아니라 **명령 자신의 경로 인자**가 풀리지 않았다는 뜻이므로 프롬프트의
+      //      결함과 일대일로 대응한다. 다른 FAIL(인용 부재 등)은 하네스 픽스처의 몫이라
+      //      여기서 묻지 않는다.
+      //
+      //      **비공허성을 양성 대조로 확인한다 — 이 대목은 변이가 고쳐 준 것이다.** 초판은
+      //      `allowedUrl !== null`(allow-list **파일**에 URL이 있는가)만 봤는데, 그것은
+      //      **픽스처가 external 노드를 담았는가**와 다른 축이다. 변이 Q2가 픽스처의 노드만
+      //      비웠을 때 이 단언은 그대로 PASS했다(실측 520/0) — 즉 비공허성 가드가 자기 몫을
+      //      하지 못했다. 지금은 **일부러 깨뜨린 명령을 한 번 돌려** 하네스가 그 결함을 실제로
+      //      감지하는지 확인한다. 감지하지 못하면 위 offenders가 0건인 것은 「결함이 없다」가
+      //      아니라 「볼 수 없다」는 뜻이다.
+      {
+        const offenders = outputs.filter((o) => o.out.includes("EXTERNAL_ALLOWLIST_UNREADABLE")).map((o) => o.file);
+        const control = spawnSync(process.execPath, [
+          path.join(REPO_ROOT, "scripts", "verify-evidence.mjs"),
+          "--repo", REPO_ROOT,
+          "--evidence", evidencePath,
+          "--out-dir", rootDir,
+          "--config", path.join(rootDir, CONFIG_FILE_NAME),
+          // **어디에도 없는 파일 이름을 쓰지 않는다 — 변이 Q3가 그것을 반증했다.**
+          // 그런 이름은 cwd와 무관하게 항상 읽히지 않으므로 대조가 늘 무장 상태고,
+          // `RUN_CWD`를 레포 루트로 되돌려도 이 단언이 그대로 PASS했다(실측 520/0).
+          // 프롬프트가 실제로 쓸 법한 **레포 상대경로**를 그대로 쓴다: 이 cwd가 정말로
+          // 레포 밖이면 읽히지 않고, 레포 안으로 되돌리면 읽혀서 대조가 눈이 먼 사실이
+          // 즉시 FAIL로 드러난다.
+          "--sources", path.join("references", "sources.json"),
+        ], { cwd: RUN_CWD, encoding: "utf8" });
+        const controlOut = `${control.stdout ?? ""}${control.stderr ?? ""}`;
+        // 이 대조가 참이라는 것은 「이 cwd에서는 레포 상대경로가 풀리지 않는다」는 뜻이고,
+        // 그래야 위 offenders가 0건인 것이 「결함이 없다」를 뜻한다.
+        const nonVacuous = controlOut.includes("EXTERNAL_ALLOWLIST_UNREADABLE");
+        const okSp11 = verifierBlocks.length >= 1 && nonVacuous && offenders.length === 0;
+        if (!okSp11) console.log(`    실제: 양성 대조 감지=${nonVacuous} / allow-list 판독 실패를 낸 프롬프트 ${JSON.stringify(offenders)}`);
+        report(
+          okSp11,
+          "(SP-11) 그 명령을 **레포 밖 cwd**에서 돌려도 자기 경로 인자가 풀리지 않아 실패하지 않는다 " +
+          "(스킬은 사용자 레포에서 실행되므로 cwd 상대경로는 실사용에서만 깨진다)"
+        );
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
