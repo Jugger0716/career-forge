@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-09",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 접두 오타(`commit-`)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-09",
+    "ledgerId": "commit-dead090000000000000000000000000000000000",
+    "note": "LEDGER_ID_RE는 콜론만 받는다. 접두 오타가 조용히 통과하지 않는지 본다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

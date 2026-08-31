@@ -1,0 +1,19 @@
+{
+  "caseId": "OA-04",
+  "kind": "other-author",
+  "axis": "봇 커밋 — bot-pattern 4번째",
+  "layer": "gap-report",
+  "inject": {
+    "nodeId": "ct-oa-04",
+    "selector": {
+      "exclusionReason": "bot-pattern",
+      "ordinal": 3
+    },
+    "note": "해시를 하드코딩하지 않는다 — 셀렉터가 회차 원장에서 대상을 고른다(생성기가 바뀌어도 따라간다)."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_EXCLUDED_COMMIT",
+    "exclusionReason": "bot-pattern"
+  }
+}

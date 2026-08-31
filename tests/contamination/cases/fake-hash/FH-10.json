@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-10",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 빈 문자열",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-10",
+    "ledgerId": "",
+    "note": "빈 인용. 부재를 빈 값으로 강등하는 경로가 산출물 쪽에도 없는지 본다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-06",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 41자(한 자 많음)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-06",
+    "ledgerId": "dead060000000000000000000000000000000000a",
+    "note": "초과 길이도 같은 축. 39/41을 함께 두어 경계 양쪽을 본다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

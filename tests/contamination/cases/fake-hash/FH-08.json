@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-08",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 비-hex 문자 포함",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-08",
+    "ledgerId": "zzzz080000000000000000000000000000000000",
+    "note": "hex 밖 문자."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

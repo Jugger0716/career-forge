@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-03",
+  "kind": "fake-hash",
+  "axis": "계층 — `commit:` 접두, knowledge-map",
+  "layer": "knowledge-map",
+  "inject": {
+    "nodeId": "ct-fh-03",
+    "ledgerId": "commit:dead030000000000000000000000000000000000",
+    "note": "L2는 basis enum에 commit이 없어 inference 노드의 근거 커밋으로 인용된다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_COMMIT_NOT_FOUND_IN_REPO"
+  }
+}
