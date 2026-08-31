@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-31T07:43:11.222Z",
+  "pathModuleMap": {
+    "side": 5,
+    "data": 286
+  },
+  "extensionHistogram": {
+    ".txt": 291
+  },
+  "period": {
+    "earliest": "2024-07-03T19:46:40+09:00",
+    "latest": "2024-07-16T05:46:40+09:00"
+  },
+  "topChangedFiles": [
+    {
+      "path": "side/side-5.txt",
+      "churn": 55
+    },
+    {
+      "path": "side/side-4.txt",
+      "churn": 54
+    },
+    {
+      "path": "side/side-3.txt",
+      "churn": 53
+    },
+    {
+      "path": "side/side-2.txt",
+      "churn": 52
+    },
+    {
+      "path": "side/side-1.txt",
+      "churn": 51
+    },
+    {
+      "path": "data/file-60.txt",
+      "churn": 37
+    },
+    {
+      "path": "data/file-45.txt",
+      "churn": 37
+    },
+    {
+      "path": "data/file-30.txt",
+      "churn": 37
+    },
+    {
+      "path": "data/file-15.txt",
+      "churn": 37
+    },
+    {
+      "path": "data/file-59.txt",
+      "churn": 35
+    },
+    {
+      "path": "data/file-44.txt",
+      "churn": 35
+    },
+    {
+      "path": "data/file-29.txt",
+      "churn": 35
+    },
+    {
+      "path": "data/file-14.txt",
+      "churn": 35
+    },
+    {
+      "path": "data/file-58.txt",
+      "churn": 32
+    },
+    {
+      "path": "data/file-43.txt",
+      "churn": 32
+    },
+    {
+      "path": "data/file-28.txt",
+      "churn": 32
+    },
+    {
+      "path": "data/file-13.txt",
+      "churn": 32
+    },
+    {
+      "path": "data/file-105.txt",
+      "churn": 30
+    },
+    {
+      "path": "data/file-90.txt",
+      "churn": 30
+    },
+    {
+      "path": "data/file-75.txt",
+      "churn": 30
+    }
+  ],
+  "conventionalCommitTypeDistribution": {
+    "feat": 5,
+    "chore": 160,
+    "refactor": 80
+  }
+}

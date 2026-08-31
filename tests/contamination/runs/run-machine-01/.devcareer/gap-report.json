@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-31T00:00:00.000Z",
+  "sourceRepoHead": "51df5cbe58929884494c2e9b678df886985ea240",
+  "contentHash": "c6a6b8957d32b82413e315d75b80e83d9ffda36e2c4e69e3e3cd7a330dc4f0b6",
+  "coverage": {
+    "analyzed": 245,
+    "total": 245,
+    "traversed": 300,
+    "period": {
+      "since": null,
+      "until": null
+    },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": [
+        "owner@devcareer-fixture.test"
+      ]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": {
+    "reason": "none",
+    "dropped_commits": 0
+  },
+  "nodes": [
+    {
+      "id": "ct-fh-04",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "dead040000000000000000000000000000000000"
+        }
+      ],
+      "parentRefs": [
+        "ct-fh-03"
+      ],
+      "topic": "오염 주입 갭 항목",
+      "text": "오염 케이스 FH-04가 주입한 인용을 담은 갭 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "selfAssessment": "이 값은 재료화 스크립트가 넣은 고정 문자열이며 사람의 자가진단이 아니다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-04",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:e3929441bf614452a72ae9881ef12473856480ca"
+        }
+      ],
+      "parentRefs": [
+        "ct-fh-03"
+      ],
+      "topic": "오염 주입 갭 항목",
+      "text": "오염 케이스 OA-04가 주입한 인용을 담은 갭 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "selfAssessment": "이 값은 재료화 스크립트가 넣은 고정 문자열이며 사람의 자가진단이 아니다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-09",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:db0c54b790630ea1e309cf2ece54ff08c5b60c94"
+        }
+      ],
+      "parentRefs": [
+        "ct-fh-03"
+      ],
+      "topic": "오염 주입 갭 항목",
+      "text": "오염 케이스 OA-09가 주입한 인용을 담은 갭 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "selfAssessment": "이 값은 재료화 스크립트가 넣은 고정 문자열이며 사람의 자가진단이 아니다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    }
+  ]
+}

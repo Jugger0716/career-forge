@@ -95,8 +95,12 @@ AC-9가 「선택되지 않은 저자의 커밋과 **봇 커밋**(`[bot]`, depen
 
 1. **형식** — `commit:` 접두 / 순수 hex. 둘 다 추출을 통과해 (b)축까지 가서
    `CITATION_COMMIT_NOT_FOUND_IN_REPO`로 떨어진다.
-2. **형식 위반** — 39자·41자·대문자 혼입·비-hex·빈 문자열 → 추출 자체가 실패해
-   `CITATION_MALFORMED_LEDGER_ID`로 **다른 코드**가 난다.
+2. **형식 위반** — 39자·41자·대문자 혼입·비-hex·접두 오타(`commit-`)·접두만(`commit:`)
+   → 추출 자체가 실패해 `CITATION_MALFORMED_LEDGER_ID`로 **다른 코드**가 난다.
+   **빈 문자열은 쓸 수 없다** — `evidenceCitation.ledgerId`가 `minLength: 1`이라 스키마가
+   먼저 거부해 산출물로 존재할 수조차 없고, 그러면 `verify-evidence`는 그 케이스를 한 번도
+   보지 못한다. **스키마가 먼저 거부하는 오염은 이 스위트의 케이스가 아니다** — 다른 계층의
+   방어이고, 분모에 넣으면 영구 미채점이 된다.
 3. **계층** — `career` / `knowledge-map`·`gap-report`. L2·L3의 `basis` enum에는 `commit`이
    **없으므로**(`inference`·`external`·`insufficient`뿐) 인용의 성격 자체가 다르다.
 
@@ -177,6 +181,11 @@ AC-8 (iv)가 허가한 것은 「LLM 없이 채점된다 / 단독으로 돌 수 
 > 「기계 축은 `runs/` 없이도 항상 녹색이라 `npm test`에 넣어도 썩지 않는다」였고 **그 전제는
 > 거짓이었다.** 결정 자체는 유지되지만 이제 **D5에 의존한다** — `runs/`를 추적하므로 새
 > 클론에도 회차 산출물이 있고, 그래서 `npm test`가 녹색일 수 있다.
+
+**`--contamination`은 300커밋 픽스처 캐시를 전제한다.** 회차 원장의 `sourceRepoHead`와
+HEAD가 일치하는 픽스처 레포를 찾지 못하면 `(CX-1)`이 FAIL한다 — 경로를 하드코딩하지 않고
+캐시를 훑어 찾기 때문이다(경로를 적으면 생성기 변경에 낡는다). §5 (a)로 재료화하거나
+`--golden`을 한 번 돌려 캐시를 만든 뒤에 실행한다.
 
 **`npm test` 편입에는 절차적 선행이 있다.** `package.json`은 `slice_plan.md`의
 `slice-a-deterministic-foundation` In scope 열에 이름으로 박힌 **슬라이스 A 파일**이고
@@ -337,9 +346,15 @@ node fixtures/make-fixture.mjs --out <픽스처>
 
 **미제출은 0%가 아니다.** 판정 어휘는 `DETECTED` / `MISSED` / `INVALID` /
 `RESOLVED_BY_REGENERATION` 넷이고, **분모는 언제나 케이스 파일 개수로 고정**한다.
-`results-<date>.json`에 `denominator` · `detected` · `missed` · `invalid` 네 수를 함께 적어
-비율이 어떻게 나왔는지가 사후에 재계산 가능하게 한다. **분모를 「채점된 건수」로 바꾸는 것이
-이 게이트를 무력화하는 가장 싼 방법이다.**
+결과 기록에 `denominator` · `detected` · `missed` · `invalid` 네 수를 함께 적어 비율이
+어떻게 나왔는지가 사후에 재계산 가능하게 한다. **분모를 「채점된 건수」로 바꾸는 것이 이
+게이트를 무력화하는 가장 싼 방법이다.**
+
+> **결과 파일은 `--results <path>`를 줄 때만 쓴다 — 스펙 문면에서 갈린 지점이다.**
+> 구현 9단계는 `tests/contamination/results-<date>.json`에 무조건 기록하라고 적는데,
+> 스모크가 매 실행마다 레포에 파일을 만들면 워킹 트리가 항상 더러워지고 CLAUDE.md가 요구하는
+> 「커밋 뒤 새 클론에서 한 번 더 확인한다」가 흐려진다. 그래서 기록은 옵트인이고, 네 수를
+> 담는지는 `(CX-8)`이 메모리상 결과로 관측한다.
 
 `RESOLVED_BY_REGENERATION`은 반증이 성공해 재생성으로 노드가 사라지거나 고쳐진 경우다 —
 `DETECTED`의 정상적 귀결이므로 탐지로 센다. 「노드가 없다」를 미탐지로 읽으면 **반증이 가장
