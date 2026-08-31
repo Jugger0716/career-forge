@@ -1,0 +1,19 @@
+{
+  "caseId": "OA-08",
+  "kind": "other-author",
+  "axis": "타 저자 커밋 — author-not-selected 3번째",
+  "layer": "knowledge-map",
+  "inject": {
+    "nodeId": "ct-oa-08",
+    "selector": {
+      "exclusionReason": "author-not-selected",
+      "ordinal": 2
+    },
+    "note": "해시를 하드코딩하지 않는다 — 셀렉터가 회차 원장에서 대상을 고른다(생성기가 바뀌어도 따라간다)."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_EXCLUDED_COMMIT",
+    "exclusionReason": "author-not-selected"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-07",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 대문자 혼입",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-07",
+    "ledgerId": "DEAD070000000000000000000000000000000000",
+    "note": "정규식이 소문자만 받는다 — 대문자 hex는 추출 실패다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

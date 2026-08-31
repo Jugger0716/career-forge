@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-04",
+  "kind": "fake-hash",
+  "axis": "계층 — 순수 hex, gap-report",
+  "layer": "gap-report",
+  "inject": {
+    "nodeId": "ct-fh-04",
+    "ledgerId": "dead040000000000000000000000000000000000",
+    "note": "L3도 같은 축. 계층이 달라도 (b)축 코드는 같아야 한다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_COMMIT_NOT_FOUND_IN_REPO"
+  }
+}

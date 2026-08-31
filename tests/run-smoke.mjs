@@ -160,6 +160,17 @@ import {
   FAKE_COMMIT_HASH_IN_SUBJECT,
 } from "../fixtures/make-fixture.mjs";
 import { redactSecrets, containsSecretPattern } from "../scripts/lib/redact.mjs";
+import {
+  CASE_KINDS,
+  MACHINE_KINDS,
+  OUTCOME,
+  checkCaseShape,
+  resolveSelector,
+  gradeCitationCase,
+  gradeSecretCase,
+  tally,
+  evaluateGate,
+} from "./contamination/grade.mjs";
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TESTS_DIR, "..");
@@ -487,7 +498,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       13번 (c)의 (SG-1)~(SG-8) skill-gap 배선(0단계 스테일·D3·쓰기/렌더) 509 → 517.
   //       13번 (d)의 (SP-11) 프롬프트 명령의 cwd 상대경로 인자 517 → 518.
   //       14번 착수분의 (LN-1)~(LN-4) 소스 참조 형태 가드(A-37 재발 차단) 518 → 522.
-  default: 522,
+  //       14번 (a)의 (CT-1)~(CT-14) 오염 채점 엔진 오라클(기계 3종 30건) 522 → 536.
+  default: 536,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4206,6 +4218,215 @@ function runSourceLineReferenceSmoke() {
       `(LN-4) 허용 방향: 프로덕션 스크립트가 인용한 단언 라벨 ${cited.size}종이 전부 run-smoke.mjs에서 해소된다` +
       "(라벨은 사라지면 grep 0건으로 드러난다 — 그 grep을 실제로 돈다)"
     );
+  }
+}
+
+/**
+ * 오염 스위트 채점 엔진 오라클 — 구현 9단계(작업 순서 14번) 기계 3종.
+ *
+ * **왜 채점기를 순수 함수로 떼어 냈는가.** 이 절은 300커밋 픽스처도 서브프로세스도
+ * 쓰지 않는다 — 합성 입력으로 채점 로직만 시험한다. 채점기가 IO와 붙어 있으면
+ * 「분모를 채점된 건수로 바꾸기」 같은 변이 하나를 관측하는 데 10분짜리 픽스처 빌드가
+ * 걸리고, 그러면 다음 회차가 변이를 안 돌린다.
+ *
+ * **단언 개수를 케이스 수와 무관하게 유지한다.** 구현 9단계는 편차 20%p 초과 시 종당
+ * 20건으로 1회 증설을 허용하는데, 케이스마다 단언을 세우면 **데이터를 바꿀 때마다
+ * 정본 상수(소스 리터럴)를 함께 고쳐야 한다** — 절대 규칙 4가 의도한 마찰을 채점
+ * 데이터에 매다는 형태다. 그래서 케이스는 집계 단언으로 관측한다.
+ *
+ * **경계 정본은 `tests/contamination/README.md`다.** 여기서 재서술하지 않는다.
+ * 이 절이 관측하는 것은 채점 로직과 케이스 집합의 형태이고, 회차 산출물을 실제로
+ * 읽어 채점하는 것은 `--contamination` 모드의 몫이다(아직 배선 전이다 — 그 사실을
+ * 감추지 않는다).
+ */
+function runContaminationGraderSmoke() {
+  console.log("[오염 채점 엔진 오라클] 기계 3종 30건과 채점 로직(구현 9단계·AC-8)");
+
+  const casesRoot = path.join(REPO_ROOT, "tests", "contamination", "cases");
+  const kindDirs = [CASE_KINDS.FAKE_HASH, CASE_KINDS.OTHER_AUTHOR, CASE_KINDS.SECRET_BYPASS];
+
+  // 케이스를 한 번만 판독한다. 판독 실패는 빈 배열로 강등하지 않고 목록에 남긴다 —
+  // 그 강등이 (DH-1d)가 기록한 거짓 초록의 원인이었다.
+  const byKind = new Map();
+  const readFailures = [];
+  for (const kind of kindDirs) {
+    const dir = path.join(casesRoot, kind);
+    let names = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort();
+    } catch (e) {
+      readFailures.push(`${kind}/ 판독 실패(${e.code ?? e.message})`);
+    }
+    const defs = [];
+    for (const n of names) {
+      const { text, error } = readRepoTextSafe(path.join("tests", "contamination", "cases", kind, n));
+      if (error !== null) { readFailures.push(error); continue; }
+      try { defs.push(JSON.parse(text)); }
+      catch (e) { readFailures.push(`${kind}/${n} 파싱 실패(${e.message})`); }
+    }
+    byKind.set(kind, defs);
+  }
+  const allCases = kindDirs.flatMap((k) => byKind.get(k) ?? []);
+
+  // ---- (CT-1) 전제: 고정 분모 40건 중 기계 3종 30건이 실재한다 ----
+  //      아래 금지 방향은 케이스가 0건이면 전부 공허하게 통과한다.
+  {
+    const counts = kindDirs.map((k) => (byKind.get(k) ?? []).length);
+    const ids = allCases.map((c) => c?.caseId);
+    const unique = new Set(ids).size === ids.length;
+    const ok = readFailures.length === 0 && counts.every((n) => n === 10) && allCases.length === 30 && unique;
+    if (!ok) console.log(`    실제: 종별 ${JSON.stringify(counts)} 총 ${allCases.length}건 유일=${unique} 판독실패 ${JSON.stringify(readFailures)}`);
+    report(ok, "(CT-1) 기계 3종 케이스가 종당 10건·총 30건이고 caseId가 유일하며 전부 판독됐다(고정 분모의 전제)");
+  }
+
+  // ---- (CT-2) 전제: 케이스 형태가 적합하고 축이 서로 다르다 ----
+  //      「리터럴 10개는 같은 케이스의 10배다」를 형태로 막는다 — axis가 겹치면
+  //      그 종은 10건을 채웠을 뿐 10가지를 관측하지 않는다.
+  {
+    const problems = allCases.flatMap((c, i) => checkCaseShape(c, c?.caseId ?? `#${i}`));
+    const dupAxis = kindDirs.filter((k) => {
+      const axes = (byKind.get(k) ?? []).map((c) => c?.axis);
+      return new Set(axes).size !== axes.length;
+    });
+    const ok = problems.length === 0 && dupAxis.length === 0;
+    if (!ok) console.log(`    실제: 형태 위반 ${JSON.stringify(problems)} 축 중복 종 ${JSON.stringify(dupAxis)}`);
+    report(ok, "(CT-2) 전 케이스가 형태 검사를 통과하고 종 안에서 axis가 서로 다르다(같은 케이스의 10배 차단)");
+  }
+
+  // ---- (CT-3) 금지 방향: 채점 엔진이 REJECT 코드를 소유하지 않는다 ----
+  //      자기가 심은 문자열을 자기가 찾는 구조를 **소스 스캔으로** 막는다. 기대 코드의
+  //      주인은 케이스 파일이고 실제 코드의 주인은 프로덕션 CLI다.
+  {
+    const { text: graderSrc, error } = readRepoTextSafe(path.join("tests", "contamination", "grade.mjs"));
+    const owned = graderSrc === null ? [] : [...new Set(allCases.map((c) => c?.expect?.code).filter(Boolean))].filter((code) => graderSrc.includes(code));
+    const ok = error === null && owned.length === 0;
+    if (!ok) console.log(`    실제: ${error ?? ""} 엔진이 소유한 코드 ${JSON.stringify(owned)}`);
+    report(ok, "(CT-3) 금지 방향: 채점 엔진 소스에 케이스가 이름 댄 REJECT 코드가 0건이다(자기충족 게이트 차단)");
+  }
+
+  // ---- (CT-4) 허용 방향: 케이스가 이름 댄 코드는 프로덕션에 실재한다 ----
+  //      금지 방향((CT-3))만 두면 케이스가 오타 코드를 적어도 아무도 모른다 — 그러면
+  //      그 케이스는 영구 MISSED가 되고 「종당 100%」가 구조적으로 달성 불가해진다.
+  {
+    const sources = ["scripts/verify-evidence.mjs", "scripts/validate-plugin.mjs"]
+      .map((rel) => readRepoTextSafe(rel));
+    const joined = sources.every((s) => s.error === null) ? sources.map((s) => s.text).join("\n") : null;
+    const wanted = [...new Set(allCases.map((c) => c?.expect?.code).filter(Boolean))];
+    const missing = joined === null ? wanted : wanted.filter((code) => !joined.includes(`"${code}"`));
+    const ok = joined !== null && wanted.length >= 3 && missing.length === 0;
+    if (!ok) console.log(`    실제: 프로덕션에 없는 기대 코드 ${JSON.stringify(missing)} (요구 ${wanted.length}종)`);
+    report(ok, `(CT-4) 허용 방향: 케이스가 이름 댄 기대 코드 ${wanted.length}종이 전부 프로덕션 소스에 실재한다(오타 케이스 차단)`);
+  }
+
+  // ---- (CT-5)~(CT-8) 인용 축 채점의 네 갈래 ----
+  //      합성 입력이다. 각 갈래를 **따로** 단언하는 이유는 「어느 경로로 틀렸는가」를
+  //      고정하기 위해서다 — 한 단언에 묶으면 강등 변이와 뭉개짐 변이가 구별되지 않는다.
+  const sampleCase = { caseId: "X-1", expect: { code: "SOME_CODE" } };
+  {
+    const r = gradeCitationCase(sampleCase, "commit:abc", [{ ledgerId: "commit:abc", code: "SOME_CODE" }]);
+    const ok = r.outcome === OUTCOME.DETECTED;
+    if (!ok) console.log(`    실제: ${JSON.stringify(r)}`);
+    report(ok, "(CT-5) 허용 방향: 기대 코드와 일치하는 위반은 DETECTED다");
+  }
+  {
+    const r = gradeCitationCase(sampleCase, "commit:abc", []);
+    const ok = r.outcome === OUTCOME.MISSED;
+    if (!ok) console.log(`    실제: ${JSON.stringify(r)}`);
+    report(ok, "(CT-6) 금지 방향: 위반이 0건이면 MISSED다(검사기가 놓친 것을 초록으로 강등하지 않는다)");
+  }
+  {
+    const r = gradeCitationCase(sampleCase, "commit:abc", [{ ledgerId: "commit:abc", code: "OTHER_CODE" }]);
+    const ok = r.outcome === OUTCOME.MISSED;
+    if (!ok) console.log(`    실제: ${JSON.stringify(r)}`);
+    report(ok, "(CT-7) 금지 방향: 다른 코드로 떨어지면 MISSED다(아무 REJECT나 탐지로 세지 않는다)");
+  }
+  {
+    const noReport = gradeCitationCase(sampleCase, "commit:abc", null);
+    const noTarget = gradeCitationCase(sampleCase, null, []);
+    const ok = noReport.outcome === OUTCOME.INVALID && noTarget.outcome === OUTCOME.INVALID;
+    if (!ok) console.log(`    실제: 리포트부재=${noReport.outcome} 대상미해소=${noTarget.outcome}`);
+    report(ok, "(CT-8) 금지 방향: 리포트 부재·대상 미해소는 INVALID다(미제출은 0%가 아니다 — 절대 규칙 6)");
+  }
+
+  // ---- (CT-9) 금지 방향: 분모는 케이스 개수 고정 ----
+  //      「분모를 채점된 건수로 바꾸기」가 이 게이트를 무력화하는 가장 싼 방법이다 —
+  //      산출물을 하나도 안 낸 회차가 100%를 받는다.
+  {
+    const defs = [{ caseId: "A" }, { caseId: "B" }, { caseId: "C" }];
+    const partial = tally(defs, [{ caseId: "A", outcome: OUTCOME.DETECTED }]);
+    const empty = tally(defs, []);
+    const ok =
+      partial.denominator === 3 && partial.detected === 1 && partial.invalid === 2 && Math.abs(partial.ratio - 1 / 3) < 1e-9 &&
+      empty.denominator === 3 && empty.ratio === 0;
+    if (!ok) console.log(`    실제: 일부채점 ${JSON.stringify(partial)} 전무 ${JSON.stringify(empty)}`);
+    report(ok, "(CT-9) 금지 방향: 분모는 케이스 파일 개수로 고정된다(채점된 건수로 바뀌면 미제출 회차가 100%를 받는다)");
+  }
+
+  // ---- (CT-10) 허용 방향: 재생성 해소는 탐지로 센다 ----
+  //      「노드가 없다」를 미탐지로 읽으면 반증이 가장 잘 작동한 회차가 가장 낮은
+  //      점수를 받는다.
+  {
+    const regen = { ...sampleCase, observed: { regenerated: true } };
+    const r = gradeCitationCase(regen, "commit:abc", []);
+    const t = tally([regen], [r]);
+    const ok = r.outcome === OUTCOME.RESOLVED_BY_REGENERATION && t.detected === 1;
+    if (!ok) console.log(`    실제: ${JSON.stringify(r)} / ${JSON.stringify(t)}`);
+    report(ok, "(CT-10) 허용 방향: RESOLVED_BY_REGENERATION은 탐지로 센다(반증 성공의 정상적 귀결)");
+  }
+
+  // ---- (CT-11) 금지 방향: 봇/타 저자 갈래가 뭉개지지 않는다 ----
+  //      두 갈래가 같은 코드로 떨어지므로 코드 단독 채점은 「봇을 잡았다」와
+  //      「타 저자를 잡았다」를 같은 점수로 만든다. AC-9가 이 10건을 자기 관측자로
+  //      지목했으므로 그 뭉개짐은 AC-9의 절반을 잃는 것과 같다.
+  {
+    const def = { caseId: "OA-x", expect: { code: "SOME_CODE", exclusionReason: "bot-pattern" } };
+    const ev = { commits: [{ id: "commit:abc", exclusionReason: "author-not-selected" }] };
+    const evOk = { commits: [{ id: "commit:abc", exclusionReason: "bot-pattern" }] };
+    const v = [{ ledgerId: "commit:abc", code: "SOME_CODE" }];
+    const wrong = gradeCitationCase(def, "commit:abc", v, ev);
+    const right = gradeCitationCase(def, "commit:abc", v, evOk);
+    const ok = wrong.outcome === OUTCOME.MISSED && right.outcome === OUTCOME.DETECTED;
+    if (!ok) console.log(`    실제: 갈래불일치=${wrong.outcome} 갈래일치=${right.outcome}`);
+    report(ok, "(CT-11) 금지 방향: 코드가 맞아도 exclusionReason 갈래가 다르면 MISSED다(봇/타 저자 뭉개짐 차단)");
+  }
+
+  // ---- (CT-12) 셀렉터가 원장에서 대상을 실제로 찾고, 못 찾으면 사유를 남긴다 ----
+  //      해시를 하드코딩하지 않는 설계의 비공허성이다. 못 찾은 것을 null로 강등하면
+  //      호출부가 「인용할 커밋이 없다」로 읽고 조용히 건너뛴다.
+  {
+    const ev = { commits: [{ id: "c0", exclusionReason: "bot-pattern" }, { id: "c1", exclusionReason: "bot-pattern" }] };
+    const hit = resolveSelector({ exclusionReason: "bot-pattern", ordinal: 1 }, ev);
+    const miss = resolveSelector({ exclusionReason: "no-such-reason" }, ev);
+    const over = resolveSelector({ exclusionReason: "bot-pattern", ordinal: 9 }, ev);
+    const ok = hit.ledgerId === "c1" && hit.reason === null &&
+      miss.ledgerId === null && typeof miss.reason === "string" && miss.reason !== "" &&
+      over.ledgerId === null && over.matched === 2;
+    if (!ok) console.log(`    실제: ${JSON.stringify({ hit, miss, over })}`);
+    report(ok, "(CT-12) 셀렉터가 원장에서 대상을 고르고, 못 찾으면 null이 아니라 사유를 돌려준다(판독 실패를 빈 값으로 강등 금지)");
+  }
+
+  // ---- (CT-13) 게이트: 기계 3종의 수용선은 100%다 ----
+  {
+    const perfect = evaluateGate({ kind: CASE_KINDS.FAKE_HASH, ratios: [1, 1, 1] });
+    const oneShort = evaluateGate({ kind: CASE_KINDS.FAKE_HASH, ratios: [1, 0.9, 1] });
+    const llmOk = evaluateGate({ kind: CASE_KINDS.UNSUPPORTED_CLAIM, ratios: [0.9, 0.8, 0.85] });
+    const noRuns = evaluateGate({ kind: CASE_KINDS.FAKE_HASH, ratios: [] });
+    const ok = perfect.pass === true && oneShort.pass === false && llmOk.pass === true && noRuns.pass === false &&
+      MACHINE_KINDS.length === 3 && !MACHINE_KINDS.includes(CASE_KINDS.UNSUPPORTED_CLAIM);
+    if (!ok) console.log(`    실제: ${JSON.stringify({ perfect, oneShort, llmOk, noRuns })}`);
+    report(ok, "(CT-13) 게이트: 기계 3종은 3회 모두 100%, LLM 1종은 최저값 80% 이상, 회차 0건은 판정 불가다");
+  }
+
+  // ---- (CT-14) 게이트: 편차 20%p 초과는 경고이고, 증설 후에도 초과면 FAIL 확정 ----
+  //      「증설을 근거로 재실행 최고값을 채택하는 경로」를 구조로 막는다 — 판정 입력이
+  //      회차 배열이고 최저값·편차로만 이뤄지므로 최고값을 채택할 자리가 없다.
+  {
+    const first = evaluateGate({ kind: CASE_KINDS.UNSUPPORTED_CLAIM, ratios: [1, 0.7, 0.95] });
+    const after = evaluateGate({ kind: CASE_KINDS.UNSUPPORTED_CLAIM, ratios: [1, 0.7, 0.95], expanded: true });
+    const ok = first.pass === false && typeof first.warning === "string" && first.warning !== "" &&
+      after.pass === false && after.warning === null && Math.abs(first.spread - 0.3) < 1e-9;
+    if (!ok) console.log(`    실제: 초회 ${JSON.stringify(first)} 증설후 ${JSON.stringify(after)}`);
+    report(ok, "(CT-14) 게이트: 편차 20%p 초과는 1회 증설 경고이고 증설 후에도 초과면 FAIL 확정이다(최고값 채택 경로 없음)");
   }
 }
 
@@ -8931,6 +9152,7 @@ function runCommonSections() {
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
   runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
+  runSection("오염 채점 엔진 오라클(구현 9단계·순서 14번)", runContaminationGraderSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);

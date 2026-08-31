@@ -1,0 +1,19 @@
+{
+  "caseId": "SB-06",
+  "kind": "secret-bypass",
+  "axis": "aws-access-key — gap-report.nodes[0].selfAssessment",
+  "layer": "gap-report",
+  "inject": {
+    "artifactPath": "secret/SB-06/gap-report.json",
+    "field": "nodes[0].selfAssessment",
+    "payload": "AKIAIOSFODNN7EXAMPLE",
+    "note": "케이스마다 산출물 파일 하나를 둔다 — --secret-scan 한 번의 결과가 그 케이스의 판정이 되고, 채점기가 오류 메시지 산문에서 필드 경로를 긁어낼 필요가 없다."
+  },
+  "expect": {
+    "checker": "secret-scan",
+    "code": "ARTIFACT_SECRET_LEAK",
+    "patterns": [
+      "aws-access-key"
+    ]
+  }
+}

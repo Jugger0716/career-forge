@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-02",
+  "kind": "fake-hash",
+  "axis": "형식 — 순수 40자 hex, career",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-02",
+    "ledgerId": "dead020000000000000000000000000000000000",
+    "note": "접두 없이도 RAW_HASH_RE가 받는다 — 같은 축의 다른 형식."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_COMMIT_NOT_FOUND_IN_REPO"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "caseId": "FH-05",
+  "kind": "fake-hash",
+  "axis": "형식 위반 — 39자(한 자 모자람)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-fh-05",
+    "ledgerId": "dead05000000000000000000000000000000000",
+    "note": "길이가 40이 아니면 추출 자체가 실패해 다른 코드가 난다."
+  },
+  "expect": {
+    "checker": "verify-evidence",
+    "code": "CITATION_MALFORMED_LEDGER_ID"
+  }
+}

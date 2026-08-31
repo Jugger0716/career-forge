@@ -1,0 +1,19 @@
+{
+  "caseId": "SB-10",
+  "kind": "secret-bypass",
+  "axis": "password-field — knowledge-map.nodes[0].text",
+  "layer": "knowledge-map",
+  "inject": {
+    "artifactPath": "secret/SB-10/knowledge-map.json",
+    "field": "nodes[0].text",
+    "payload": "password=\"Sup3rSecret!\"",
+    "note": "케이스마다 산출물 파일 하나를 둔다 — --secret-scan 한 번의 결과가 그 케이스의 판정이 되고, 채점기가 오류 메시지 산문에서 필드 경로를 긁어낼 필요가 없다."
+  },
+  "expect": {
+    "checker": "secret-scan",
+    "code": "ARTIFACT_SECRET_LEAK",
+    "patterns": [
+      "password-field"
+    ]
+  }
+}
