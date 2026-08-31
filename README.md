@@ -15,9 +15,9 @@ Claude Code 플러그인이다. 모든 인용의 실재성은 LLM이 아니라 �
 > 경력 계층 스킬(`skills/career-from-git/`)이 구현·배선돼 있다. `npm run lint`와
 > `npm test`가 로컬에서 그대로 통과한다(아래 "빠른 시작"의 명령을 그대로 복사해 실행하면
 > 재현된다).
-> **안 된 것**: 지식맵·갭 리포트·학습 계획 계층의 스킬(*skills/skill-gap/*,
-> *skills/prep-plan/*)은 아직 없고, 오염 주입 테스트 스위트와 실제 레포 도그푸딩도
-> 남아 있다(아래 표에서 이탤릭으로 표시한 경로는 아직 존재하지 않는 계획된 경로다).
+> **안 된 것**: 학습 계획 계층의 스킬(*skills/prep-plan/*)은 아직 없고, 오염 주입 테스트
+> 스위트와 실제 레포 도그푸딩도 남아 있다(아래 표에서 이탤릭으로 표시한 경로는 아직
+> 존재하지 않는 계획된 경로다).
 > 아래 "지금 무엇이 되고 무엇이 안 되는가"에 파일 단위로 정리했다.
 
 ## 설치
@@ -72,7 +72,8 @@ claude --plugin-dir /path/to/career-forge
 | `scripts/project-ledger.mjs` (원장 → LLM 컨텍스트 투영) | **구현됨** | 범위 밖 커밋을 뺀 투영만 프롬프트에 들어간다. |
 | `scripts/write-config.mjs` (`config.json`이 디스크에 닿는 유일한 경로) | **구현됨** | 범위 확정 대화의 결과를 쓰기 직전 `config.schema.json`으로 자기 검증한 뒤 원자적으로 쓴다. `schemaVersion`·`updatedAt`만 스스로 채우고, 나머지는 스키마에 default가 있어도 채우지 않는다 — 무엇을 수집하고 무엇이 산출물에 남는지는 사용자 결정이다. 종료 코드 0/2. |
 | `skills/career-from-git/` (슬래시 명령) | **구현됨** | 범위 확정 대화 → 수집 → 투영 → 생성 → 2단 팩트체크 → 인용 검증 → 렌더까지의 오케스트레이션 절차와 템플릿 2종. |
-| *skills/skill-gap/*, *skills/prep-plan/* (슬래시 명령) | **미구현** | 지식맵·갭 리포트·학습 계획 계층. 디렉터리 자체가 이 레포에 없다. |
+| `skills/skill-gap/` (슬래시 명령) | **구현됨** | 지식맵·갭 리포트 계층. 레지스트리로 상위 산출물을 찾아 근거의 신선도를 먼저 판정하고(0단계), 생성 → 자가진단 수집 → 2단 팩트체크 → 인용 검증 → 렌더까지의 오케스트레이션 절차와 템플릿 3종. |
+| *skills/prep-plan/* (슬래시 명령) | **미구현** | 학습 계획 계층. 디렉터리 자체가 이 레포에 없다. |
 | `references/sources.json` | **구현됨** | `basis: external` 노드의 URL allow-list. `scripts/verify-evidence.mjs`가 대조한다. |
 | *examples/* | **미구현** | 공개 준비 단계에서 만들어질 예정. |
 
@@ -152,16 +153,16 @@ node scripts/validate-plugin.mjs --schema-check ./out/career.json
 additionalProperties 등을 강제한다. 레포 전체를 검사하려면 인자 없이
 `node scripts/validate-plugin.mjs`(=`npm run lint`)를 실행한다.
 
-## 명령 (슬래시 명령 — 미구현)
+## 명령 (슬래시 명령)
 
 정본 슬래시 명령 접두사는 `.claude-plugin/plugin.json`의 `name`(`devcareer-prep`)에서
-자동 파생되므로 항상 `/devcareer-prep:`이다. 아래 네 명령 중 **구현된 것은
-`/devcareer-prep:career-from-git` 하나**이고 나머지 셋은 아직 없다.
+자동 파생되므로 항상 `/devcareer-prep:`이다. 아래 네 명령 중 **구현된 것은 P0 두 개**이고
+나머지 둘은 아직 없다.
 
 | 명령 | 범위 | 상태 |
 |---|---|---|
 | `/devcareer-prep:career-from-git` | P0 (MVP) | **구현됨** |
-| `/devcareer-prep:skill-gap` | P0 (MVP, 자가진단 입력만) | 계획됨 — 미구현 |
+| `/devcareer-prep:skill-gap` | P0 (MVP, 자가진단 입력만) | **구현됨** |
 | `/devcareer-prep:prep-plan` | Phase 3 | 계획됨 — 미구현 |
 | `/devcareer-prep:grade` | P2 (MVP 제외) | 범위 밖 |
 
@@ -209,8 +210,11 @@ npm test       # tests/run-smoke.mjs 기본 → --negative → --golden 순서�
   음성 모의면접, 이력서 PDF 생성, Claude 외 LLM 지원은 MVP 범위 밖이다.**
 - **저자 정체성은 추측하지 않는다.** 첫 실행 시 `git shortlog -sne` 결과에서 사용자가 직접
   자기 identity를 선택해야 하며, 이 플러그인이 임의로 "이 커밋은 당신 것"이라고 판단하지 않는다.
-- **대화형 슬래시 명령은 아직 없다.** 위 "명령" 절에 표시했듯 `/devcareer-prep:*` 네 명령
-  모두 미구현이며, 지금은 "빠른 시작"의 CLI 3종을 직접 호출해야 한다.
+- **P0 슬래시 명령 둘은 아직 실레포에서 검증되지 않았다.** `/devcareer-prep:career-from-git`과
+  `/devcareer-prep:skill-gap`은 절차서·템플릿이 실재하고 그 배선을 스모크가 관측하지만,
+  **실제 레포 도그푸딩(AC-20)은 아직 수행되지 않았다** — 두 계층 산출물의 *내용* 정확성은
+  픽스처 밖에서 관측된 적이 없다. `/devcareer-prep:prep-plan`은 미구현이다. "빠른 시작"의
+  CLI 3종은 스킬 없이 직접 호출하는 경로로 계속 유효하다.
 
 ## 라이선스
 
