@@ -486,7 +486,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       13번 (b)의 (RM-1)~(RM-8) knowledge-map·gap-report 렌더 진입점 499 → 509.
   //       13번 (c)의 (SG-1)~(SG-8) skill-gap 배선(0단계 스테일·D3·쓰기/렌더) 509 → 517.
   //       13번 (d)의 (SP-11) 프롬프트 명령의 cwd 상대경로 인자 517 → 518.
-  default: 518,
+  //       14번 착수분의 (LN-1)~(LN-4) 소스 참조 형태 가드(A-37 재발 차단) 518 → 522.
+  default: 522,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4061,6 +4062,150 @@ function runIgnoredPathReferenceSmoke() {
     const ok = users.length >= 1;
     if (!ok) console.log(`    실제: '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 0건이다(spec.md 닻이 사라졌는가?)`);
     report(ok, `(DH-1c) 허용 방향: 승격된 '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 1건 이상이고 위반이 아니다`);
+  }
+}
+
+/**
+ * 소스 참조 형태 가드 — 다른 파일을 **행 번호로** 가리키지 않는다(콜드 리뷰 A-37).
+ *
+ * **왜 이 절이 있는가 — 이것은 재발이다.** A-37은 「주석과 실행 로그가 절대 행 번호를
+ * 하드코딩한다」를 지적하고 「검색 가능한 식별자로 참조하라」를 처방했다. 콜드 리뷰 ⑧이
+ * 같은 처방을 한 번 더 적었다("행 번호를 재계산하지 말고 라벨로 바꿔라 — 재계산은 다음
+ * 커밋에 또 낡는다"). **두 번 다 산문으로만 남았고**, 그래서 순서 13번 (a)가 새 파일
+ * (`read-registry.mjs`)에 같은 형태를 다시 넣었다. 절대 규칙 3이 이것을 미리 설명한다:
+ * **관측되지 않는 제약은 없는 것이다.** 인스턴스만 고치면 다음 회차가 세 번째를 낸다.
+ *
+ * **행 번호가 왜 나쁜지는 이 레포 안에 실물 증거가 있다.** `scripts/lib/git.mjs`가
+ * `evidence.schema.json`의 한 행을 「committerDate는 리베이스로 값이 바뀌므로 쓰지
+ * 않는다고 선언한 축」이라고 인용하는데, 그 선언은 그 사이 아래로 밀렸고 **인용이
+ * 가리키는 행은 이제 다른 프로퍼티**다. 아무도 알려 주지 않았다 — 행 번호는 조용히
+ * 엉뚱한 곳을 가리키기 때문이다. 라벨이었다면 grep 0건으로 드러났다.
+ *
+ * **그 실물 증거는 고치지 않고 못 박는다.** `git.mjs`는 슬라이스 A이고 예외 표에 없다
+ * (절대 규칙 5). `(LN-3)`은 `(SR-9)`·`(CH-8)`과 같은 성격이다 — **PASS라는 것은 그 결함이
+ * 살아 있다는 뜻이고**, 누가 고치면 FAIL하며 「이 예외가 아직 필요한가」를 되묻는다.
+ * **그 FAIL은 회귀가 아니다.**
+ *
+ * **금지 방향만으로는 부족하다.** 참조를 통째로 지워도 `(LN-2)`는 통과한다. 그래서
+ * `(LN-4)`가 허용 방향을 본다 — 라벨 참조는 위반이 아니며, **실제로 해소되어야 한다.**
+ * 그것이 「사라지면 grep 0건으로 드러난다」를 산문에서 실행으로 옮기는 지점이다.
+ */
+function runSourceLineReferenceSmoke() {
+  console.log("[소스 참조 형태 가드] 행 번호 참조는 다음 커밋에 조용히 엉뚱한 곳을 가리킨다(A-37)");
+
+  // 스캔 집합은 DH-1과 같은 모양이다 — 추적되는 코드와 사람이 읽는 지침. 목록을 새로
+  // 만들지 않는 이유는 두 가드가 같은 표면(새 클론에서 읽히는 것)을 지키기 때문이다.
+  const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files"], { encoding: "utf8" });
+  const tracked = ls.status === 0 ? ls.stdout.trim().split("\n").filter(Boolean) : [];
+  const scanned = tracked.filter(
+    (f) => f.endsWith(".mjs") || f === "README.md" || f === "CLAUDE.md" || (f.startsWith("skills/") && f.endsWith(".md"))
+  );
+
+  // 판독 실패를 빈 문자열로 강등하지 않는다 — 그 강등이 DH-1d가 기록한 거짓 초록의
+  // 원인이었고, 여기서도 「못 읽었다」와 「위반이 없다」가 같은 결과가 된다.
+  const texts = new Map();
+  const readFailures = [];
+  for (const f of scanned) {
+    const { text, error } = readRepoTextSafe(f);
+    if (error !== null) readFailures.push(error);
+    else texts.set(f, text);
+  }
+
+  // `<경로>/<파일>.<확장자>:<행>` 형태. 경로 접두사는 선택이다 — 실물 두 사례가 각각
+  // 붙은 형태와 안 붙은 형태였다.
+  const lineRefRe = /(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md):\d+/g;
+
+  // 슬라이스 A라 고칠 수 없는 알려진 1건. **집합이 아니라 단수로 둔다** — 예외가 목록이
+  // 되는 순간 새 위반이 「예외에 한 줄 더」로 조용히 흡수된다.
+  const FROZEN = "scripts/lib/git.mjs";
+
+  // ---- (LN-1) 전제: 대상이 실재하고 전부 판독됐는가 ----
+  //      아래 금지 방향은 스캔 대상이 비거나 판독이 실패하면 **공허하게 통과한다.**
+  //      git이 없거나 ls-files가 실패해도 여기서 떨어진다.
+  {
+    const ok = ls.status === 0 && scanned.length >= 5 && readFailures.length === 0 && texts.has(FROZEN);
+    if (!ok) {
+      console.log(`    실제: git exit=${ls.status} 스캔 대상 ${scanned.length}건 판독 실패 ${JSON.stringify(readFailures)} FROZEN 판독=${texts.has(FROZEN)}`);
+    }
+    report(ok, `(LN-1) 스캔 대상 ${scanned.length}건이 실재하고 전부 판독됐다(금지 방향이 공허해지지 않는 전제)`);
+  }
+
+  // ---- (LN-2) 금지 방향: 고칠 수 있는 파일 어디에도 행 번호 참조가 없다 ----
+  {
+    const offenders = [];
+    for (const [f, text] of texts) {
+      if (f === FROZEN) continue;
+      const hits = text.match(lineRefRe);
+      if (hits !== null) offenders.push(`${f} → ${[...new Set(hits)].join(", ")}`);
+    }
+    const ok = offenders.length === 0;
+    if (!ok) {
+      console.log(`    실제: 행 번호 참조 ${JSON.stringify(offenders)}`);
+      console.log("    처방: 행 번호를 지우고 검색 가능한 식별자로 참조하라 — 라벨은 행이 밀려도 살아남고 사라지면 grep 0건으로 드러난다(A-37 수정안).");
+    }
+    report(ok, `(LN-2) 금지 방향: 슬라이스 A 예외 1건을 뺀 스캔 대상에 행 번호 참조가 0건이다(A-37 재발 차단)`);
+  }
+
+  // ---- (LN-3) 전제 고정: 그 예외는 여전히 살아 있고, 이미 낡았다 ----
+  //      **이 단언이 PASS라는 것은 결함이 살아 있다는 뜻이다.** 대상 행 번호를 여기
+  //      리터럴로 적지 않는다 — 적는 순간 이 파일이 (LN-2)의 위반이 되고, 그것은
+  //      「행 번호를 금지하는 가드가 스스로 행 번호를 쓴다」는 자기 반복이다.
+  //      참조는 `git.mjs`에서 **추출**하고, 그것이 가리키는 행을 열어 대조한다.
+  {
+    const frozenText = texts.get(FROZEN) ?? "";
+    const hits = [...new Set(frozenText.match(lineRefRe) ?? [])];
+    // `git.mjs`가 그 인용으로 주장하는 내용의 유일 키워드. 이 문자열이 대상 파일에는
+    // 있는데 **가리키는 행에는 없다**는 것이 「낡았다」의 정의다.
+    const CLAIM = "리베이스";
+    let stale = false;
+    let detail = `추출 ${JSON.stringify(hits)}`;
+    if (hits.length === 1) {
+      const sep = hits[0].lastIndexOf(":");
+      const rel = hits[0].slice(0, sep);
+      const lineNo = Number(hits[0].slice(sep + 1));
+      const { text: targetText, error } = readRepoTextSafe(rel);
+      if (error !== null) detail = error;
+      else {
+        const pointed = targetText.split("\n")[lineNo - 1] ?? "";
+        stale = !pointed.includes(CLAIM) && targetText.includes(CLAIM);
+        detail = `가리키는 행 내용='${pointed.trim().slice(0, 48)}'`;
+      }
+    }
+    const ok = hits.length === 1 && stale;
+    if (!ok) {
+      console.log(`    실제: ${detail}`);
+      console.log("    이 단언의 FAIL은 회귀가 아닐 수 있다: git.mjs의 참조가 고쳐졌다면 이 예외가 아직 필요한지 다시 판단하라((SR-9)와 같은 성격).");
+    }
+    report(
+      ok,
+      "(LN-3) 전제 고정: 슬라이스 A의 행 번호 참조 1건이 여전히 살아 있고 이미 다른 행을 가리킨다" +
+      "(git.mjs는 예외 표 밖이라 고칠 수 없다 — 닫은 것이 아니라 못 박은 것이다)"
+    );
+  }
+
+  // ---- (LN-4) 허용 방향: 라벨 참조는 위반이 아니고, 실제로 해소된다 ----
+  //      금지 방향만 두면 참조를 통째로 지우는 것으로도 통과한다. 그러면 이 가드는
+  //      「다른 파일을 설명하지 마라」가 되어 지키려던 것과 정반대가 된다.
+  //      프로덕션 스크립트가 인용한 단언 라벨이 `run-smoke.mjs`에 **실재**하는지 본다 —
+  //      라벨의 값은 여기서 나온다(행 번호에는 이 검사에 해당하는 것이 아예 없다).
+  {
+    const { text: smokeText, error } = readRepoTextSafe("tests/run-smoke.mjs");
+    const labelRefRe = /\([A-Z]{2,3}-\d+[a-z]?\)/g;
+    const cited = new Set();
+    for (const [f, text] of texts) {
+      if (!f.startsWith("scripts/")) continue;
+      for (const m of text.match(labelRefRe) ?? []) cited.add(m);
+    }
+    const unresolved = [...cited].filter((l) => smokeText === null || !smokeText.includes(l));
+    const ok = error === null && cited.size >= 5 && unresolved.length === 0;
+    if (!ok) {
+      console.log(`    실제: ${error ?? ""} 인용 라벨 ${cited.size}종 미해소 ${JSON.stringify(unresolved)}`);
+    }
+    report(
+      ok,
+      `(LN-4) 허용 방향: 프로덕션 스크립트가 인용한 단언 라벨 ${cited.size}종이 전부 run-smoke.mjs에서 해소된다` +
+      "(라벨은 사라지면 grep 0건으로 드러난다 — 그 grep을 실제로 돈다)"
+    );
   }
 }
 
@@ -8785,6 +8930,7 @@ function runCommonSections() {
   runSection("원장 투영 오라클(구현 7단계 (f)·게이트 E-3)", runLedgerProjectionOracleSmoke);
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
+  runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);
   runSection("store IO 계약 오라클(게이트 B-1·B-2)", runStoreIoContractSmoke);
