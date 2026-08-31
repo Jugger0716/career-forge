@@ -90,9 +90,15 @@ export const UNRESOLVED_CODES = Object.freeze([
  *
  * `write-config.mjs`의 `loadConfigSchema`·`write-artifact.mjs`의 `loadSchema`와
  * 같은 형태로 **비객체를 거부한다** — 내용이 `null`·배열·스칼라인 스키마를
- * `validateInstance`에 그대로 넘기면 `schema-validate.mjs:172`의 fail-open이
+ * `validateInstance`에 그대로 넘기면 `schema-validate.mjs`의 비객체 조기 반환이
  * **오류 0건**을 돌려주고, 그러면 「부적합한 레지스트리를 걸러낸다」는 이 CLI의
  * 주장이 통째로 건너뛰어진다(순서 9번 ⑪이 실측한 형태 그대로다).
+ *
+ * **그 fail-open의 정본 관측점은 `(SR-9)`다** — 행 번호로 가리키지 않는다. 저 파일은
+ * 슬라이스 A라 고칠 수 없고, 그래서 「고칠 수 없는 현행 동작」으로 못 박혀 있다.
+ * 행 번호는 다음 커밋에 조용히 엉뚱한 곳을 가리키지만 라벨은 밀려도 살아남고,
+ * 사라지면 grep 0건으로 드러난다(콜드 리뷰 A-37·⑧). 그 grep을 실제로 도는 것이
+ * `(LN-2)`다.
  */
 export function loadStateSchema(root = REPO_ROOT) {
   const rel = path.join("schemas", "state.schema.json");
