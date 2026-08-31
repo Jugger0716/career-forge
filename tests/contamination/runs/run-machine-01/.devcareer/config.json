@@ -1,0 +1,35 @@
+{
+  "identitySelection": {
+    "candidates": [
+      {
+        "name": "Fixture Owner",
+        "email": "owner@devcareer-fixture.test",
+        "commitCount": 245
+      }
+    ],
+    "selected": [
+      "owner@devcareer-fixture.test"
+    ]
+  },
+  "scope": {
+    "ref": "HEAD",
+    "mergeIncluded": false,
+    "since": null,
+    "until": null
+  },
+  "budget": {
+    "maxCommits": 1000
+  },
+  "includeDiff": false,
+  "exclusions": {
+    "bots": true,
+    "vendoredPaths": true
+  },
+  "storage": {
+    "root": "home",
+    "repoOptIn": false
+  },
+  "snippetQuoting": false,
+  "schemaVersion": "0.1.0",
+  "updatedAt": "2026-08-31T00:00:00Z"
+}

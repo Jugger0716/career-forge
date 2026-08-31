@@ -1,0 +1,285 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-31T00:00:00.000Z",
+  "sourceRepoHead": "51df5cbe58929884494c2e9b678df886985ea240",
+  "contentHash": "2c79a30777a91e34a4c423c76242565f48a1d4ed46c736abfebf2f0edbbeeb4f",
+  "coverage": {
+    "analyzed": 245,
+    "total": 245,
+    "traversed": 300,
+    "period": {
+      "since": null,
+      "until": null
+    },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": [
+        "owner@devcareer-fixture.test"
+      ]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": {
+    "reason": "none",
+    "dropped_commits": 0
+  },
+  "nodes": [
+    {
+      "id": "ct-clean-1",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:a05845180b2bf3e1886435fa08d33d09e51fae32"
+        }
+      ],
+      "text": "픽스처 저장소의 정상 커밋을 근거로 든 음성 대조 항목이다. 이 노드가 위반으로 잡히면 오염 판정이 무의미해진다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-01",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:dead010000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-01가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-02",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "dead020000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-02가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-05",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "dead05000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-05가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-06",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "dead060000000000000000000000000000000000a"
+        }
+      ],
+      "text": "오염 케이스 FH-06가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-07",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "DEAD070000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-07가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-08",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "zzzz080000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-08가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-09",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit-dead090000000000000000000000000000000000"
+        }
+      ],
+      "text": "오염 케이스 FH-09가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-fh-10",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:"
+        }
+      ],
+      "text": "오염 케이스 FH-10가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-01",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:d710f9f4e4983ff310db6771dc586238b1c30315"
+        }
+      ],
+      "text": "오염 케이스 OA-01가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-02",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:165978cc81ec781d0616374bf6e866570a2ddca8"
+        }
+      ],
+      "text": "오염 케이스 OA-02가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-05",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:fc452f1a3ec9394b1f788d93b1135e85f77a1265"
+        }
+      ],
+      "text": "오염 케이스 OA-05가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-06",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:6af3b9ba4bc9f255df1399b4c34f6545a0d9f1f8"
+        }
+      ],
+      "text": "오염 케이스 OA-06가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-07",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:5ef35a70b3ed942eb4bf960bab79b505d9edc923"
+        }
+      ],
+      "text": "오염 케이스 OA-07가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-10",
+      "basis": "commit",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:908ce3783e30a5e029385317c0b5649852ffad99"
+        }
+      ],
+      "text": "오염 케이스 OA-10가 주입한 인용을 담은 항목이다. 검사기가 이 인용을 거부해야 한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    }
+  ]
+}

@@ -1,12 +1,12 @@
 {
   "caseId": "FH-10",
   "kind": "fake-hash",
-  "axis": "형식 위반 — 빈 문자열",
+  "axis": "형식 위반 — 접두만 있고 해시가 없음(`commit:`)",
   "layer": "career",
   "inject": {
     "nodeId": "ct-fh-10",
-    "ledgerId": "",
-    "note": "빈 인용. 부재를 빈 값으로 강등하는 경로가 산출물 쪽에도 없는지 본다."
+    "ledgerId": "commit:",
+    "note": "접두만 남은 인용. **빈 문자열은 쓸 수 없다** — `evidenceCitation.ledgerId`가 `minLength: 1`이라 스키마가 먼저 거부해 산출물로 존재할 수조차 없고, 그러면 verify-evidence는 그 케이스를 한 번도 보지 못한다."
   },
   "expect": {
     "checker": "verify-evidence",

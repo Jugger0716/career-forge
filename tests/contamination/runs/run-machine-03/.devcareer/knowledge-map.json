@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "0.1.0",
+  "generatedAt": "2026-08-31T00:00:00.000Z",
+  "sourceRepoHead": "51df5cbe58929884494c2e9b678df886985ea240",
+  "contentHash": "407b07398c9a8cedb15338a639ca43062c5b1f4f0c33230cd0af3fa134cf2850",
+  "coverage": {
+    "analyzed": 245,
+    "total": 245,
+    "traversed": 300,
+    "period": {
+      "since": null,
+      "until": null
+    },
+    "exclusions": {
+      "bots": true,
+      "vendoredPaths": true,
+      "mergeIncluded": false,
+      "selectedIdentities": [
+        "owner@devcareer-fixture.test"
+      ]
+    },
+    "samplingMethod": "none:full-scan"
+  },
+  "truncated": {
+    "reason": "none",
+    "dropped_commits": 0
+  },
+  "nodes": [
+    {
+      "id": "ct-fh-03",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:dead030000000000000000000000000000000000"
+        }
+      ],
+      "parentRefs": [
+        "ct-clean-1"
+      ],
+      "topic": "오염 주입 지식 항목",
+      "text": "오염 케이스 FH-03가 주입한 인용을 담은 지식 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-03",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:6b8483b076db030d86864f8f15bce59c38f074bd"
+        }
+      ],
+      "parentRefs": [
+        "ct-clean-1"
+      ],
+      "topic": "오염 주입 지식 항목",
+      "text": "오염 케이스 OA-03가 주입한 인용을 담은 지식 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    },
+    {
+      "id": "ct-oa-08",
+      "basis": "inference",
+      "origin": "generated",
+      "evidence": [
+        {
+          "ledgerId": "commit:f89022f3b476bd5cc44a94425bbff32187f7fb27"
+        }
+      ],
+      "parentRefs": [
+        "ct-clean-1"
+      ],
+      "topic": "오염 주입 지식 항목",
+      "text": "오염 케이스 OA-08가 주입한 인용을 담은 지식 항목이다. 상위 계층 노드를 정상 참조한다.",
+      "locked": false,
+      "verification": {
+        "status": "not-attempted",
+        "attempts": 0,
+        "reasonCode": null
+      }
+    }
+  ]
+}

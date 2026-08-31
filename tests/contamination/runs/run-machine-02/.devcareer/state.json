@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "0.1.0",
+  "updatedAt": "2026-08-31T00:00:00.000Z",
+  "artifacts": {
+    "evidence": null,
+    "career": {
+      "path": "career.json",
+      "schemaVersion": "0.1.0",
+      "generatedBySkill": "contamination-fixture"
+    },
+    "knowledgeMap": {
+      "path": "knowledge-map.json",
+      "schemaVersion": "0.1.0",
+      "generatedBySkill": "contamination-fixture"
+    },
+    "gapReport": {
+      "path": "gap-report.json",
+      "schemaVersion": "0.1.0",
+      "generatedBySkill": "contamination-fixture"
+    },
+    "plan": null
+  }
+}

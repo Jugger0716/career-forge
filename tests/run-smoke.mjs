@@ -507,6 +507,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       골든 오라클 자체가 바뀐 것이다.** 그때 이 줄에 사유를 적어라.
   negative: 33,
   golden: 11,
+  // 14번 (b)의 (CX-1)~(CX-8) 오염 스위트 실채점. 신설이며 이력의 시작점이다 —
+  // 이 모드는 `runCommonSections()`를 부르지 않고 자기 절 하나만 돈다.
+  contamination: 8,
 });
 
 function report(ok, label) {
@@ -9184,9 +9187,219 @@ function runCommonSections() {
   runSection("픽스처 커버리지 정직화 스모크(A-14 잔여)", runFixtureCoverageHonestySmoke);
 }
 
+/**
+ * `--contamination` — 기계 3종 30건을 **회차 산출물 위에서** 실제로 채점한다.
+ *
+ * **이 모드가 채점기 오라클과 다른 점.** `runContaminationGraderSmoke`는 합성 입력으로
+ * 채점 **로직**만 본다. 여기서는 프로덕션 CLI(`verify-evidence`·`--secret-scan`)를 실제로
+ * 돌려 그 출력으로 채점한다 — 기대 코드는 케이스 파일이, 실제 코드는 CLI가 소유한다.
+ *
+ * **`UC`는 이 모드의 범위 밖이다(D6).** 「미채점」이 아니라 대상이 아니다 — 부재를 강등하는
+ * 형태를 만들지 않는다(절대 규칙 6). LLM 축은 `--contamination-llm`의 몫이다.
+ *
+ * **결과 파일은 `--results <path>`를 줄 때만 쓴다.** 스모크가 매 실행마다 레포에 파일을
+ * 만들면 워킹 트리가 항상 더러워지고 새 클론 확인이 흐려진다. 경계는
+ * `tests/contamination/README.md`가 정본이다.
+ */
+function runContaminationSuite() {
+  console.log("[오염 스위트] 기계 3종 30건을 회차 산출물 위에서 채점한다(구현 9단계·AC-8)");
+
+  const runsRel = path.join("tests", "contamination", "runs");
+  const runsDir = path.join(REPO_ROOT, runsRel);
+  const casesRoot = path.join(REPO_ROOT, "tests", "contamination", "cases");
+
+  const kindDirs = [CASE_KINDS.FAKE_HASH, CASE_KINDS.OTHER_AUTHOR, CASE_KINDS.SECRET_BYPASS];
+  const cases = new Map();
+  for (const kind of kindDirs) {
+    const defs = fs
+      .readdirSync(path.join(casesRoot, kind))
+      .filter((n) => n.endsWith(".json"))
+      .sort()
+      .map((n) => JSON.parse(fs.readFileSync(path.join(casesRoot, kind, n), "utf8")));
+    cases.set(kind, defs);
+  }
+
+  let runIds = [];
+  try {
+    runIds = fs.readdirSync(runsDir).filter((n) => fs.statSync(path.join(runsDir, n)).isDirectory()).sort();
+  } catch { /* (CX-1)이 잡는다 */ }
+
+  // 회차마다 프로덕션 CLI를 실제로 돌린다. 판독 실패를 빈 값으로 강등하지 않는다 —
+  // 리포트를 못 얻은 회차는 `null`로 남고 채점기가 그것을 INVALID로 판정한다.
+  const perRun = [];
+  const cliFailures = [];
+  for (const runId of runIds) {
+    const root = path.join(runsDir, runId, ".devcareer");
+    const evPath = path.join(root, "evidence.json");
+    let evidence = null;
+    try { evidence = JSON.parse(fs.readFileSync(evPath, "utf8")); }
+    catch (e) { cliFailures.push(`${runId}: 원장 판독 실패(${e.code ?? e.message})`); }
+
+    const repoPath = evidence === null ? null : findFixtureRepoFor(evidence.sourceRepoHead);
+    let report = null;
+    if (repoPath === null) {
+      cliFailures.push(`${runId}: sourceRepoHead와 맞는 픽스처 레포를 찾지 못했다(재료화 안내는 README §5)`);
+    } else {
+      const outPath = path.join(os.tmpdir(), `devcareer-ct-${runId}-report.json`);
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "verify-evidence.mjs"),
+        "--repo", repoPath,
+        "--config", path.join(root, "config.json"),
+        "--evidence", evPath,
+        "--out-dir", root,
+        "--out", outPath,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      // exit 1은 위반이 있다는 뜻이고 이 스위트에서는 **정상**이다 — 오염을 주입했으므로.
+      // exit 2(INPUT_ERROR/INCONCLUSIVE)만 CLI 실패다.
+      if (r.status === 2 || !fs.existsSync(outPath)) {
+        cliFailures.push(`${runId}: verify-evidence exit=${r.status} — 리포트를 얻지 못했다`);
+      } else {
+        try { report = JSON.parse(fs.readFileSync(outPath, "utf8")); }
+        catch (e) { cliFailures.push(`${runId}: 리포트 파싱 실패(${e.message})`); }
+      }
+    }
+
+    // 시크릿 축은 케이스마다 산출물 파일 하나다 — CLI 한 번의 결과가 그 케이스의 판정이다.
+    const scans = new Map();
+    for (const c of cases.get(CASE_KINDS.SECRET_BYPASS)) {
+      const artifact = path.join(runsDir, runId, "secret", c.caseId, ".devcareer", `${c.layer}.json`);
+      if (!fs.existsSync(artifact)) { scans.set(c.caseId, null); continue; }
+      const r = spawnSync("node", [path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "--secret-scan", artifact], { cwd: REPO_ROOT, encoding: "utf8" });
+      // 코드는 CLI 출력에서 뽑는다 — 이 파일이 코드를 소유하지 않는다((CT-3)와 같은 규율).
+      const codes = [...new Set((r.stdout + r.stderr).match(/\[FAIL\] ([A-Z][A-Z0-9_]+):/g) ?? [])].map((m) => m.slice(7, -1));
+      scans.set(c.caseId, { ok: r.status === 0, codes });
+    }
+    perRun.push({ runId, evidence, report, scans });
+  }
+
+  // ---- (CX-1) 전제: 회차가 실재하고 잔여물이 갖춰졌다 ----
+  //      회차가 0건이면 아래 비율이 전부 공허해진다. **미제출은 0%가 아니다.**
+  {
+    const missing = perRun.filter((r) => r.evidence === null || r.report === null).map((r) => r.runId);
+    const ok = runIds.length >= 3 && missing.length === 0 && cliFailures.length === 0;
+    if (!ok) console.log(`    실제: 회차 ${runIds.length}건 잔여물 결손 ${JSON.stringify(missing)} CLI 실패 ${JSON.stringify(cliFailures)}`);
+    report(ok, `(CX-1) 회차 ${runIds.length}건이 실재하고 원장·설정·산출물이 갖춰졌다(AC-8의 연속 3회 — 미제출은 0%가 아니다)`);
+  }
+
+  // ---- (CX-2) 금지 방향: 도구 오류가 섞이면 채점이 성립하지 않는다 ----
+  //      toolErrors가 있으면 「검사기가 놓쳤다」와 「검사기가 돌지 못했다」가 뭉개진다.
+  {
+    const tool = perRun.filter((r) => (r.report?.toolErrors?.length ?? 0) > 0).map((r) => r.runId);
+    const layerRef = perRun.filter((r) => (r.report?.layerRefViolations?.length ?? 0) > 0).map((r) => r.runId);
+    const ok = perRun.length > 0 && tool.length === 0 && layerRef.length === 0;
+    if (!ok) console.log(`    실제: 도구 오류 회차 ${JSON.stringify(tool)} 계층 참조 위반 회차 ${JSON.stringify(layerRef)}`);
+    report(ok, "(CX-2) 회차 어디에도 도구 오류·계층 참조 위반이 0건이다(주입한 오염만 위반으로 남는다)");
+  }
+
+  // ---- (CX-3) 음성 대조: 정상 인용은 위반으로 잡히지 않는다 ----
+  //      이것이 없으면 「무조건 FAIL을 내는 검사기」가 100%를 받는다. 오염 케이스 수와
+  //      실제 위반 수가 **정확히 같아야** 한다 — 하나라도 많으면 오탐이다.
+  {
+    const bad = perRun.filter((r) => (r.report?.violations?.length ?? -1) !== 20).map((r) => `${r.runId}=${r.report?.violations?.length}`);
+    const ok = perRun.length > 0 && bad.length === 0;
+    if (!ok) console.log(`    실제: 인용 위반 수가 20이 아닌 회차 ${JSON.stringify(bad)}`);
+    report(ok, "(CX-3) 음성 대조: 인용 위반이 주입한 20건과 정확히 같다(정상 인용 오탐 0건 — 무조건 FAIL하는 검사기는 여기서 걸린다)");
+  }
+
+  // ---- (CX-4)~(CX-6) 종별 비율. 기계 3종은 3회 모두 100%가 수용선이다 ----
+  const ratiosByKind = new Map();
+  for (const kind of kindDirs) {
+    const defs = cases.get(kind);
+    const ratios = perRun.map((run) => {
+      const outcomes = defs.map((c) => {
+        if (kind === CASE_KINDS.SECRET_BYPASS) return gradeSecretCase(c, run.scans.get(c.caseId) ?? null);
+        const ledgerId = c.inject.selector
+          ? resolveSelector(c.inject.selector, run.evidence ?? {}).ledgerId
+          : c.inject.ledgerId;
+        return gradeCitationCase(c, ledgerId, run.report?.violations ?? null, run.evidence);
+      });
+      return { t: tally(defs, outcomes), outcomes };
+    });
+    ratiosByKind.set(kind, ratios);
+    const gate = evaluateGate({ kind, ratios: ratios.map((r) => r.t.ratio) });
+    const label = { [CASE_KINDS.FAKE_HASH]: "CX-4", [CASE_KINDS.OTHER_AUTHOR]: "CX-5", [CASE_KINDS.SECRET_BYPASS]: "CX-6" }[kind];
+    const ok = gate.pass === true;
+    if (!ok) {
+      console.log(`    실제: ${gate.reason} / 회차별 ${JSON.stringify(ratios.map((r) => r.t))}`);
+      for (const r of ratios) for (const o of r.outcomes) if (o.outcome !== OUTCOME.DETECTED) console.log(`      ${o.caseId}: ${o.outcome} — ${o.detail}`);
+    }
+    report(ok, `(${label}) ${kind} ${defs.length}건이 ${perRun.length}회 모두 100%다(분모는 케이스 파일 개수 고정)`);
+  }
+
+  // ---- (CX-7) 회차 간 산출물 결정성 ----
+  //      기계 축은 결정적이므로 회차가 갈리면 그것은 변동이 아니라 결함이다. 원장은
+  //      수집기가 자기 `generatedAt`을 찍으므로 그 한 필드만 갈린다.
+  {
+    const hashOf = (o) => crypto.createHash("sha256").update(JSON.stringify(o)).digest("hex");
+    const artifactHashes = perRun.map((r) =>
+      ["career", "knowledge-map", "gap-report"].map((l) => {
+        try { return hashOf(JSON.parse(fs.readFileSync(path.join(runsDir, r.runId, ".devcareer", `${l}.json`), "utf8"))); }
+        catch { return "판독실패"; }
+      }).join("/")
+    );
+    const ledgerHashes = perRun.map((r) => (r.evidence === null ? "판독실패" : hashOf({ ...r.evidence, generatedAt: null })));
+    const sameArtifacts = new Set(artifactHashes).size === 1;
+    const sameLedgers = new Set(ledgerHashes).size === 1;
+    const ok = perRun.length >= 2 && sameArtifacts && sameLedgers && !artifactHashes.includes("판독실패");
+    if (!ok) console.log(`    실제: 산출물 해시 ${JSON.stringify(artifactHashes.map((h) => h.slice(0, 12)))} 원장 해시 ${JSON.stringify(ledgerHashes.map((h) => h.slice(0, 12)))}`);
+    report(ok, "(CX-7) 회차 간 산출물이 바이트 동일하고 원장은 generatedAt 외에 동일하다(기계 축 결정성 — 갈리면 변동이 아니라 결함이다)");
+  }
+
+  // ---- (CX-8) 결과 기록에 네 수가 남는다 ----
+  //      비율만 적으면 그것이 어떻게 나왔는지 사후에 재계산할 수 없다. 분모·탐지·미탐지·
+  //      무효 네 수를 함께 적어야 「분모가 조용히 줄었는가」를 나중에 물을 수 있다.
+  {
+    const results = {
+      generatedBy: "tests/run-smoke.mjs --contamination",
+      runs: perRun.map((r) => r.runId),
+      byKind: Object.fromEntries(kindDirs.map((k) => [k, ratiosByKind.get(k).map((r) => r.t)])),
+      gates: Object.fromEntries(kindDirs.map((k) => [k, evaluateGate({ kind: k, ratios: ratiosByKind.get(k).map((r) => r.t.ratio) })])),
+      outOfScope: { [CASE_KINDS.UNSUPPORTED_CLAIM]: "이 모드의 범위 밖이다(D6) — --contamination-llm의 몫이며 미채점이 아니다." },
+    };
+    const resultsIdx = process.argv.indexOf("--results");
+    if (resultsIdx !== -1 && process.argv[resultsIdx + 1]) {
+      fs.writeFileSync(process.argv[resultsIdx + 1], JSON.stringify(results, null, 2) + "\n", "utf8");
+      console.log(`    결과 기록: ${process.argv[resultsIdx + 1]}`);
+    }
+    const shaped = kindDirs.every((k) =>
+      results.byKind[k].every((t) => Number.isInteger(t.denominator) && Number.isInteger(t.detected) && Number.isInteger(t.missed) && Number.isInteger(t.invalid) && t.denominator === 10)
+    );
+    const ok = shaped && results.runs.length === perRun.length && perRun.length > 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(results.byKind)}`);
+    report(ok, "(CX-8) 결과 기록이 종·회차마다 분모·탐지·미탐지·무효 네 수를 담는다(비율만 적으면 사후 재계산이 불가능하다)");
+  }
+}
+
+/**
+ * 회차 원장의 `sourceRepoHead`와 맞는 픽스처 레포를 찾는다.
+ *
+ * **경로를 하드코딩하지 않는다.** 픽스처는 시스템 임시 디렉터리의 캐시에 살고 그 이름은
+ * `make-fixture.mjs` 내용 해시로 정해지므로, 경로를 적어 두면 생성기가 바뀌는 순간 낡는다.
+ * 대신 캐시 후보를 훑어 **HEAD가 일치하는** 레포를 고른다 — 못 찾으면 `null`이고 호출부가
+ * FAIL시킨다(빈 값으로 강등하지 않는다).
+ */
+function findFixtureRepoFor(sourceRepoHead) {
+  let entries = [];
+  try { entries = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("devcareer-golden-cache-")); }
+  catch { return null; }
+  for (const e of entries) {
+    const candidate = path.join(os.tmpdir(), e, "large300");
+    if (!fs.existsSync(path.join(candidate, ".git"))) continue;
+    const r = spawnSync("git", ["-C", candidate, "rev-parse", "HEAD"], { encoding: "utf8" });
+    if (r.status === 0 && r.stdout.trim() === sourceRepoHead) return candidate;
+  }
+  return null;
+}
+
 async function main() {
   const negative = process.argv.includes("--negative");
   const golden = process.argv.includes("--golden");
+  const contamination = process.argv.includes("--contamination");
+
+  if (contamination) {
+    runSection("오염 스위트(기계 3종)", runContaminationSuite);
+    return finishMode("contamination"); // 아래 golden 분기의 주석과 같은 이유.
+  }
 
   // --golden은 나머지 모드와 배타적으로 분리한다 — 픽스처 생성이 최초
   // 1회 ~1분 걸려 기본/negative 스모크와 섞으면 그 두 모드가 항상
