@@ -236,9 +236,16 @@ node scripts/verify-evidence.mjs --repo <레포 경로> \
 **왜 필수인가.** `--stage fact-checked`는 호출자가 넘기는 **라벨**이다.
 오케스트레이션이 FactChecker를 실제로 띄우지 않고 이 값만 넘기면 쓰기 경계는
 그것을 구별할 수 없다 — 구조가 「LLM이 스스로 `user`를 적는」 자기면제와 같다.
-그 자칭을 실제로 반증하는 것은 이 단계다. 인용한 커밋이 원장에 없거나 범위 밖
+**이 단계가 반증하는 것은 인용 축이다.** 인용한 커밋이 원장에 없거나 범위 밖
 저자의 것이면 여기서 FAIL이 나고, 산출물이 로드됐는데 인용이 한 건도 없으면
-`INCONCLUSIVE`가 난다.
+`INCONCLUSIVE`가 난다. **그러나 인용이 실재하는 자칭 `verified`는 이 단계를
+`[PASS]` exit 0으로 통과한다**(실측) — 이 검사기는 판정의 진실성을 보지 않는다.
+
+**판정 축을 거부하는 것은 쓰기 경계의 네 불변식이다**(콜드 리뷰 라운드 2 처방 3):
+`VERIFIED_WITHOUT_ATTEMPT`(시도 0회의 승인) · `VERIFIED_CLAIM_REWRITTEN`(승인 판정이
+다른 문장에 따라붙음) · `VERDICT_PROMOTED_AFTER_REFUTED`(상한 소진 후 승격) ·
+`REFUTED_NODE_DROPPED`(반증 확정 노드의 조용한 삭제). 넷 다 `write-artifact.mjs`가
+exit 1로 거부하며 **아무것도 쓰지 않는다.**
 
 exit 1(FAIL)이나 exit 2면 **사용자에게 보고하고 멈춘다.**
 "검증은 돌렸다"고 말하면서 결과를 무시하는 것이 이 파이프라인에서 가장 나쁜

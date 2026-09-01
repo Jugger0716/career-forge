@@ -72,6 +72,7 @@ import {
   classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
   mergeArtifact,
+  VERIFICATION_LAYERS,
 } from "../scripts/lib/artifact-contract.mjs";
 import { projectWithReport, EVIDENCE_FILE_NAME } from "../scripts/project-ledger.mjs";
 import {
@@ -511,7 +512,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       성능 콜드 리뷰 라운드 3 처방 2[A]의 (LP-12)~(LP-27) 투영 필드 삭감
   //       양방향 단언 + 완전성 게이트 + 스키마 사본 드리프트 가드 545 → 561.
   //       성능 콜드 리뷰 라운드 3 처방 3의 (LP-28) 투영 직렬화 폭 고정 561 → 562.
-  default: 562,
+  //       콜드 리뷰 라운드 2 처방 3의 (AC-47)~(AC-55)·(WA-33) fact-checked 단계
+  //       불변식 넷의 양방향 관측 + 계층 중립 + CLI 배선 562 → 572.
+  default: 572,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3013,6 +3016,130 @@ function runArtifactContractOracleSmoke() {
     report(ok, "(AC-22) 허용 방향: attempts 1→2 증가는 위반이 아니다(모든 변화를 막는 검사 방어)");
   }
 
+  // ---- (AC-47)~(AC-54) fact-checked 단계 불변식 넷의 양방향 관측 ----
+  //      콜드 리뷰 라운드 2 처방 3. 라운드 2 §1이 「판정 단계 이후는 전면 무집행」이라
+  //      적었고, 이번 공격 실측은 그것이 무집행에 그치지 않는다는 것을 보였다 —
+  //      **삭제가 다른 축의 집행을 지우는 도구가 된다**(레포에 없는 해시를 인용한
+  //      노드를 지우자 verify-evidence가 [FAIL]에서 [PASS] exit 0으로 뒤집혔다).
+  //
+  //      네 불변식 각각에 **금지 방향과 허용 방향**을 짝으로 둔다. 허용 방향이 없으면
+  //      「전부 거부하는」 구현이 금지 방향만 보고 통과한다.
+
+  // ---- (AC-47) 금지: 승인 판정이 다른 문장에 따라붙는가 ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", text: "나는 분산 트랜잭션 엔진을 단독 설계해 상용화했다." })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "draft" });
+    const ok = violations.some((v) => v.code === "VERIFIED_CLAIM_REWRITTEN");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-47) 금지 방향: verified 판정을 이어받으면서 text가 바뀌면 VERIFIED_CLAIM_REWRITTEN(판정이 주장이 아니라 id에 붙는 것 차단)");
+  }
+
+  // ---- (AC-48) 허용: refuted 승계는 text가 바뀌어도 통과하는가 ----
+  //      **이 단언이 (AC-47)의 경계를 정한다.** `(WA-17)`이 CLI 층에서 못 박은 것을
+  //      함수 층에서 되비춘다 — 「text가 다르면 승계 금지」를 통째로 걸면 콜드 리뷰
+  //      M-1의 막다른 길(재작성이 네 갈래 모두 exit 1)이 되살아난다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", text: "표현을 다듬은 같은 사실." })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "draft" });
+    const ok = violations.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-48) 허용 방향: refuted 승계는 text가 바뀌어도 위반이 아니다(불리한 판정이 따라가는 것은 보수적 — (WA-17)의 함수 단위 거울)");
+  }
+
+  // ---- (AC-49) 금지: 반증 확정 노드가 조용히 사라지는가 ----
+  {
+    const prev = makeCareerInstance([
+      makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
+      makeCareerNode({ id: "car:002", text: "다른 사실." }),
+    ]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:002", text: "다른 사실." })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
+    const ok = violations.some((v) => v.code === "REFUTED_NODE_DROPPED");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-49) 금지 방향: 잠기지 않은 refuted 노드가 draft에서 빠지면 REFUTED_NODE_DROPPED(지워진 판정은 복구도 사후 판독도 불가능하다)");
+  }
+
+  // ---- (AC-50) 허용: 미판정 노드의 소실은 여전히 정상인가 ----
+  //      `(AC-17)`이 「재생성이 대체한다」를 허용 방향으로 못 박았다. 그것까지
+  //      막으면 병합이 누적만 하는 동작이 된다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001" }), makeCareerNode({ id: "car:002", text: "다른 사실." })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:002", text: "다른 사실." })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
+    const ok = violations.length === 0;
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-50) 허용 방향: not-attempted 비잠금 노드의 소실은 위반이 아니다(전량 보존 병합 방어 — (AC-17)의 경계 유지)");
+  }
+
+  // ---- (AC-51) 금지: 상한을 소진한 강등이 승격으로 뒤집히는가 ----
+  //      기존 VERIFICATION_ATTEMPTS_RESET과 **방향이 거꾸로 서 있었다**(실측):
+  //      정직한 취소(refuted/2 → not-attempted/0)는 exit 1로 막히는데
+  //      최고 등급 승격(refuted/2 → verified/2)은 exit 0으로 통과했다.
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 2, reasonCode: null } })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
+    const ok = violations.some((v) => v.code === "VERDICT_PROMOTED_AFTER_REFUTED");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-51) 금지 방향: refuted → verified 승격은 VERDICT_PROMOTED_AFTER_REFUTED(상한 소진 후의 승인은 재판정이 아니라 날조다)");
+  }
+
+  // ---- (AC-52) 허용: 강등 방향은 열려 있는가 ----
+  {
+    const prev = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+    const draft = makeCareerInstance([makeCareerNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } })]);
+    const { violations } = mergeArtifact("career", prev, draft, { stage: "fact-checked" });
+    const ok = !violations.some((v) => v.code === "VERDICT_PROMOTED_AFTER_REFUTED");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-52) 허용 방향: verified → refuted 강등은 막지 않는다(불리해지는 변경은 보수적이다)");
+  }
+
+  // ---- (AC-53) 금지: 시도 0회의 승인이 통과하는가 ----
+  //      스키마는 not-attempted ⇒ attempts 0, refuted ⇒ attempts 2를 못 박는데
+  //      **verified만 attempts에 아무 조건이 없다.** 그 빈 칸을 런타임이 채운다.
+  {
+    const inst = makeCareerInstance([makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 0, reasonCode: null } })]);
+    const violations = checkAuthorshipContract("career", inst, { stage: "fact-checked" });
+    const ok = violations.some((v) => v.code === "VERIFIED_WITHOUT_ATTEMPT");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-53) 금지 방향: fact-checked 출력의 verified + attempts 0은 VERIFIED_WITHOUT_ATTEMPT(FactChecker를 돌리지 않은 자칭 승인)");
+  }
+
+  // ---- (AC-54) 허용: 정상 판정 둘은 통과하는가 ----
+  {
+    const okInst = makeCareerInstance([
+      makeFactCheckedNode({ id: "car:001", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+      makeFactCheckedNode({ id: "car:002", text: "다른 사실.", verification: { status: "not-attempted", attempts: 0, reasonCode: null } }),
+    ]);
+    const violations = checkAuthorshipContract("career", okInst, { stage: "fact-checked" });
+    const ok = !violations.some((v) => v.code === "VERIFIED_WITHOUT_ATTEMPT");
+    if (!ok) console.log(`    실제 위반: ${JSON.stringify(violations)}`);
+    report(ok, "(AC-54) 허용 방향: verified + attempts 1과 not-attempted + attempts 0은 위반이 아니다(attempts 0을 통째로 막는 검사 방어)");
+  }
+
+  // ---- (AC-55) 계층 중립: 세 계층 전부에서 같은 불변식이 도는가 ----
+  //      네 불변식은 `hasVerificationAxis` 아래에 있어 `VERIFICATION_LAYERS`의 세
+  //      계층에 함께 걸린다. **그 중립성을 가정이 아니라 단언으로 만든다** —
+  //      career 하나만 관측하면 다른 두 계층에서 빠져도 아무도 모른다.
+  //      `plan`은 `verificationStatus`라는 **다른 축**이므로 사정권 밖이고,
+  //      그 사실도 함께 관측한다(넓게 걸리는 것도 결함이다).
+  {
+    const selfDeclared = (layer) => ({
+      nodes: [{ id: `${layer}:001`, text: "주장.", verification: { status: "verified", attempts: 0, reasonCode: null } }],
+    });
+    const covered = VERIFICATION_LAYERS.filter((layer) =>
+      checkAuthorshipContract(layer, selfDeclared(layer), { stage: "fact-checked" })
+        .some((v) => v.code === "VERIFIED_WITHOUT_ATTEMPT")
+    );
+    const planHit = checkAuthorshipContract("plan", selfDeclared("plan"), { stage: "fact-checked" })
+      .some((v) => v.code === "VERIFIED_WITHOUT_ATTEMPT");
+    const ok = covered.length === VERIFICATION_LAYERS.length && VERIFICATION_LAYERS.length === 3 && !planHit;
+    if (!ok) console.log(`    실제: 걸린 계층 ${JSON.stringify(covered)} / plan에도 걸림=${planHit}`);
+    report(ok, "(AC-55) 계층 중립: VERIFICATION_LAYERS 세 계층 전부가 VERIFIED_WITHOUT_ATTEMPT를 내고 plan은 내지 않는다(다른 축이다)");
+  }
+
   // ---- (AC-23) origin은 prev를 이어받는가(구현 7단계 (g) 병합 몫) ----
   {
     const prev = makeCareerInstance([makeCareerNode({ id: "car:001", origin: "user" })]);
@@ -3296,6 +3423,12 @@ function runArtifactContractOracleSmoke() {
     ];
     const ok = aligned && JSON.stringify(shape) === JSON.stringify(EXPECTED);
     if (!ok) console.log(`    실제: aligned=${aligned} ${JSON.stringify(shape)}`);
+    // **이 픽스처의 car:002 조합(verified + text 변경)은 이제 프로덕션이 거부한다**
+    // — `(AC-47)`의 `VERIFIED_CLAIM_REWRITTEN`이다. 그런데도 이 단언이 초록인 것은
+    // 여기서 보는 것이 `violations`가 아니라 `prevDerived`의 **정렬**뿐이기 때문이다.
+    // 픽스처를 고치지 않는 이유: 이 단언의 관측 대상은 병합 계약의 위반 여부가 아니라
+    // 「어느 노드가 prev에서 무엇을 받았는가」의 인덱스 대응이고, 거부되는 조합에서도
+    // 그 대응은 성립해야 한다. 다음 회차가 「위반인데 초록이다」로 오독하지 않도록 적는다.
     report(ok, "(AC-43) mergeArtifact의 prevDerived가 merged.nodes와 인덱스로 정렬되고 네 경로(whole 2종·부분·신규)를 구별한다");
   }
 
@@ -5166,6 +5299,26 @@ function runWriteArtifactOracleSmoke() {
       if (!ok) console.log(`    실제: status=${r.status} verification=${JSON.stringify(v)} stderr=${r.stderr}`);
       report(ok, "(WA-17) attempts=2인 노드를 --stage draft로 재작성하면 exit 0이고 이전 판정이 보존된다(콜드 리뷰 M-1)");
     }
+
+    // ---- (WA-33) CLI 배선: 반증 노드 삭제가 실제로 거부되고 파일이 그대로 남는가 ----
+    //      **함수 단위 (AC-49)만 두면 배선이 빠져도 초록이다.** 그리고 「거부했다」와
+    //      「거부했지만 파일은 고쳐 놨다」는 다르다 — 후자면 사용자가 그 문서를 읽는다.
+    //      그래서 종료 코드와 **바이트 동일**을 함께 본다.
+    {
+      const root = freshRoot("refuted-drop");
+      runWriter(root, makeCareerInstance([
+        makeFactCheckedNode({ id: "car:001", verification: { status: "refuted", attempts: 2, reasonCode: "NO_SUPPORTING_DIFF" } }),
+        makeFactCheckedNode({ id: "car:002", text: "다른 사실.", verification: { status: "verified", attempts: 1, reasonCode: null } }),
+      ]));
+      const filePath = path.join(root, "career.json");
+      const before = readTextOrNull(filePath);
+      const draft = makeCareerInstance([makeFactCheckedNode({ id: "car:002", text: "다른 사실.", verification: { status: "verified", attempts: 1, reasonCode: null } })]);
+      const r = runWriter(root, draft);
+      const ok = before !== null && r.status === 1 && r.stderr.includes("REFUTED_NODE_DROPPED") && readTextOrNull(filePath) === before;
+      if (!ok) console.log(`    실제: status=${r.status} 변경됨=${readTextOrNull(filePath) !== before} stderr=${r.stderr}`);
+      report(ok, "(WA-33) 반증 노드를 뺀 draft는 exit 1이고 기존 산출물이 바이트 동일하게 남는다(라운드 2 처방 3 배선)");
+    }
+
 
     // ---- (WA-18) 템플릿의 자기 잠금이 쓰기 경계에서 막히는가(게이트 B-7) ----
     //      계약 함수 단위 관측(AC-34~AC-41)만 두면 CLI가 그 함수를 실제로
