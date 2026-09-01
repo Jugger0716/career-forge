@@ -48,7 +48,11 @@
 // A-32) 규약을 그대로 따른다.
 
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { validateInstance } from "./lib/schema-validate.mjs";
+import { computeArtifactContentHash } from "./lib/artifact-contract.mjs";
 
 import {
   badgeForNode,
@@ -211,6 +215,75 @@ function readJsonOrExit(p) {
   }
 }
 
+/**
+ * 계층 스키마를 읽는다. **비객체를 거부한다** — 내용이 `null`·배열·스칼라인 스키마를
+ * `validateInstance`에 그대로 넘기면 오류 0건이 돌아오고, 그러면 이 게이트가 통째로
+ * 건너뛰어진다. `read-registry.mjs`의 `loadStateSchema`와 같은 형태이며 그 비대칭의
+ * 정본 관측점은 `(SR-9)`다.
+ *
+ * @returns {{schema: object|null, error: string|null}}
+ */
+function loadLayerSchema(layer) {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const rel = path.join(here, "..", "schemas", `${layer}.schema.json`);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(rel, "utf8"));
+  } catch (e) {
+    return { schema: null, error: `계층 스키마를 읽지 못했습니다(${layer}): ${e.code ?? e.message}` };
+  }
+  const shape = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+  if (shape !== "object") {
+    return { schema: null, error: `계층 스키마가 객체가 아닙니다(${layer}, 실제: ${shape})` };
+  }
+  return { schema: parsed, error: null };
+}
+
+/**
+ * 렌더 직전 입력 게이트. **위반 사유 목록을 돌려주고, 빈 배열이면 적합하다.**
+ *
+ * 두 축을 본다:
+ *
+ * 1. **계층 스키마 적합성** — required·additionalProperties·enum·조건절 전부. 이것이
+ *    없으면 `coverage`·`truncated`가 통째로 빠진 입력도 렌더된다(실측했다).
+ * 2. **`contentHash` 재계산 일치** — 본문이 기록 이후 손으로 고쳐졌는지 본다. 키 없는
+ *    SHA-256이라 의도적 위조를 막지는 못하지만, **위조하려면 정상 알고리즘을 돌려야 하므로
+ *    「임시로 조립한 JSON을 그대로 렌더」라는 가장 싼 경로는 닫힌다.** 그 한계는
+ *    `tests/contamination/README.md` §9가 이미 적어 뒀다.
+ *
+ * **판독 실패를 「검사 생략」으로 강등하지 않는다(절대 규칙 6).** 스키마를 못 읽으면
+ * 그것이 곧 위반이다 — 못 읽었다는 이유로 통과시키면 이 게이트를 없애는 가장 쉬운 방법이
+ * 스키마 파일을 지우는 것이 된다.
+ *
+ * @param {string} layer
+ * @param {unknown} instance
+ * @returns {string[]}
+ */
+export function checkRenderInput(layer, instance) {
+  const { schema, error } = loadLayerSchema(layer);
+  if (error !== null) return [error];
+
+  const problems = validateInstance(schema, instance, schema, "$", []);
+  if (problems.length > 0) return problems;
+
+  // 스키마를 통과한 뒤에만 해시를 본다 — 형태가 깨진 입력에서 해시 계산은 의미가 없고,
+  // `computeArtifactContentHash`가 비객체에 던지므로 순서를 뒤집으면 예외가 샌다.
+  let recomputed;
+  try {
+    recomputed = computeArtifactContentHash(layer, instance);
+  } catch (e) {
+    return [`contentHash를 재계산하지 못했습니다: ${e.message}`];
+  }
+  if (instance?.contentHash !== recomputed) {
+    return [
+      `$.contentHash가 본문 재계산값과 다릅니다(기록: ${String(instance?.contentHash).slice(0, 16)}…, ` +
+      `재계산: ${recomputed.slice(0, 16)}…) — 기록 이후 본문이 손으로 수정됐거나 ` +
+      `write-artifact.mjs를 거치지 않았습니다.`,
+    ];
+  }
+  return [];
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const opts = { layer: null, inPath: null, outPath: null };
@@ -236,6 +309,27 @@ function main() {
   }
 
   const instance = readJsonOrExit(opts.inPath);
+
+  // **입력 게이트(콜드 리뷰 라운드 2 처방 1).** 이 검사가 붙기 전 이 CLI는 아무 JSON이나
+  // 받아 exit 0으로 렌더했다 — 레포에 없는 해시를 인용하고 `verification.status`를
+  // `"verified"`로 자칭하고 `contentHash`가 위조되고 required `coverage`·`truncated`가
+  // 통째로 빠진 입력이 그대로 문서가 됐다. **그리고 위조본이 정직한 산출물보다 깨끗해
+  // 보였다** — 배지가 `verification.status`에서만 파생하므로 자칭 verified가 강등 배지를
+  // 껐다. 사용자가 읽는 유일한 표면이고, 어떤 스크립트도 그 `.md`를 다시 읽지 않는다.
+  //
+  // **우회 플래그를 두지 않는다.** 정상 경로는 `write-artifact.mjs`가 쓴 파일을 렌더하므로
+  // 이 게이트에 걸릴 수 없다 — 걸렸다면 그것은 쓰기 경계를 우회했다는 뜻이다.
+  const problems = checkRenderInput(opts.layer, instance);
+  if (problems.length > 0) {
+    for (const p of problems) console.error(`[SCHEMA] ${p}`);
+    console.error(
+      "[render-markdown] 부적합한 산출물은 렌더하지 않습니다. 마크다운은 JSON의 뷰이고, " +
+      "검증을 통과하지 않은 JSON을 렌더하면 사용자가 읽는 유일한 표면이 근거 없는 주장을 " +
+      "「검증 완료」로 제시하게 됩니다. 산출물은 scripts/write-artifact.mjs로 기록하십시오."
+    );
+    process.exit(1);
+  }
+
   let md;
   try {
     md = renderLayer(opts.layer, instance);
