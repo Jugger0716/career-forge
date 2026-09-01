@@ -329,6 +329,28 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
         code: "VERIFICATION_MISSING",
         message: `노드 '${id}'에 verification 필드가 없습니다 — fact-checked 단계는 판정을 실어야 합니다.`,
       });
+      continue;
+    }
+
+    // **불변식 ④ — 승인 판정은 시도 1회 이상을 요구한다(라운드 2 처방 3).**
+    // 스키마는 `not-attempted ⇒ attempts const 0`과 `refuted ⇒ attempts const 2`를
+    // 못 박는데 **`verified`만 attempts에 아무 조건이 없다**(career.schema.json의
+    // 조건절 셋을 세어 보면 그 칸이 비어 있다). 그래서 「한 번도 돌리지 않았는데
+    // 승인」이 형태로 적법하고, 실제로 빈 저장 루트에 곧장
+    // `--stage fact-checked`로 `{status:"verified", attempts:0}`을 쓰면 exit 0이었다(실측).
+    //
+    // **스키마를 고치지 않고 여기서 막는 이유**: 세 계층 스키마는 슬라이스 A 파일이고
+    // 예외는 「그 항목이 회차 작업을 실제로 막을 때만」 추가한다(절대 규칙 5).
+    // 이 검사는 런타임으로 온전히 달성되므로 막지 않는다.
+    const status = node?.verification?.status;
+    const attempts = node?.verification?.attempts;
+    if (status === "verified" && attempts === 0) {
+      violations.push({
+        code: "VERIFIED_WITHOUT_ATTEMPT",
+        message:
+          `노드 '${id}'가 verification.attempts=0인 채 status="verified"입니다 — ` +
+          "시도 0회의 승인은 FactChecker를 돌리지 않고 판정을 자칭한 것입니다(구현 7단계 (g)).",
+      });
     }
   }
   return violations;
@@ -511,6 +533,26 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
           // 「prev 유래」를 넓게 잡으면 고칠 수 있는 위반이 사람 확인으로 넘어간다.
           if (prevNode.verification !== undefined) derivedFields.push("verification");
         } else {
+          // **불변식 ③ — 상한을 소진한 강등은 되돌릴 수 없다(라운드 2 처방 3).**
+          // `refuted`는 스키마상 `attempts const 2`이므로 재생성 상한이 이미
+          // 소진돼 있고, 추가 시도로 승인이 나올 경로가 구조적으로 없다 —
+          // 따라서 `refuted → verified`는 재판정이 아니라 날조다.
+          //
+          // **아래 ATTEMPTS_RESET과 방향이 거꾸로 서 있었다**(실측): 정직한 판정
+          // 취소(`refuted/2 → not-attempted/0`)는 exit 1로 막히는데, 최고 등급
+          // 승격(`refuted/2 → verified/2`)은 exit 0으로 통과했다. 유일한 문턱이
+          // attempts 비감소인데 2 → 2는 감소가 아니기 때문이다.
+          //
+          // **강등 방향(`verified → refuted`)은 열어 둔다** — `(AC-22)`가 그것을
+          // 허용 방향으로 관측하고 있고, 불리해지는 변경은 보수적이다.
+          if (prevNode?.verification?.status === "refuted" && node?.verification?.status === "verified") {
+            violations.push({
+              code: "VERDICT_PROMOTED_AFTER_REFUTED",
+              message:
+                `노드 '${id}'의 판정이 refuted → verified로 승격됐습니다 — refuted는 재생성 상한 2회를 ` +
+                "이미 소진한 상태이므로 추가 시도로 승인이 나올 수 없습니다(AC-13 (iii)).",
+            });
+          }
           const prevAttempts = prevNode?.verification?.attempts;
           const draftAttempts = node?.verification?.attempts;
           if (
@@ -526,6 +568,39 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
             });
           }
         }
+      }
+
+      // **불변식 ① — 승인 판정은 판정이 내려진 문장에만 붙는다(라운드 2 처방 3).**
+      // 판정이 **주장이 아니라 id 문자열에 붙어 있다**는 것이 이 축의 전부다. 실측:
+      // 같은 id를 `--stage draft`로 되돌리며 text를 전면 교체해도 exit 0이고
+      // `verified`가 그대로 따라붙었으며, 들여쓰기 수정 커밋 하나를 인용한 채
+      // 「일 3000만 건 트랜잭션」이 강등 배지 없이 사용자 문서에 실렸다.
+      //
+      // **단계로 분기하지 않는다.** draft에서는 승계로, fact-checked에서는 자칭으로
+      // 같은 결과가 나오므로 조건 하나가 둘을 덮는다.
+      //
+      // **`verified`에만 건다 — `refuted` 승계는 열어 둔다.** 이것이 이 불변식의
+      // 핵심 경계다. 「text가 다르면 승계 금지」를 통째로 걸면 `(WA-17)`이 깨진다:
+      // 그 단언은 prev가 `refuted/2`인 노드를 draft에서 문장을 다듬어 재작성하면
+      // exit 0이고 판정이 보존된다를 **허용 방향으로 못 박고 있다.** 그것을 막으면
+      // 콜드 리뷰 M-1의 막다른 길(재작성이 네 갈래 모두 exit 1)이 되살아난다.
+      // 불리한 판정이 개작된 문장을 따라가는 것은 보수적이므로 막을 이유가 없다.
+      //
+      // 빠져나갈 길이 둘 있고 둘 다 정직하다 — text를 되돌리거나, 바뀐 주장에 새
+      // id를 주는 것이다(신규 노드는 아래에서 `not-attempted/0`을 받는다).
+      if (
+        hasVerificationAxis &&
+        merged?.verification?.status === "verified" &&
+        typeof prevNode.text === "string" &&
+        typeof node?.text === "string" &&
+        prevNode.text !== node.text
+      ) {
+        violations.push({
+          code: "VERIFIED_CLAIM_REWRITTEN",
+          message:
+            `노드 '${id}'는 verification.status="verified"인데 서술이 이전 산출물과 다릅니다 — ` +
+            "판정은 그 판정이 내려진 문장에만 붙습니다. 서술을 되돌리거나 바뀐 주장에 새 id를 주십시오.",
+        });
       }
 
       mergedNodes.push(merged);
@@ -557,6 +632,35 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
   // draft에 없던 prev 노드 — 잠긴 것만 살린다(규칙 1의 허용 방향).
   for (const node of prevNodes) {
     if (typeof node?.id !== "string" || consumedPrevIds.has(node.id)) continue;
+
+    // **불변식 ② — 반증 확정 노드는 조용히 사라질 수 없다(라운드 2 처방 3).**
+    // 실측: `[refuted/2, verified/1]`에서 refuted 노드만 뺀 draft가 exit 0으로
+    // 통과하고 「(노드 1건)」 한 줄 외에 흔적이 없다. `state.json`은 경로·버전·
+    // 생성 스킬 3필드뿐이라 이전 총량이 어디에도 남지 않고, 조용한 경로에는
+    // `.bak`도 없으므로 **지워진 판정은 복구도 사후 판독도 불가능하다.**
+    //
+    // 그리고 이 삭제가 다른 축의 집행을 지우는 도구가 된다 — 레포에 없는 해시를
+    // 인용한 노드를 지우자 `verify-evidence`가 `[FAIL]`에서 `[PASS]` exit 0으로
+    // 뒤집혔다(검사기가 남은 노드의 인용만 세므로 위반 노드는 분자에서도
+    // 분모에서도 사라진다). **측정된 세탁 경로가 전부 이 삭제로 시작한다.**
+    //
+    // **`refuted`에만 건다.** `not-attempted`·`verified` 노드의 소실은 `(AC-17)`이
+    // 「재생성이 대체한다」로 허용 방향을 못 박은 동작이고, 그것까지 막으면 병합이
+    // 누적만 하는 동작이 된다.
+    //
+    // 지워야 할 정당한 사유가 있으면 경로가 이미 있다 — 사용자가 산출물을 직접
+    // 편집하면 `PREV_ARTIFACT_EDITED`(exit 3)가 사람 확인을 요구하고 `--force`가
+    // `.bak` 1세대를 남긴다. 즉 삭제는 사람의 결정이 되고 그 결정이 파일에 남는다.
+    if (node.locked !== true && node?.verification?.status === "refuted") {
+      violations.push({
+        code: "REFUTED_NODE_DROPPED",
+        message:
+          `이전 산출물의 노드 '${node.id}'(verification.status="refuted", ` +
+          `reasonCode=${JSON.stringify(node?.verification?.reasonCode ?? null)})가 draft에 없습니다 — ` +
+          "반증이 확정된 노드를 조용히 지우면 그 판정이 복구도 사후 판독도 불가능해집니다(AC-13 (iii)).",
+      });
+    }
+
     if (node.locked === true) {
       mergedNodes.push({ ...node });
       // 규칙 1의 두 번째 경로. 위 early-return과 마찬가지로 draft가 기여한 것이 없다 —
