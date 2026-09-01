@@ -13,6 +13,7 @@ LLM 판단이 아니라 결정적 스크립트가 집행한다.**
 | `docs/devcareer-prep-plugin/slice_plan.md` | 3슬라이스 분할과 **슬라이스 A 파일 수정 예외 표**. |
 | `docs/devcareer-prep-plugin/conventions.md` | 규약. §9가 문서 위치·추적 정책을 정한다. |
 | `docs/devcareer-prep-plugin/plan_critic_findings.md`, `docs/devcareer-prep-plugin/cold_review.md` | 심사·리뷰 기록(백로그). 체크박스 열을 일괄로 뒤집지 마라 — 정당한 `[ ]`가 섞여 있다. |
+| `docs/devcareer-prep-plugin/cold_review_round2.md` | **산문 규칙 대 집행 장치**의 정본. 「어느 규칙에 코드 장치가 있고 어디가 산문뿐인가」와 처방 12건. 새 규칙을 문서에 적기 전에 이 문서의 등급 어휘(`schema`/`runtime`/`assertion`/`source-scan`/`prose`)로 먼저 자기 판정하라. |
 
 ## 절대 규칙
 
