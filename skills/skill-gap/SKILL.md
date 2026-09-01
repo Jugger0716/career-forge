@@ -191,10 +191,17 @@ node scripts/validate-plugin.mjs --secret-scan <저장 루트>/gap-report.json
 
 ```sh
 node scripts/render-markdown.mjs --layer knowledge-map \
-  --in <저장 루트>/knowledge-map.json --out <저장 루트>/knowledge-map.md
+  --in <저장 루트>/knowledge-map.json --out <저장 루트>/knowledge-map.md \
+  --root <저장 루트> --repo <레포 경로>
 node scripts/render-markdown.mjs --layer gap-report \
-  --in <저장 루트>/gap-report.json --out <저장 루트>/gap-report.md
+  --in <저장 루트>/gap-report.json --out <저장 루트>/gap-report.md \
+  --root <저장 루트> --repo <레포 경로>
 ```
+
+**`--root`·`--repo`는 필수다 — 이 단계가 8·9단계의 인용 검증을 다시 돌린다.**
+앞 단계 결과를 기억해 두었다가 넘기는 것이 아니라 **그 자리에서 다시 계산한다.**
+`<레포 경로>`는 앞 검사 단계와 **같은 값**을 준다. 재검증이 통과하지 못하면
+**exit 1이고 마크다운은 만들어지지 않는다.**
 
 마크다운은 JSON의 **뷰**다. 렌더러가 만들지 않은 문장을 여기서 덧붙이지 마라.
 

@@ -267,8 +267,15 @@ node scripts/validate-plugin.mjs --secret-scan <저장 루트>/career.json
 
 ```sh
 node scripts/render-markdown.mjs --layer career \
-  --in <저장 루트>/career.json --out <저장 루트>/career.md
+  --in <저장 루트>/career.json --out <저장 루트>/career.md \
+  --root <저장 루트> --repo <레포 경로>
 ```
+
+**`--root`·`--repo`는 필수다 — 이 단계가 7단계의 인용 검증을 다시 돌린다.**
+7단계 결과를 기억해 두었다가 넘기는 것이 아니라 **그 자리에서 다시 계산한다.**
+그래야 「검증했다」와 「검증했다고 말했다」가 구별된다 — 기록된 판정은 조립할 수 있지만
+실제 git 조회는 조립할 수 없다. `<레포 경로>`는 7단계와 **같은 값**을 준다.
+재검증이 통과하지 못하면 **exit 1이고 마크다운은 만들어지지 않는다.**
 
 마크다운은 JSON의 **뷰**다. 렌더러가 만들지 않은 문장을 여기서 덧붙이지 마라 —
 커버리지 수치, 절단 고지, 근거 등급 배지가 사용자 눈에 닿는 유일한 표면이고,

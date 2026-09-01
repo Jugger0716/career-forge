@@ -39,13 +39,15 @@
 // 만족하는지는 tests/run-smoke.mjs의 렌더 계약 오라클이 본다.
 //
 // 사용법(CLI):
-//   node scripts/render-markdown.mjs --layer career --in <career.json> [--out <career.md>]
+//   node scripts/render-markdown.mjs --layer career --in <career.json>
+//        --root <저장 루트> --repo <레포 경로> [--out <career.md>]
 //     --layer: career | knowledge-map | gap-report (미지원 계층은 exit 2)
+//     --root·--repo: **둘 다 필수**다. 렌더 직전 인용 검증을 다시 돌리는 데 쓴다.
 //     --out 생략 시 stdout으로 출력한다.
 //
-// 종료 코드: 0 = 렌더 성공 / 2 = 입력 오류(파일 부재·JSON 파싱 실패·미지원
-// 계층). verify-evidence.mjs의 "입력 오류는 결론을 낼 수 없음 계열"(콜드 리뷰
-// A-32) 규약을 그대로 따른다.
+// 종료 코드: 0 = 렌더 성공 / 1 = 게이트 거부(스키마·해시·재검증) / 2 = 입력
+// 오류(파일 부재·JSON 파싱 실패·미지원 계층·필수 인자 누락). verify-evidence.mjs의
+// "입력 오류는 결론을 낼 수 없음 계열"(콜드 리뷰 A-32) 규약을 그대로 따른다.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +55,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validateInstance } from "./lib/schema-validate.mjs";
 import { computeArtifactContentHash } from "./lib/artifact-contract.mjs";
+import { verifyEvidence, KNOWN_LAYERS } from "./verify-evidence.mjs";
 
 import {
   badgeForNode,
@@ -284,9 +287,128 @@ export function checkRenderInput(layer, instance) {
   return [];
 }
 
+/**
+ * 렌더 직전 **인용 검증을 다시 돌린다** — 콜드 리뷰 라운드 2 처방 8.
+ *
+ * **왜 영수증이 아니라 재실행인가.** 처방 8의 문면은 「`verify-evidence` 실행 사실을
+ * 기록하고 렌더가 대조」였다. 영수증 설계 셋(별도 파일·산출물 내 필드·레지스트리)을
+ * 전부 위조 공격에 걸어 본 결과 **셋 다 위조 비용을 올리지 못했다.** 공통 급소가
+ * 하나다 — 영수증 값이 검사기 실행의 함수가 아니라 **피검 산출물의 함수**라, 위조자가
+ * 알아야 할 값이 위조 대상 파일 안에 이미 평문으로 인쇄돼 있다(`contentHash`·
+ * `sourceRepoHead`). 그래서 「베끼기」와 「실행」이 구별되지 않는다.
+ *
+ * 반면 검사기 자신은 **실제 git 조회를 강제한다.** 존재하지 않는 sha는 어떤 레포로도
+ * 통과할 수 없다(sha 역상이 필요하다). 그래서 「대조」를 「기록된 판정과의 비교」가
+ * 아니라 **「그 자리에서의 재계산」**으로 읽는다. 저장하는 판정이 없으므로 위조할
+ * 판정도 없다.
+ *
+ * **이 게이트가 닫는 격차는 실측된 것이다.** 추적되는 회차 산출물
+ * `tests/contamination/runs/run-machine-01`에 대해 `verify-evidence`는 exit 1과
+ * 인용 위반 14건(career 단독)을 냈는데, 같은 `career.json`을 렌더하면 exit 0으로
+ * 111줄짜리 사용자 문서가 나왔다. **검사기가 거부한 파일이 사용자 문서가 됐다.**
+ *
+ * **입력을 저장 루트에서 파생한다.** `--evidence`·`--config`를 자유 경로로 받지
+ * 않는 이유는, 그러면 루트 밖에 위조 원장을 두고 지정하는 우회가 열리기 때문이다
+ * (위조 공격이 실제로 그 경로로 뚫었다).
+ *
+ * @returns {string[]} 위반 사유. 빈 배열이면 적합.
+ */
+export function checkRenderVerification({ layer, inPath, root, repoPath }) {
+  const problems = [];
+
+  // `--in`이 저장 루트의 그 계층 파일이어야 한다 — 깨끗한 루트를 검증해 놓고
+  // 루트 밖 다른 파일을 렌더하는 우회를 닫는다.
+  const expectedIn = path.resolve(root, `${layer}.json`);
+  if (path.resolve(inPath) !== expectedIn) {
+    problems.push(`--in이 저장 루트의 ${layer}.json이 아닙니다(기대: ${expectedIn})`);
+    return problems;
+  }
+
+  const readJson = (p, label) => {
+    let text;
+    try { text = fs.readFileSync(p, "utf8"); } catch (e) {
+      problems.push(`${label}을(를) 읽을 수 없습니다: ${p} (${e.code ?? e.message})`);
+      return null;
+    }
+    try { return JSON.parse(text); } catch (e) {
+      problems.push(`${label} JSON 파싱 실패: ${p} — ${e.message}`);
+      return null;
+    }
+  };
+
+  const evidence = readJson(path.join(root, "evidence.json"), "원장(evidence.json)");
+  const config = readJson(path.join(root, "config.json"), "설정(config.json)");
+  if (evidence === null || config === null) return problems;
+
+  // **부재를 빈 배열로 강등하지 않는다**(절대 규칙 6) — 선택 저자 집합이 비면
+  // 저자 대조 축이 통째로 공허해진다.
+  const selected = config?.identitySelection?.selected;
+  if (!Array.isArray(selected) || selected.length === 0) {
+    problems.push("config.json의 identitySelection.selected가 비어 있습니다 — 저자 대조 축이 공허해집니다");
+    return problems;
+  }
+
+  // **루트에 있는 계층을 전부 싣는다.** 하나만 넘기면 `parentRefs`를 볼 수 없어
+  // `layerRefUnverifiable`이 쌓이는데, 그 축은 verify-evidence의 종료 코드에
+  // 드러나지 않는다(실측). 아래에서 그것도 위반으로 본다.
+  const artifactsByLayer = {};
+  for (const known of KNOWN_LAYERS) {
+    const p = path.join(root, `${known}.json`);
+    if (!fs.existsSync(p)) continue;
+    const inst = readJson(p, `${known} 산출물`);
+    if (inst === null) return problems;
+    artifactsByLayer[known] = inst;
+  }
+  if (!Object.prototype.hasOwnProperty.call(artifactsByLayer, layer)) {
+    problems.push(`저장 루트에 ${layer}.json이 없습니다: ${root}`);
+    return problems;
+  }
+
+  let report;
+  try {
+    report = verifyEvidence({ repoPath, evidence, selectedIdentities: selected, artifactsByLayer });
+  } catch (e) {
+    // **판독·실행 실패를 「검사 생략」으로 강등하지 않는다.** 못 돌렸으면 그것이
+    // 곧 위반이다 — 통과시키면 이 게이트를 없애는 가장 쉬운 방법이 레포 경로를
+    // 깨뜨리는 것이 된다(절대 규칙 6, 처방 1의 스키마 판독 실패와 같은 규율).
+    problems.push(`인용 재검증을 실행하지 못했습니다: ${e.message}`);
+    return problems;
+  }
+
+  // **PASS 하나만 통과다.** INCONCLUSIVE도 통과가 아니다 — 도구 오류를
+  // 「검증 완료」로 위장하지 않는다.
+  if (report?.status !== "PASS") {
+    // **사유를 함께 싣는다.** 「FAIL이다」만 적으면 사용자가 무엇을 고쳐야 하는지
+    // 알 수 없고, 그러면 이 게이트를 끄는 것이 가장 싼 대응이 된다.
+    const all = [
+      ...(report?.violations ?? []),
+      ...(report?.layerRefViolations ?? []),
+      ...(report?.contentHashViolations ?? []),
+      ...(report?.externalSourceViolations ?? []),
+    ];
+    const shown = all.slice(0, 5).map((v) => `${v.layer ?? "?"}#${v.nodeId ?? "?"}: ${v.code ?? "?"}`);
+    const tool = (report?.toolErrors ?? []).length;
+    problems.push(
+      `인용 재검증이 ${report?.status ?? "판독 실패"}입니다` +
+      (shown.length > 0 ? ` — ${shown.join(" / ")}${all.length > shown.length ? ` 외 ${all.length - shown.length}건` : ""}` : "") +
+      (tool > 0 ? ` (도구 오류 ${tool}건)` : "")
+    );
+  }
+
+  const unverifiable = report?.layerRefUnverifiable ?? [];
+  if (Array.isArray(unverifiable) && unverifiable.length > 0) {
+    problems.push(
+      `상위 계층 참조 ${unverifiable.length}건을 검증하지 못했습니다 — ` +
+      "이 축은 verify-evidence의 종료 코드에 드러나지 않으므로 여기서 위반으로 봅니다."
+    );
+  }
+
+  return problems;
+}
+
 function main() {
   const argv = process.argv.slice(2);
-  const opts = { layer: null, inPath: null, outPath: null };
+  const opts = { layer: null, inPath: null, outPath: null, root: null, repoPath: null };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
       case "--layer":
@@ -298,13 +420,24 @@ function main() {
       case "--out":
         opts.outPath = argv[++i];
         break;
+      case "--root":
+        opts.root = argv[++i];
+        break;
+      case "--repo":
+        opts.repoPath = argv[++i];
+        break;
       default:
         console.error(`[경고] 알 수 없는 인자 무시: ${argv[i]}`);
     }
   }
 
-  if (!opts.layer || !opts.inPath) {
-    console.error("사용법: node scripts/render-markdown.mjs --layer career --in <career.json> [--out <career.md>]");
+  // **`--root`·`--repo`는 필수다.** 「인자가 없으니 재검증을 건너뛴다」를 두지
+  // 않는다 — 그 강등이 곧 이 게이트를 끄는 플래그가 된다(절대 규칙 6).
+  if (!opts.layer || !opts.inPath || !opts.root || !opts.repoPath) {
+    console.error(
+      "사용법: node scripts/render-markdown.mjs --layer career --in <career.json> " +
+      "--root <저장 루트> --repo <레포 경로> [--out <career.md>]"
+    );
     process.exit(2);
   }
 
@@ -326,6 +459,23 @@ function main() {
       "[render-markdown] 부적합한 산출물은 렌더하지 않습니다. 마크다운은 JSON의 뷰이고, " +
       "검증을 통과하지 않은 JSON을 렌더하면 사용자가 읽는 유일한 표면이 근거 없는 주장을 " +
       "「검증 완료」로 제시하게 됩니다. 산출물은 scripts/write-artifact.mjs로 기록하십시오."
+    );
+    process.exit(1);
+  }
+
+  // **재검증 게이트(라운드 2 처방 8).** 위 게이트가 「무엇을 렌더하는지」를 묶는다면
+  // 이 게이트는 「그것이 **지금** 검사기를 통과하는지」를 묶는다. 순서를 뒤집지
+  // 않는 이유는 스키마·해시 축이 먼저 발화해야 (RV-1)(RV-2)의 고유 관측점이
+  // 유지되기 때문이다.
+  const verifyProblems = checkRenderVerification({
+    layer: opts.layer, inPath: opts.inPath, root: opts.root, repoPath: opts.repoPath,
+  });
+  if (verifyProblems.length > 0) {
+    for (const p of verifyProblems) console.error(`[VERIFY] ${p}`);
+    console.error(
+      "[render-markdown] 인용 재검증을 통과하지 못한 산출물은 렌더하지 않습니다. " +
+      "「검증했다」와 「검증했다고 말했다」를 구별하는 유일한 수단이 이 재실행입니다 — " +
+      "기록된 판정을 믿지 않고 그 자리에서 다시 계산합니다."
     );
     process.exit(1);
   }
