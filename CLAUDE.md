@@ -13,6 +13,7 @@ LLM 판단이 아니라 결정적 스크립트가 집행한다.**
 | `docs/devcareer-prep-plugin/slice_plan.md` | 3슬라이스 분할과 **슬라이스 A 파일 수정 예외 표**. |
 | `docs/devcareer-prep-plugin/conventions.md` | 규약. §9가 문서 위치·추적 정책을 정한다. |
 | `docs/devcareer-prep-plugin/plan_critic_findings.md`, `docs/devcareer-prep-plugin/cold_review.md` | 심사·리뷰 기록(백로그). 체크박스 열을 일괄로 뒤집지 마라 — 정당한 `[ ]`가 섞여 있다. |
+| `docs/devcareer-prep-plugin/perf_review.md` | **성능 비용의 정본.** 측정 등급 어휘(`measured`/`derived`/`structural`/`estimated`/`unmeasured`)와 처방 7건. **성능 주장을 적기 전에 이 문서의 등급으로 먼저 자기 판정하라 — 측정되지 않는 성능 주장은 없는 것이다.** 게이트 실측 시간도 여기가 정본이다. |
 | `docs/devcareer-prep-plugin/cold_review_round2.md` | **산문 규칙 대 집행 장치**의 정본. 「어느 규칙에 코드 장치가 있고 어디가 산문뿐인가」와 처방 12건. 새 규칙을 문서에 적기 전에 이 문서의 등급 어휘(`schema`/`runtime`/`assertion`/`source-scan`/`prose`)로 먼저 자기 판정하라. |
 
 ## 절대 규칙
@@ -45,12 +46,32 @@ LLM 판단이 아니라 결정적 스크립트가 집행한다.**
 
 ```sh
 npm run lint     # exit 0이어야 한다
-npm test         # 기본 → --negative → --golden 순서
+npm test         # 기본 → --negative → --golden 순서 — 네 게이트
+
+node tests/run-smoke.mjs --contamination   # 다섯 번째 — npm test에 없다, 손으로 돌려라
 ```
 
-네 게이트가 전부 0 FAIL이어야 완료다. **`--golden`은 10분을 넘기므로 백그라운드로 돌려라** —
-전경에서 타임아웃에 죽으면 진행 상황을 잃는다. 커밋 뒤에는 새 클론에서 한 번 더 확인한다
-(추적되지 않는 파일 때문에 워킹 트리 녹색이 클론 녹색을 뜻하지 않는다).
+**다섯 게이트가 전부 0 FAIL이어야 완료다.** 그중 `npm test`가 도는 것은 **넷뿐이다** —
+`--contamination`(오염 스위트 기계 3종)은 아직 그 안에 없고, 그래서 「전부 녹색」을
+`npm test`만으로 주장할 수 없다.
+
+**왜 빠져 있는가**: 편입하려면 `package.json`을 고쳐야 하는데 그것은 슬라이스 A 파일이고
+`docs/devcareer-prep-plugin/slice_plan.md`의 예외 표 다섯 행 어디에도 없다. 예외는 그 항목이
+회차 작업을 실제로 막을 때만 추가한다(절대 규칙 5) — 모드 자체는 `package.json` 없이 돌므로
+지금은 막지 않는다.
+
+**`--contamination`에는 선행이 하나 더 있다**: 300커밋 픽스처 캐시. 없으면 `(CX-1)`이
+FAIL하는데 **그것이 정상 동작이다** — 「깨졌다」로 읽지 말고
+`node fixtures/make-fixture.mjs --out <dir>`이나 `--golden`으로 캐시를 만든 뒤에 돌려라.
+
+**게이트 시간은 실측값을 써라 — 「10분」은 낡은 수치였다**(`docs/devcareer-prep-plugin/perf_review.md` §3).
+캐시가 있으면 `--golden`은 **약 1분**, 캐시가 없으면 **약 2분 40초**(픽스처 빌드분 ≈ 95초)다.
+가장 느린 게이트는 `--golden`이 아니라 **기본 스모크(약 90~100초)**이며 `--negative`는 0.3초,
+`--contamination`은 약 7초다. 그래도 **전경에서 타임아웃 여유가 없으면 백그라운드로 돌려라** —
+전경에서 죽으면 진행 상황을 잃는다.
+
+커밋 뒤에는 새 클론에서 한 번 더 확인한다 (추적되지 않는 파일 때문에 워킹 트리 녹색이 클론
+녹색을 뜻하지 않는다).
 
 ## 이 파일이 다루지 않는 것
 
