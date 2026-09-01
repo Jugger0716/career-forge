@@ -514,7 +514,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       성능 콜드 리뷰 라운드 3 처방 3의 (LP-28) 투영 직렬화 폭 고정 561 → 562.
   //       콜드 리뷰 라운드 2 처방 3의 (AC-47)~(AC-55)·(WA-33) fact-checked 단계
   //       불변식 넷의 양방향 관측 + 계층 중립 + CLI 배선 562 → 572.
-  default: 572,
+  //       콜드 리뷰 라운드 2 처방 8의 (RV-5) 정직한 렌더 루트 전제 +
+  //       (RV-6)~(RV-8) 인용 재검증 게이트의 금지 방향 572 → 576.
+  default: 576,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4661,23 +4663,160 @@ function runSourceLineReferenceSmoke() {
  * 다시 읽지 않는다**(`--secret-scan`조차 보지 않는다). 다른 미포착은 파일에 흔적이 남아
  * 사후 감사가 가능하지만 이것은 아니다.
  */
+/**
+ * **정직한 저장 루트를 실제로 만든다** — 라운드 2 처방 8의 허용 방향 픽스처.
+ *
+ * 렌더가 인용 재검증을 다시 돌리게 되면서, 「렌더가 성공한다」를 관측하려면 실제 레포로
+ * 뒷받침되는 산출물이 필요해졌다. 이전에는 `(RV-3)`이 **오염 코퍼스**를 렌더해 exit 0을
+ * 기대했는데, 그것이 바로 이 게이트가 닫으려는 상태다.
+ *
+ * **합성 인용으로는 안 된다.** 재검증이 실제 git 조회를 강제하므로 `commit:cccc…` 같은
+ * 자리표시자는 통과할 수 없다 — 그 강제가 이 처방의 값 자체다.
+ *
+ * 세 계층이 서로 물려 있다: `knowledge-map.parentRefs`가 career 노드 id를,
+ * `gap-report.parentRefs`가 knowledge-map 노드 id를 가리키고(둘 다 `minItems: 1`),
+ * `layerRefUnverifiable`이 0이어야 하므로 셋을 함께 실어야 한다.
+ *
+ * 결과를 메모이즈한다 — 이 절과 `(RM-7)`이 함께 쓰고, 빌드는 프로세스 6~7개를 띄운다.
+ *
+ * @returns {{root: string, repo: string, careerIds: string[], kmIds: string[]}|null}
+ *          만들지 못했으면 `null`(호출부가 FAIL로 떨어뜨린다 — 빈 값으로 강등하지 않는다).
+ */
+let HONEST_ROOT_CACHE;
+function buildHonestRenderRoot() {
+  if (HONEST_ROOT_CACHE !== undefined) return HONEST_ROOT_CACHE;
+  const FIXED_AT = "2026-09-01T00:00:00Z";
+  try {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-honest-"));
+    const repo = path.join(tmp, "repo");
+    buildSingleCommit(repo);
+
+    const root = path.join(tmp, "store", STATE_DIR_NAME);
+    fs.mkdirSync(root, { recursive: true });
+
+    const run = (script, args) => spawnSync(
+      process.execPath, [path.join(REPO_ROOT, "scripts", script), ...args], { encoding: "utf8" }
+    );
+
+    const collected = run("collect-git-facts.mjs", ["--repo", repo, "--identity", OWNER_EMAIL, "--out", root]);
+    if (collected.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+
+    const cfgIn = path.join(tmp, "config-in.json");
+    fs.writeFileSync(cfgIn, JSON.stringify({
+      identitySelection: { candidates: [], selected: [OWNER_EMAIL] },
+      scope: { ref: "HEAD", mergeIncluded: false, since: null, until: null },
+      budget: { maxCommits: 50 },
+      includeDiff: false,
+      exclusions: { bots: true, vendoredPaths: true },
+      storage: { root: "home", repoOptIn: false },
+      snippetQuoting: false,
+    }), "utf8");
+    const cfg = run("write-config.mjs", ["--in", cfgIn, "--root", root, "--updated-at", FIXED_AT]);
+    if (cfg.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+
+    const ev = JSON.parse(fs.readFileSync(path.join(root, "evidence.json"), "utf8"));
+    const commit = (ev.commits ?? []).find((c) => c.excluded !== true);
+    const file = (commit?.files ?? [])[0];
+    if (commit === undefined || file === undefined) { HONEST_ROOT_CACHE = null; return null; }
+
+    // **`coverage`를 계층 스키마에 맞춰 좁힌다.** 세 계층의 `$defs.coverage`가 서로
+    // 갈려 있다 — `career`는 원장의 `isShallowClone`을 허용하지만 `knowledge-map`·
+    // `gap-report`는 `additionalProperties` 위반으로 거부한다(실측). 계층별 허용 키를
+    // 스키마에서 읽어 맞춘다 — 여기서 키를 하드코딩하면 그 드리프트를 픽스처가 한 번 더
+    // 복제하게 된다. (이 갈림 자체는 슬라이스 A 스키마의 문제이며 여기서 고치지 않는다.)
+    const coverageFor = (layer) => {
+      const { json: sch } = readRepoJsonSafe(`schemas/${layer}.schema.json`);
+      const allowed = sch?.$defs?.coverage?.properties;
+      if (allowed === undefined || allowed === null) return ev.coverage;
+      const out = {};
+      for (const k of Object.keys(ev.coverage ?? {})) {
+        if (Object.prototype.hasOwnProperty.call(allowed, k)) out[k] = ev.coverage[k];
+      }
+      return out;
+    };
+    const headFor = (layer) => ({
+      schemaVersion: "1.0.0", generatedAt: FIXED_AT, sourceRepoHead: ev.sourceRepoHead,
+      coverage: coverageFor(layer), truncated: ev.truncated,
+    });
+    const cite = [{ ledgerId: commit.id, path: file.path }];
+    const write = (layer, nodes) => {
+      const draftPath = path.join(tmp, `${layer}-draft.json`);
+      fs.writeFileSync(draftPath, JSON.stringify({ ...headFor(layer), contentHash: "0".repeat(64), nodes }), "utf8");
+      return run("write-artifact.mjs", [
+        "--layer", layer, "--draft", draftPath, "--root", root, "--stage", "fact-checked",
+        "--skill", layer === "career" ? "career-from-git" : "skill-gap", "--generated-at", FIXED_AT,
+      ]);
+    };
+
+    const careerIds = ["car:h01"];
+    const w1 = write("career", [{
+      id: careerIds[0], basis: "commit", evidence: cite,
+      verification: { status: "verified", attempts: 1, reasonCode: null },
+      origin: "generated",
+      text: "픽스처 레포의 초기 커밋으로 README를 작성했다.",
+    }]);
+    if (w1.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+
+    const kmIds = ["km:h01"];
+    const w2 = write("knowledge-map", [{
+      id: kmIds[0], basis: "inference", evidence: cite, parentRefs: careerIds,
+      verification: { status: "verified", attempts: 1, reasonCode: null },
+      origin: "generated", topic: "문서화",
+      text: "저장소 문서를 스스로 작성해 본 경험이 있다.",
+    }]);
+    if (w2.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+
+    const w3 = write("gap-report", [{
+      id: "gap:h01", basis: "inference", evidence: cite, parentRefs: kmIds,
+      verification: { status: "verified", attempts: 1, reasonCode: null },
+      origin: "generated", topic: "문서화",
+      text: "문서화 경험은 있으나 규모가 작다.",
+      selfAssessment: "자가진단 원문 — 정직한 루트 픽스처.",
+    }]);
+    if (w3.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+
+    HONEST_ROOT_CACHE = { root, repo, careerIds, kmIds };
+    return HONEST_ROOT_CACHE;
+  } catch {
+    HONEST_ROOT_CACHE = null;
+    return null;
+  }
+}
+
 function runRenderGateSmoke() {
   console.log("[렌더 입력 게이트] 부적합한 산출물은 사용자 표면에 닿지 않는다(라운드 2 처방 1)");
 
-  const R = path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+  // **오염 코퍼스에서 정직한 루트로 갈아탔다(라운드 2 처방 8).** 렌더가 인용 재검증을
+  // 다시 돌리게 되면서 `run-machine-01`은 이제 **정당하게 거부된다** — 그것이 이 게이트가
+  // 닫으려는 상태다. 허용 방향을 관측하려면 실제 레포로 뒷받침되는 산출물이 있어야 한다.
+  const HONEST = buildHonestRenderRoot();
+  const R = HONEST?.root ?? path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+  const REPO_FOR_RENDER = HONEST?.repo ?? REPO_ROOT;
   const realPath = path.join(R, "career.json");
   let real = null;
   try { real = JSON.parse(fs.readFileSync(realPath, "utf8")); } catch { /* (RV-3)이 잡는다 */ }
 
+  // **`--root`·`--repo`는 이제 필수다.** 금지 방향 픽스처는 루트 밖 임시 파일을 `--in`으로
+  // 주는데, 검사 순서가 `checkRenderInput` → 재검증이므로 스키마·해시 축이 먼저 발화해
+  // 각 단언의 고유 관측점이 유지된다.
   const renderCli = (layer, obj, outPath) => {
     const inPath = path.join(os.tmpdir(), `devcareer-rv-${layer}-${crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex").slice(0, 12)}.json`);
     fs.writeFileSync(inPath, JSON.stringify(obj), "utf8");
     const r = spawnSync("node", [
       path.join(REPO_ROOT, "scripts", "render-markdown.mjs"),
-      "--layer", layer, "--in", inPath, ...(outPath ? ["--out", outPath] : []),
+      "--layer", layer, "--in", inPath, "--root", R, "--repo", REPO_FOR_RENDER,
+      ...(outPath ? ["--out", outPath] : []),
     ], { cwd: REPO_ROOT, encoding: "utf8" });
     return { status: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
   };
+
+  // ---- (RV-5) 전제: 정직한 루트가 실제로 만들어졌는가 ----
+  //      이것이 실패하면 아래 허용 방향 단언들은 공허하다.
+  {
+    const ok = HONEST !== null;
+    if (!ok) console.log("    실제: buildHonestRenderRoot()가 null을 돌려줬다");
+    report(ok, "(RV-5) 전제: 실제 레포·원장·설정으로 뒷받침되는 정직한 3계층 저장 루트가 만들어진다(허용 방향의 재료)");
+  }
 
   // ---- (RV-1) 금지 방향: 스키마 부적합은 렌더되지 않고 파일도 생기지 않는다 ----
   //      「거부했다」와 「거부했지만 파일은 남겼다」는 다르다 — 후자면 사용자가 그 문서를
@@ -4731,6 +4870,7 @@ function runRenderGateSmoke() {
       const p = path.join(R, `${layer}.json`);
       const r = spawnSync("node", [
         path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", layer, "--in", p,
+        "--root", R, "--repo", REPO_FOR_RENDER,
       ], { cwd: REPO_ROOT, encoding: "utf8" });
       if (r.status !== 0) bad.push(`${layer}=exit ${r.status}: ${((r.stderr ?? "") + (r.stdout ?? "")).slice(0, 120)}`);
     }
@@ -4748,6 +4888,78 @@ function runRenderGateSmoke() {
     const ok = Array.isArray(problems) && problems.length >= 1 && problems[0].includes("계층 스키마");
     if (!ok) console.log(`    실제: ${JSON.stringify(problems)}`);
     report(ok, "(RV-4) 금지 방향: 계층 스키마를 읽지 못하면 위반으로 돌려준다(판독 실패를 검사 생략으로 강등 금지)");
+  }
+
+  // ---- (RV-6)~(RV-8) 인용 재검증 게이트 — 라운드 2 처방 8 ----
+  //      **처방 8의 문면은 「영수증을 기록하고 렌더가 대조」였다.** 영수증 설계 셋을 전부
+  //      위조 공격에 걸어 본 결과 셋 다 위조 비용을 올리지 못했다 — 영수증 값이 검사기
+  //      실행의 함수가 아니라 **피검 산출물의 함수**라, 위조자가 알아야 할 값이 위조 대상
+  //      파일 안에 이미 인쇄돼 있기 때문이다. 그래서 「대조」를 **「재계산」**으로 읽는다.
+  //
+  //      **닫는 격차는 실측된 것이다**: 추적되는 `run-machine-01`에 대해 verify-evidence는
+  //      exit 1과 인용 위반을 냈는데 같은 `career.json`이 exit 0으로 111줄 사용자 문서가 됐다.
+
+  // ---- (RV-6) 금지 방향: 검사기가 거부한 산출물은 렌더되지 않는다 ----
+  {
+    const CR = path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+    let crEvidence = null;
+    try { crEvidence = JSON.parse(fs.readFileSync(path.join(CR, "evidence.json"), "utf8")); } catch { /* 아래에서 전제 FAIL */ }
+    const fx = crEvidence === null ? null : findFixtureRepoFor(crEvidence.sourceRepoHead);
+    if (fx === null) {
+      report(false, "(RV-6) 전제: 오염 코퍼스의 원장에 맞는 300커밋 픽스처를 찾지 못했다(--golden으로 캐시를 만든 뒤 다시 돌려라)");
+    } else {
+      const outPath = path.join(os.tmpdir(), "devcareer-rv6.md");
+      try { fs.rmSync(outPath, { force: true }); } catch { /* 없으면 그만 */ }
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "career",
+        "--in", path.join(CR, "career.json"), "--root", CR, "--repo", fx, "--out", outPath,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      const wrote = fs.existsSync(outPath);
+      const ok = r.status === 1 && !wrote && out.includes("[VERIFY]") && out.includes("재검증");
+      if (!ok) console.log(`    실제: exit=${r.status} 파일생성=${wrote} 출력=${JSON.stringify(out.slice(0, 200))}`);
+      report(ok, "(RV-6) 금지 방향: 인용 재검증이 FAIL인 산출물은 exit 1이고 마크다운이 생기지 않는다(검사기가 거부한 파일이 사용자 문서가 되던 격차)");
+    }
+  }
+
+  // ---- (RV-7) 금지 방향: 루트 밖 --in으로 우회할 수 없다 ----
+  //      깨끗한 루트를 검증해 놓고 루트 밖 다른 파일을 렌더하는 경로를 닫는다.
+  //      이것이 없으면 (RV-6)은 `--root`만 정직한 것으로 바꿔 통과한다.
+  {
+    if (HONEST === null) {
+      report(false, "(RV-7) 전제: 정직한 루트가 없어 관측할 수 없다");
+    } else {
+      const outside = path.join(os.tmpdir(), `devcareer-rv7-${crypto.randomBytes(6).toString("hex")}.json`);
+      fs.copyFileSync(path.join(HONEST.root, "career.json"), outside);
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "career",
+        "--in", outside, "--root", HONEST.root, "--repo", HONEST.repo,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      const ok = r.status === 1 && out.includes("[VERIFY]") && out.includes("저장 루트");
+      if (!ok) console.log(`    실제: exit=${r.status} 출력=${JSON.stringify(out.slice(0, 200))}`);
+      report(ok, "(RV-7) 금지 방향: --in이 저장 루트의 그 계층 파일이 아니면 거부한다(깨끗한 루트로 위장하는 우회 차단)");
+    }
+  }
+
+  // ---- (RV-8) 금지 방향: 인자 부재는 「검사 생략」이 아니다 ----
+  //      `--root`·`--repo`를 선택으로 두면 그 부재가 곧 이 게이트를 끄는 플래그가 된다
+  //      (절대 규칙 6). 처방 1이 우회 플래그를 두지 않은 것과 같은 규율이다.
+  {
+    if (HONEST === null) {
+      report(false, "(RV-8) 전제: 정직한 루트가 없어 관측할 수 없다");
+    } else {
+      const inPath = path.join(HONEST.root, "career.json");
+      const bare = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "career", "--in", inPath,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const noRepo = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "career", "--in", inPath, "--root", HONEST.root,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const ok = bare.status === 2 && noRepo.status === 2;
+      if (!ok) console.log(`    실제: 둘다없음=${bare.status} repo없음=${noRepo.status}`);
+      report(ok, "(RV-8) 금지 방향: --root·--repo 중 하나라도 없으면 exit 2다(부재를 검사 생략으로 강등 금지)");
+    }
   }
 }
 
@@ -9517,18 +9729,18 @@ function runLayerRenderSmoke() {
   {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-render-"));
     try {
-      const inPath = path.join(tmp, "gap-report.json");
+      // **합성 인스턴스에서 정직한 루트로 갈아탔다(라운드 2 처방 8).** 렌더가 인용
+      // 재검증을 다시 돌리므로 `contentHash`만 맞춘 합성 입력으로는 exit 0에 닿을 수
+      // 없다 — 인용이 실제 레포의 커밋을 가리켜야 한다. 그 강제가 이 처방의 값이다.
+      // (초판은 자리표시자 해시를 담았다가 처방 1의 게이트에 걸렸고, 그때도 결론은
+      // 「게이트가 옳고 픽스처가 틀렸다」였다. 같은 판정을 한 칸 더 적용한다.)
+      const HONEST = buildHonestRenderRoot();
+      const inPath = HONEST === null ? path.join(tmp, "gap-report.json") : path.join(HONEST.root, "gap-report.json");
       const outPath = path.join(tmp, "gap-report.md");
-      // **`contentHash`를 실제로 계산해 담는다(라운드 2 처방 1).** 초판은 자리표시자
-      // 리터럴을 담았는데, 렌더 입력 게이트가 붙은 뒤 그것이 정확히 「write-artifact를
-      // 거치지 않은 JSON」으로 판정돼 exit 1을 받았다 — **게이트가 옳고 픽스처가 틀렸다.**
-      // CLI 왕복이 관측하려는 것은 「진입점이 막히지 않았는가」이지 「계약 위반도
-      // 렌더되는가」가 아니므로, 픽스처가 계약을 만족하게 고치는 것이 맞다.
-      const roundTripInstance = { ...gapReport, contentHash: computeArtifactContentHash("gap-report", gapReport) };
-      fs.writeFileSync(inPath, JSON.stringify(roundTripInstance), "utf8");
-      const r = spawnSync(
+      const r = HONEST === null ? { status: null, stderr: "정직한 루트를 만들지 못했다" } : spawnSync(
         process.execPath,
-        [path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "gap-report", "--in", inPath, "--out", outPath],
+        [path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "gap-report", "--in", inPath,
+         "--root", HONEST.root, "--repo", HONEST.repo, "--out", outPath],
         { encoding: "utf8" }
       );
       let md = null;
@@ -9537,7 +9749,7 @@ function runLayerRenderSmoke() {
         r.status === 0 &&
         md !== null &&
         md.startsWith("# 갭 리포트") &&
-        md.includes("재시도는 써 봤지만 지터는 들어만 봤다.");
+        md.includes("자가진단 원문 — 정직한 루트 픽스처.");
       if (!ok) console.log(`    실제: exit=${r.status} stderr=${(r.stderr ?? "").slice(0, 250)} md=${String(md).slice(0, 200)}`);
       report(
         ok,
