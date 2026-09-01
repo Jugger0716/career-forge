@@ -96,6 +96,8 @@ import {
   readConfig,
   writeConfig,
   projectLedgerForSkills,
+  PROJECTION_OMITTABLE_KEYS,
+  PROJECTION_REQUIRED_KEYS,
   checkStorageBoundary,
   STATE_DIR_NAME,
   STATE_FILE_NAME,
@@ -506,7 +508,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       14번 (a)의 (CT-1)~(CT-14) 오염 채점 엔진 오라클(기계 3종 30건) 522 → 536.
   //       콜드 리뷰 라운드 2 처방 2·9의 (RT-1)(RT-2)(AP-1)~(AP-3) 승격 536 → 541.
   //       콜드 리뷰 라운드 2 처방 1의 (RV-1)~(RV-4) 렌더 입력 게이트 541 → 545.
-  default: 545,
+  //       성능 콜드 리뷰 라운드 3 처방 2[A]의 (LP-12)~(LP-27) 투영 필드 삭감
+  //       양방향 단언 + 완전성 게이트 + 스키마 사본 드리프트 가드 545 → 561.
+  default: 561,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3431,6 +3435,225 @@ function runLedgerProjectionOracleSmoke() {
     const ok = JSON.stringify(viaEntry) === JSON.stringify(viaStore);
     if (!ok) console.log(`    실제: entry=${JSON.stringify(viaEntry.commits?.length)} store=${JSON.stringify(viaStore.commits?.length)}`);
     report(ok, "(LP-6) 투영 진입점의 결과가 store.mjs의 projectLedgerForSkills 결과와 동일하다(사본 드리프트 방어)");
+  }
+
+  // ---- (LP-12)~(LP-27) 투영 필드 삭감의 양방향 관측 ----
+  //      성능 콜드 리뷰 라운드 3 처방 2[A]. 투영이 다섯 키를 **값이 기본값일 때만**
+  //      생략하게 됐고(-18.4% 실측), 그 조건 하나하나에 금지/허용 두 방향을 붙인다.
+  //
+  //      **기존 `ledger`를 확장하지 않고 픽스처를 새로 만든 이유**: 위 (LP-4)(LP-7)
+  //      (LP-8)이 `commits.length === 2`와 "제외 1건"을 하드코딩한다. 커밋을 더하면
+  //      필드 형태 축의 변경이 무관한 CLI 왕복 축을 붉게 만든다.
+  //
+  //      **그리고 기존 `ledger`의 커밋은 required 키가 없어 완전성 게이트에 막힌다** —
+  //      즉 저 픽스처로는 삭감 분기가 한 번도 실행되지 않는다. 그것을 모르고 이 절을
+  //      기존 픽스처 위에 세웠다면 단언 16건이 전부 대상 0건으로 초록이 됐을 것이다.
+  const fieldLedger = (() => {
+    const commit = (over) => ({
+      id: `commit:${"9".repeat(40)}`,
+      hash: "9".repeat(40),
+      shortHash: "9".repeat(12),
+      authorEmail: "owner@example.com",
+      authorDate: "2026-08-19T00:00:00+09:00",
+      parents: [],
+      isMerge: false,
+      coAuthors: [],
+      subject: "feat: x",
+      insertions: 1,
+      deletions: 0,
+      files: [],
+      excluded: false,
+      exclusionReason: null,
+      ...over,
+    });
+    const file = (over) => ({
+      path: "src/a.js", oldPath: null, changeType: "A",
+      insertions: 5, deletions: 0, binary: false, viaMerge: false,
+      ...over,
+    });
+    return {
+      ...ledger,
+      commits: [
+        // ⓐ 전건 기본값 — 다섯 키가 모두 생략돼야 한다
+        commit({ id: "commit:a", hash: "a".repeat(40), shortHash: "a".repeat(12), files: [file({})] }),
+        // ⓑ shortHash 파생 불일치(7자) — 보존돼야 한다
+        commit({ id: "commit:b", hash: "b".repeat(40), shortHash: "b".repeat(7) }),
+        // ⓒ 정보를 담은 값들 — coAuthors·oldPath·binary가 보존돼야 한다
+        commit({
+          id: "commit:c", hash: "c".repeat(40), shortHash: "c".repeat(12),
+          coAuthors: ["Co-authored-by: Bob <bob@example.com>"],
+          files: [
+            file({ path: "new/name.js", oldPath: "old/name.js", changeType: "R" }),
+            file({ path: "assets/logo.png", binary: true, insertions: 0, deletions: 0 }),
+          ],
+        }),
+        // ⓓ 머지 유입 — viaMerge:true가 보존돼야 한다
+        commit({
+          id: "commit:d", hash: "d".repeat(40), shortHash: "d".repeat(12), isMerge: true,
+          parents: ["e".repeat(40), "f".repeat(40)],
+          files: [file({ path: "merged.js", changeType: "M", viaMerge: true })],
+        }),
+        // ⓔ 커밋은 완전하나 **파일 항목이 불완전**(binary·viaMerge 없음) — 파일 레벨 게이트
+        commit({
+          id: "commit:e", hash: "e".repeat(40), shortHash: "e".repeat(12),
+          files: [{ path: "damaged.js", oldPath: null, changeType: "A", insertions: 1, deletions: 0 }],
+        }),
+        // ⓕ **커밋이 불완전**(coAuthors 키 자체가 없다) — 커밋 레벨 게이트
+        (() => { const c = commit({ id: "commit:f", hash: "0".repeat(40), shortHash: "0".repeat(12), files: [file({})] }); delete c.coAuthors; return c; })(),
+      ],
+    };
+  })();
+
+  {
+    const proj = projectLedgerForSkills(fieldLedger);
+    const byId = (id) => proj.commits.find((c) => c.id === id);
+    const srcById = (id) => fieldLedger.commits.find((c) => c.id === id);
+    const fileAt = (id, p) => (byId(id)?.files ?? []).find((f) => f.path === p);
+    const has = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
+
+    // shortHash — 금지/허용
+    {
+      const ok = byId("commit:a") !== undefined && !has(byId("commit:a"), "shortHash");
+      if (!ok) console.log(`    실제: ${JSON.stringify(byId("commit:a"))}`);
+      report(ok, "(LP-12) 금지 방향: shortHash가 hash 앞 12자와 같은 커밋에서는 투영에 그 키가 없다");
+    }
+    {
+      const c = byId("commit:b");
+      const ok = has(c, "shortHash") && c.shortHash === "b".repeat(7);
+      if (!ok) console.log(`    실제: ${JSON.stringify(c)}`);
+      report(ok, "(LP-13) 허용 방향: 파생 전제가 깨진 shortHash는 보존된다(무조건 생략이면 드리프트가 소실된다)");
+    }
+
+    // coAuthors — 금지/허용
+    {
+      const ok = !has(byId("commit:a"), "coAuthors");
+      report(ok, "(LP-14) 금지 방향: 빈 coAuthors는 투영에서 생략된다");
+    }
+    {
+      const c = byId("commit:c");
+      const ok = has(c, "coAuthors") && JSON.stringify(c.coAuthors) === JSON.stringify(srcById("commit:c").coAuthors);
+      if (!ok) console.log(`    실제: ${JSON.stringify(c?.coAuthors)}`);
+      report(ok, "(LP-15) 허용 방향: 비어 있지 않은 coAuthors는 값까지 그대로 남는다(키만 남기고 비우는 형태도 잡는다)");
+    }
+
+    // oldPath — 금지/허용
+    {
+      const ok = fileAt("commit:a", "src/a.js") !== undefined && !has(fileAt("commit:a", "src/a.js"), "oldPath");
+      report(ok, "(LP-16) 금지 방향: oldPath가 null인 파일 항목에서는 그 키가 없다");
+    }
+    {
+      const f = fileAt("commit:c", "new/name.js");
+      const ok = has(f, "oldPath") && f.oldPath === "old/name.js";
+      if (!ok) console.log(`    실제: ${JSON.stringify(f)}`);
+      report(ok, "(LP-17) 허용 방향: 리네임 항목의 oldPath는 값 그대로 남는다");
+    }
+
+    // binary — 금지/허용
+    {
+      const ok = !has(fileAt("commit:a", "src/a.js"), "binary");
+      report(ok, "(LP-18) 금지 방향: binary가 false인 파일 항목에서는 그 키가 없다");
+    }
+    {
+      const f = fileAt("commit:c", "assets/logo.png");
+      const ok = has(f, "binary") && f.binary === true;
+      if (!ok) console.log(`    실제: ${JSON.stringify(f)}`);
+      report(ok, "(LP-19) 허용 방향: binary:true는 남는다(정보를 담은 값은 생략 대상이 아니다)");
+    }
+
+    // viaMerge — 금지/허용
+    {
+      const ok = !has(fileAt("commit:a", "src/a.js"), "viaMerge");
+      report(ok, "(LP-20) 금지 방향: viaMerge가 false인 파일 항목에서는 그 키가 없다");
+    }
+    {
+      const f = fileAt("commit:d", "merged.js");
+      const ok = has(f, "viaMerge") && f.viaMerge === true;
+      if (!ok) console.log(`    실제: ${JSON.stringify(f)}`);
+      report(ok, "(LP-21) 허용 방향: 머지 유입 항목의 viaMerge:true는 남는다");
+    }
+
+    // ---- (LP-22) 레코드 온전성 ----
+    //      **이 단언이 이 절에서 가장 중요하다.** 삭감 이전에는 투영이 커밋 객체를
+    //      그대로 공유했으므로 (LP-3)의 "id가 남았다"가 "레코드가 원본 그대로"를
+    //      구조적으로 보장했다. 재조립하는 순간 그 동치가 끊긴다 — subject·authorDate·
+    //      insertions를 전부 버리는 투영도 (LP-2)(LP-3)(LP-4)(LP-6)을 전부 통과한다.
+    //
+    //      **화이트리스트 키를 양쪽에서 똑같이 지운 뒤 대조하는 것이 설계의 핵심이다.**
+    //      지우지 않으면 위 (LP-13)(LP-15)(LP-17)(LP-19)(LP-21)의 변이가 이 단언까지
+    //      함께 깨서 각 단언의 고유 관측점이 사라진다.
+    {
+      const strip = (c) => {
+        if (c === null || typeof c !== "object") return c;
+        const o = { ...c };
+        for (const k of PROJECTION_OMITTABLE_KEYS.commit) delete o[k];
+        if (Array.isArray(o.files)) {
+          o.files = o.files.map((f) => {
+            if (f === null || typeof f !== "object") return f;
+            const g = { ...f };
+            for (const k of PROJECTION_OMITTABLE_KEYS.fileChange) delete g[k];
+            return g;
+          });
+        }
+        return o;
+      };
+      const mismatched = proj.commits
+        .map((c) => [c.id, JSON.stringify(strip(c)) === JSON.stringify(strip(srcById(c.id)))])
+        .filter(([, same]) => !same)
+        .map(([id]) => id);
+      const ok = mismatched.length === 0 && proj.commits.length === fieldLedger.commits.length;
+      if (!ok) console.log(`    실제: 어긋난 커밋 ${JSON.stringify(mismatched)} / 건수 ${proj.commits.length}`);
+      report(ok, "(LP-22) 허용 방향: 화이트리스트 밖의 키는 하나도 사라지거나 변하지 않는다(재조립이 레코드를 갉아먹는 형태 방어)");
+    }
+
+    // ---- (LP-23) 화이트리스트 리터럴 드리프트 가드 ----
+    //      excluded/exclusionReason이 이 집합에 들어오는 순간 (LP-2)가 공허해진다.
+    //      그 확장을 상수 층에서 먼저 잡는다 — 동작이 바뀌기 전에 걸린다.
+    {
+      const expected = { commit: ["shortHash", "coAuthors"], fileChange: ["oldPath", "binary", "viaMerge"] };
+      const actual = { commit: [...PROJECTION_OMITTABLE_KEYS.commit], fileChange: [...PROJECTION_OMITTABLE_KEYS.fileChange] };
+      const ok = JSON.stringify(actual) === JSON.stringify(expected);
+      if (!ok) console.log(`    실제: ${JSON.stringify(actual)}`);
+      report(ok, "(LP-23) 전제: 생략 허용 키는 정확히 다섯이다(excluded/exclusionReason/id가 들어오면 FAIL — (LP-2)(LP-3)이 공허해지는 경로)");
+    }
+
+    // ---- (LP-24) 생략 규약이 산출물 자신에 선언되는가 ----
+    {
+      const ok = JSON.stringify(proj.projectionOmittedKeys) === JSON.stringify(PROJECTION_OMITTABLE_KEYS);
+      if (!ok) console.log(`    실제: ${JSON.stringify(proj.projectionOmittedKeys)}`);
+      report(ok, "(LP-24) 전제: 투영이 projectionOmittedKeys를 실어 「키 부재는 그 기본값이지 미상이 아니다」를 스스로 선언한다");
+    }
+
+    // ---- (LP-25)(LP-26) 완전성 게이트 — 절대 규칙 6 ----
+    //      게이트가 없으면 required 키가 빠진 손상 레코드가 생략 후 정상 레코드와
+    //      **바이트 동일**해져 「부재」와 「기본값」이 구별되지 않는다.
+    {
+      const c = byId("commit:f");
+      const ok = c !== undefined && JSON.stringify(c) === JSON.stringify(srcById("commit:f"));
+      if (!ok) console.log(`    실제: ${JSON.stringify(c)}`);
+      report(ok, "(LP-25) 허용 방향: required 키가 빠진 **커밋**은 아무것도 생략되지 않는다(손상은 손상으로 보여야 한다)");
+    }
+    {
+      const f = fileAt("commit:e", "damaged.js");
+      const ok = has(f, "oldPath") && f.oldPath === null;
+      if (!ok) console.log(`    실제: ${JSON.stringify(f)}`);
+      report(ok, "(LP-26) 허용 방향: required 키가 빠진 **파일 항목**은 아무것도 생략되지 않는다");
+    }
+
+    // ---- (LP-27) required 키 사본이 스키마와 갈리지 않는가 ----
+    //      store.mjs는 스키마를 읽지 않는다(라이브러리에 fs 의존을 더하지 않는다).
+    //      그래서 사본이고, 사본은 드리프트한다. 양방향으로 대조한다 — 한쪽만
+    //      보면 스키마에 필드를 더하고 상수를 안 고쳐도(또는 반대여도) 지나간다.
+    {
+      const { json: schema, error } = readRepoJsonSafe("schemas/evidence.schema.json");
+      const cmp = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+      const ok = error === null
+        && cmp(PROJECTION_REQUIRED_KEYS.commit, schema?.$defs?.commit?.required ?? [])
+        && cmp(PROJECTION_REQUIRED_KEYS.fileChange, schema?.$defs?.fileChange?.required ?? []);
+      if (!ok) {
+        console.log(`    실제: ${error !== null ? error : `commit=${JSON.stringify(schema?.$defs?.commit?.required)} fileChange=${JSON.stringify(schema?.$defs?.fileChange?.required)}`}`);
+      }
+      report(ok, "(LP-27) 전제: PROJECTION_REQUIRED_KEYS가 evidence.schema.json의 required와 양방향 일치한다(완전성 게이트의 기준이 스키마와 갈리면 게이트가 헛돈다)");
+    }
   }
 
   // ---- (LP-4) CLI가 실제로 도는가 ----
