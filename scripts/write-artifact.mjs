@@ -71,6 +71,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ARTIFACT_LAYERS,
   AUTHORSHIP_STAGES,
+  KNOWN_ARTIFACT_PRODUCERS,
   checkAuthorshipContract,
   classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
@@ -354,6 +355,20 @@ function main() {
   }
   if (!ARTIFACT_LAYERS[opts.layer]) {
     console.error(`[INPUT_ERROR] 지원하지 않는 계층입니다: '${opts.layer}' (지원: ${Object.keys(ARTIFACT_LAYERS).join(", ")})`);
+    process.exit(2);
+  }
+  // 콜드 리뷰 라운드 2 처방 9 — `generatedBySkill`은 레지스트리의 「누가 만들었는가」이고,
+  // `state.schema.json`에서는 `minLength: 1` 자유 문자열이라 지어낸 이름이 그대로 박혔다.
+  // 스키마를 좁히지 못하는 이유는 그 파일이 슬라이스 A라서이고, 그래서 여기서 막는다.
+  // **알 수 없는 값을 기본값으로 강등하지 않는다** — 부재도 오타도 exit 2다(절대 규칙 6).
+  if (!KNOWN_ARTIFACT_PRODUCERS.includes(opts.skill)) {
+    console.error(
+      `[INPUT_ERROR] 알 수 없는 산출물 생산자입니다: '${opts.skill}' ` +
+      `(허용: ${KNOWN_ARTIFACT_PRODUCERS.join(", ")}). ` +
+      "레지스트리의 generatedBySkill은 나중에 누가 이 산출물을 만들었는지 판단하는 근거이므로 " +
+      "지어낸 이름을 기록하지 않습니다. 새 생산자를 더하려면 artifact-contract.mjs의 " +
+      "KNOWN_SKILLS 또는 NON_SKILL_PRODUCERS에 근거와 함께 추가하십시오."
+    );
     process.exit(2);
   }
   if (!AUTHORSHIP_STAGES.includes(opts.stage)) {

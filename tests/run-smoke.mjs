@@ -58,6 +58,9 @@ import { validateInstance } from "../scripts/lib/schema-validate.mjs";
 import {
   EVIDENCE_BADGE,
   TRUNCATION_NOTICE_PREFIX,
+  NO_TRUNCATION_NOTICE,
+  UNKNOWN_TRUNCATION_NOTICE,
+  formatTruncation,
   RENDER_REQUIRED_ELEMENTS,
   LAYER_FIELD_ELEMENTS,
 } from "../scripts/lib/render-contract.mjs";
@@ -79,6 +82,7 @@ import {
   STATE_SCHEMA_VERSION,
 } from "../scripts/write-artifact.mjs";
 import { CONFIG_SCHEMA_VERSION } from "../scripts/write-config.mjs";
+import { KNOWN_SKILLS, NON_SKILL_PRODUCERS, KNOWN_ARTIFACT_PRODUCERS } from "../scripts/lib/artifact-contract.mjs";
 import { CONFIG_FILE_NAME } from "../scripts/lib/store.mjs";
 import {
   computeRepoKeyForPath,
@@ -499,7 +503,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       13번 (d)의 (SP-11) 프롬프트 명령의 cwd 상대경로 인자 517 → 518.
   //       14번 착수분의 (LN-1)~(LN-4) 소스 참조 형태 가드(A-37 재발 차단) 518 → 522.
   //       14번 (a)의 (CT-1)~(CT-14) 오염 채점 엔진 오라클(기계 3종 30건) 522 → 536.
-  default: 536,
+  //       콜드 리뷰 라운드 2 처방 2·9의 (RT-1)(RT-2)(AP-1)~(AP-3) 승격 536 → 541.
+  default: 541,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4242,6 +4247,123 @@ function runSourceLineReferenceSmoke() {
  * 읽어 채점하는 것은 `--contamination` 모드의 몫이다(아직 배선 전이다 — 그 사실을
  * 감추지 않는다).
  */
+/**
+ * 콜드 리뷰 라운드 2 처방 2·9 오라클 — 부재를 「없음」으로 강등하지 않는다 · 생산자 인증.
+ *
+ * **두 처방을 한 절에 두는 이유.** 둘 다 라운드 2가 같은 축에서 잡은 것이다 — 이 레포가
+ * 「어길 수 없다」고 적어 둔 규칙이 실제로는 산문뿐이었고, 그 승격이 규모 S였다. 절을 나누면
+ * 다음 회차가 「왜 이 둘이 같은 회차에 들어왔는가」를 잃는다.
+ *
+ * 경계 정본은 `docs/devcareer-prep-plugin/cold_review_round2.md`이며 여기서 재서술하지 않는다.
+ */
+function runRound2DeviceSmoke() {
+  console.log("[라운드 2 승격 오라클] 절단 고지 부재 · 산출물 생산자 인증");
+
+  // ---- (RT-1) 금지 방향: `truncated` 부재가 「절단 없음」이 되지 않는다 ----
+  //      초판은 `reason === undefined`를 `"none"`과 같은 가지에 두어 **부재를 적극적
+  //      주장으로 강등**했다. 사용자가 읽는 유일한 표면에서 절대 규칙 6이 깨져 있었다.
+  {
+    const absent = formatTruncation(undefined);
+    const emptyObj = formatTruncation({});
+    const ok =
+      absent === UNKNOWN_TRUNCATION_NOTICE &&
+      emptyObj === UNKNOWN_TRUNCATION_NOTICE &&
+      absent !== NO_TRUNCATION_NOTICE &&
+      !absent.includes(NO_TRUNCATION_NOTICE);
+    if (!ok) console.log(`    실제: 부재=${JSON.stringify(absent)} 빈객체=${JSON.stringify(emptyObj)}`);
+    report(ok, "(RT-1) 금지 방향: truncated 부재는 「절단 없음」이 아니라 「미기재」로 렌더된다(부재를 안심 문구로 강등 금지)");
+  }
+
+  // ---- (RT-2) 허용 방향: 실제 「없음」 선언과 실제 절단은 그대로 나온다 ----
+  //      금지 방향만 두면 세 갈래를 전부 「미기재」로 뭉개도 아무것도 깨지지 않는다 —
+  //      그러면 절단이 **있었던** 실행에서 고지가 사라진다.
+  {
+    const none = formatTruncation({ reason: "none", dropped_commits: 0 });
+    const real = formatTruncation({ reason: "budget", dropped_commits: 7 });
+    const ok =
+      none === NO_TRUNCATION_NOTICE &&
+      real.startsWith(TRUNCATION_NOTICE_PREFIX) &&
+      real.includes("7") &&
+      real !== UNKNOWN_TRUNCATION_NOTICE;
+    if (!ok) console.log(`    실제: none=${JSON.stringify(none)} 절단=${JSON.stringify(real)}`);
+    report(ok, "(RT-2) 허용 방향: reason이 none이면 「절단 없음」, 실제 절단이면 사유와 건수가 그대로 나온다(세 갈래가 뭉개지지 않는다)");
+  }
+
+  // ---- (AP-1) 전제: KNOWN_SKILLS가 `skills/` 디렉터리와 양방향으로 일치한다 ----
+  //      상수는 사본이고 정본은 디렉터리다. 한쪽에만 있는 이름을 둘 다 잡는다 — 한 방향만
+  //      보면 스킬을 새로 만들고 상수를 안 고쳐도(또는 그 반대여도) 조용히 지나간다.
+  {
+    let dirs = [];
+    try {
+      dirs = fs.readdirSync(path.join(REPO_ROOT, "skills"))
+        .filter((n) => fs.existsSync(path.join(REPO_ROOT, "skills", n, "SKILL.md")))
+        .sort();
+    } catch { /* 아래에서 FAIL한다 */ }
+    const consts = [...KNOWN_SKILLS].sort();
+    const onlyConst = consts.filter((s) => !dirs.includes(s));
+    const onlyDir = dirs.filter((s) => !consts.includes(s));
+    const ok = dirs.length >= 2 && onlyConst.length === 0 && onlyDir.length === 0;
+    if (!ok) console.log(`    실제: 디렉터리 ${JSON.stringify(dirs)} 상수 ${JSON.stringify(consts)} 상수만 ${JSON.stringify(onlyConst)} 디렉터리만 ${JSON.stringify(onlyDir)}`);
+    report(ok, `(AP-1) KNOWN_SKILLS ${consts.length}건이 skills/ 디렉터리와 양방향으로 일치한다(상수는 사본, 정본은 디렉터리)`);
+  }
+
+  // ---- (AP-2) 금지 방향: 미지 생산자는 write-artifact가 거부한다 ----
+  //      `state.schema.json`의 generatedBySkill은 minLength:1 자유 문자열이고 그 파일은
+  //      슬라이스 A라 좁힐 수 없다 — 그래서 CLI에서 막는다. **CLI를 실제로 돌려 확인한다**
+  //      (상수만 보면 「배선했는가」가 관측되지 않는다).
+  {
+    const r = spawnSync("node", [
+      path.join(REPO_ROOT, "scripts", "write-artifact.mjs"),
+      "--layer", "career", "--draft", "no-such.json",
+      "--root", path.join(os.tmpdir(), ".devcareer"),
+      "--stage", "draft", "--skill", "no-such-producer",
+    ], { cwd: REPO_ROOT, encoding: "utf8" });
+    const out = (r.stdout ?? "") + (r.stderr ?? "");
+    const ok = r.status === 2 && out.includes("알 수 없는 산출물 생산자");
+    if (!ok) console.log(`    실제: exit=${r.status} 출력=${JSON.stringify(out.slice(0, 200))}`);
+    report(ok, "(AP-2) 금지 방향: 미지 생산자 이름은 write-artifact가 exit 2로 거부한다(지어낸 이름이 레지스트리에 박히지 않는다)");
+  }
+
+  // ---- (AP-3) 허용 방향: 실재 생산자는 이 검사에서 걸리지 않는다 ----
+  //      금지 방향만 두면 집합을 비워도(전부 거부해도) 통과한다 — 그러면 스킬이 산출물을
+  //      쓸 수 없게 되는데 아무 단언이 울지 않는다. 회차 산출물이 실제로 쓰는 이름까지
+  //      포함해 확인한다.
+  {
+    const used = new Set();
+    const runsDir = path.join(REPO_ROOT, "tests", "contamination", "runs");
+    const collect = (dir) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) collect(full);
+        else if (e.name === "state.json") {
+          try {
+            const s = JSON.parse(fs.readFileSync(full, "utf8"));
+            for (const a of Object.values(s?.artifacts ?? {})) if (a?.generatedBySkill) used.add(a.generatedBySkill);
+          } catch { /* (CX-1)이 잡는다 */ }
+        }
+      }
+    };
+    collect(runsDir);
+    const unlisted = [...used].filter((s) => !KNOWN_ARTIFACT_PRODUCERS.includes(s));
+    const producersCovered = KNOWN_ARTIFACT_PRODUCERS.length === KNOWN_SKILLS.length + NON_SKILL_PRODUCERS.length;
+    const notRejected = KNOWN_ARTIFACT_PRODUCERS.every((s) => {
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "write-artifact.mjs"),
+        "--layer", "career", "--draft", "no-such.json",
+        "--root", path.join(os.tmpdir(), ".devcareer"),
+        "--stage", "draft", "--skill", s,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      // 이 인자로는 draft 부재로 죽지만, **생산자 검사에서는 걸리지 않아야** 한다.
+      return !((r.stdout ?? "") + (r.stderr ?? "")).includes("알 수 없는 산출물 생산자");
+    });
+    const ok = used.size >= 1 && unlisted.length === 0 && producersCovered && notRejected;
+    if (!ok) console.log(`    실제: 회차가 쓴 생산자 ${JSON.stringify([...used])} 미등재 ${JSON.stringify(unlisted)} 합집합=${producersCovered} 통과=${notRejected}`);
+    report(ok, `(AP-3) 허용 방향: 허용 집합 ${KNOWN_ARTIFACT_PRODUCERS.length}건이 전부 이 검사를 통과하고 회차가 실제로 쓴 이름도 등재돼 있다(집합을 비워 전부 막는 퇴행 차단)`);
+  }
+}
+
 function runContaminationGraderSmoke() {
   console.log("[오염 채점 엔진 오라클] 기계 3종 30건과 채점 로직(구현 9단계·AC-8)");
 
@@ -9155,6 +9277,7 @@ function runCommonSections() {
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
   runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
+  runSection("라운드 2 승격 오라클(절단 고지 부재·생산자 인증)", runRound2DeviceSmoke);
   runSection("오염 채점 엔진 오라클(구현 9단계·순서 14번)", runContaminationGraderSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
   runSection("repo-key 스모크", runStoreKeySmoke);

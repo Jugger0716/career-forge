@@ -47,6 +47,36 @@ export const ARTIFACT_LAYERS = Object.freeze({
 });
 
 /**
+ * `skills/` 아래 실재하는 스킬 이름. **정본은 디렉터리이고 이 상수는 사본이다** —
+ * 드리프트는 `(AP-1)`이 양방향으로 관측한다(상수에만 있는 것도, 디렉터리에만 있는 것도 FAIL).
+ *
+ * 여기 두는 이유: `write-artifact.mjs`가 `--skill` 값을 대조해야 하는데 그 CLI가 디렉터리를
+ * 훑으면 「무엇이 산출물을 만들었는가」가 실행 시점의 파일 시스템 상태에 좌우된다.
+ */
+export const KNOWN_SKILLS = Object.freeze(["career-from-git", "skill-gap"]);
+
+/**
+ * 스킬이 아닌 산출물 생산자. **각 항목에 왜 스킬이 아닌지 적는다** — 근거 없이 늘어나면
+ * 이 집합이 곧 「아무 이름이나」가 된다.
+ *
+ * - `contamination-fixture` — `tests/contamination`의 회차 재료화. 사람이 스킬을 돌린 것이
+ *   아니라 스크립트가 오염 draft를 만들어 `write-artifact.mjs`로 통과시킨다. 기계 3종은
+ *   채점에도 주입에도 LLM이 필요 없다(AC-8 (iv)). **실제로 그 이름을 쓰는 것이 정직하다** —
+ *   `career-from-git`으로 적으면 레지스트리가 거짓을 말한다.
+ */
+export const NON_SKILL_PRODUCERS = Object.freeze(["contamination-fixture"]);
+
+/**
+ * `state.json`의 `generatedBySkill`에 들어갈 수 있는 값 전량.
+ *
+ * **콜드 리뷰 라운드 2 처방 9.** 그 필드는 `state.schema.json`에서 `minLength: 1` 자유
+ * 문자열이라 지어낸 이름이 exit 0으로 박혔다. 지금은 소비자가 없어 피해가 없지만,
+ * `read-registry.mjs`가 그랬듯 **소비자는 나중에 생기고 그때는 근거가 이미 오염돼 있다.**
+ * 스키마를 좁히지 않고 CLI에서 막는 이유는 `state.schema.json`이 슬라이스 A라서다.
+ */
+export const KNOWN_ARTIFACT_PRODUCERS = Object.freeze([...KNOWN_SKILLS, ...NON_SKILL_PRODUCERS]);
+
+/**
  * 원장(L0)의 본문 필드. 산출물 계층과 파일명·레지스트리 키 규약이 다르므로
  * `ARTIFACT_LAYERS`에 섞지 않는다 — 원장은 수집기가 쓰고 이 모듈의 병합·
  * 기입 주체 규칙 대상이 아니다. 여기 두는 이유는 오직 하나, contentHash

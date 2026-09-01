@@ -77,6 +77,22 @@ export const TRUNCATION_NOTICE_PREFIX = "절단 고지";
 export const NO_TRUNCATION_NOTICE = "절단 없음(전량 분석)";
 
 /**
+ * `truncated`가 **없을 때**의 고지. `NO_TRUNCATION_NOTICE`와 반드시 다른 문자열이다.
+ *
+ * **콜드 리뷰 라운드 2가 잡은 것.** 초판은 `reason === undefined`를 `"none"`과 같은 가지에
+ * 두어 **부재를 「절단 없음(전량 분석)」이라는 적극적 주장으로 강등**했다 — 절대 규칙 6이
+ * 렌더 계약 안에서 깨져 있었다. 바로 위 주석이 「침묵은 "절단 없음"과 구별되지 않는다」로
+ * 의도를 적어 뒀는데, `undefined`를 그 가지에 넣은 순간 그 의도가 뒤집혔다.
+ * 같은 파일의 `formatCoverage`는 부재를 「미기재」로 정직하게 떨어뜨린다 — 그쪽이 옳다.
+ *
+ * **접두사를 `TRUNCATION_NOTICE_PREFIX`로 시작한다.** 아래 `RENDER_REQUIRED_ELEMENTS`의
+ * `truncation` 프로브가 그 접두사로도 통과하므로, 부재를 정직하게 적어도 「절단 고지 요소가
+ * 산출물에 있다」는 계약은 그대로 성립한다.
+ */
+export const UNKNOWN_TRUNCATION_NOTICE =
+  "절단 고지: 미기재 — 산출물에 truncated가 없어 절단 여부를 알 수 없습니다.";
+
+/**
  * 근거 등급(`basis`) 표시 라벨. 등급 자체는 JSON이 정본이고 여기서는
  * 사용자 대면 표기만 준다. 미지의 값은 지어내지 않고 원문을 그대로 보인다 —
  * 렌더러가 모르는 값을 만나면 조용히 감추는 것이 가장 나쁜 처리다.
@@ -114,14 +130,23 @@ export function formatCoverage(coverage) {
 }
 
 /**
- * 절단 고지 줄. `reason`이 `none`이면 절단이 없었다는 사실을 명시한다.
+ * 절단 고지 줄. 세 갈래다 — **부재를 「없음」으로 강등하지 않는다(절대 규칙 6).**
+ *
+ * - `reason === "none"`  → 절단이 **없었다**는 사실을 명시한다(산출물이 그렇게 선언했다).
+ * - `truncated` 부재     → **알 수 없다**고 적는다. 「없음」과 다른 문자열이다.
+ * - 그 밖               → 사유와 건수를 적는다.
+ *
+ * 두 번째 갈래가 콜드 리뷰 라운드 2의 처방이다. 정상 경로에서는 스키마가 `truncated`를
+ * required로 강제하므로 이 갈래에 도달할 수 없고, 도달했다면 그것은 **스키마를 거치지 않은
+ * 입력**이라는 뜻이다 — 그 사실이 사용자가 읽는 문서에 남아야 한다.
  *
  * @param {{reason?: string, dropped_commits?: number}} truncated
  * @returns {string}
  */
 export function formatTruncation(truncated) {
   const reason = truncated?.reason;
-  if (reason === "none" || reason === undefined) return NO_TRUNCATION_NOTICE;
+  if (reason === undefined) return UNKNOWN_TRUNCATION_NOTICE;
+  if (reason === "none") return NO_TRUNCATION_NOTICE;
   const dropped = typeof truncated?.dropped_commits === "number" ? truncated.dropped_commits : "미기재";
   return `${TRUNCATION_NOTICE_PREFIX}: ${reason}으로 ${dropped}건이 분석에서 빠졌습니다.`;
 }
