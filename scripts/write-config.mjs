@@ -33,7 +33,22 @@
 // 종료 코드(2분기 — `project-ledger.mjs`·`verify-evidence.mjs`와 같은 A-32 규약):
 //   0 config.json 기록 완료.
 //   2 입력 오류 — **아무것도 쓰지 않았다.** 인자 오류·파일 부재·JSON 파싱 실패·
-//     저장 경계 밖·**스키마 위반**이 전부 여기로 온다. 사유는 [INPUT_ERROR] 줄에.
+//     저장 경계 밖·**스키마 위반**·**원장 불일치**가 전부 여기로 온다.
+//     사유는 [INPUT_ERROR] 줄에.
+//
+// **원장 대조(라운드 2 처방 5).** 스키마 검증을 통과한 뒤 쓰기 직전에
+// `checkLedgerAgreement`가 저장 루트의 원장과 `identitySelection.selected`를
+// 대조한다. 다섯 갈래에 각각 고유 코드가 붙으며 전부 exit 2다:
+//
+//   IDENTITY_GATE_INCOMPLETE       selected가 비었다 — 게이트 자체가 미완료.
+//   LEDGER_MISSING                 저장 루트에 원장이 없다(부재를 통과로 강등하지 않는다).
+//   LEDGER_UNREADABLE              원장이 있으나 판독·파싱 실패(부재와 다른 코드다).
+//   LEDGER_IDENTITY_RECORD_MISSING 원장에 선택 저자 기록이 없다(빈 배열로 간주하지 않는다).
+//   LEDGER_IDENTITY_SET_MISMATCH   설정과 원장의 선택 저자 집합이 다르다.
+//
+// **왜 원장인가.** 원장은 LLM이 아니라 결정적 수집기가 git에서 만든다. 이 대조가
+// 없으면 「저자 게이트를 통과했다」는 기록이 그 게이트를 실제로 수행했는가와 무관해져,
+// 레포에 존재한 적 없는 날조 이메일도 exit 0으로 박혔다.
 //
 // **왜 스키마 위반이 1이 아니라 2인가(결정 D3, 게이트 C-6/A-32 규약).**
 // `write-artifact.mjs`의 exit 1은 「**LLM이 만든 출력**이 계약을 어겼다 — 출력을
@@ -66,7 +81,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validateInstance } from "./lib/schema-validate.mjs";
-import { checkStorageBoundary, writeConfig, CONFIG_FILE_NAME } from "./lib/store.mjs";
+import { checkStorageBoundary, writeConfig, readEvidence, CONFIG_FILE_NAME } from "./lib/store.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -119,6 +134,107 @@ export function loadConfigSchema(root = REPO_ROOT) {
 export function assembleConfig(input, nowIso) {
   const base = input === null || Array.isArray(input) || typeof input !== "object" ? {} : input;
   return { ...base, schemaVersion: CONFIG_SCHEMA_VERSION, updatedAt: nowIso };
+}
+
+/**
+ * 저자 게이트가 실제로 수행됐는지를 **원장과 대조해** 판정한다(라운드 2 처방 5).
+ *
+ * **무엇이 열려 있었나.** 이 CLI는 `identitySelection.selected`가 스키마에
+ * 적합하기만 하면 무엇이든 기록했다 — 빈 배열도, 레포에 존재한 적 없는 날조
+ * 이메일도 exit 0이었다. 즉 「저자 게이트를 통과했다」는 기록이 **그 게이트를
+ * 실제로 수행했는가와 무관**했다. 대조 상대를 원장으로 잡는 근거는 원장이 LLM이
+ * 아니라 결정적 수집기가 git에서 만든 산물이라는 것 하나다.
+ *
+ * **집합 동치를 요구하고 부분집합으로 완화하지 않는다.** 수집기는 그 집합으로
+ * 모든 커밋의 `excluded`/`exclusionReason`을 판정했으므로(`collect-git-facts.mjs`가
+ * `selectedIdentities: opts.identities`로 인자를 그대로 기록한다), 수집 뒤
+ * `selected`를 바꾸면 **원장 전체의 제외 판정이 조용히 낡는다.** 순서와 중복은
+ * 무시한다 — 하류 소비자(`verify-evidence`)가 `includes`로 원소를 볼 뿐 배열
+ * 순서를 읽지 않으므로, 순서에 민감하게 만들면 정직한 입력이 막힌다.
+ *
+ * **`commits[]`는 열지 않는다.** 원장의 커밋 목록에서 저자를 전수 스캔하는 설계도
+ * 있었으나 뺐다 — (i) 기간 밖이라 커밋이 0건인 **정직한 본인 이메일**을 FAIL시키는
+ * 오탐이 구조적으로 생기고, (ii) 선택되지 않은 **타인의 이메일**을 stderr로 흘리는
+ * 유일한 경로가 됐을 것이다. 그 축의 방어는 `verify-evidence`의
+ * `CITATION_AUTHOR_NOT_SELECTED`이며, 그것은 원장 플래그가 아니라 git이 실측한
+ * 저자를 대조하는 **독립 검사**다.
+ *
+ * **다섯 갈래에 전부 고유 코드를 붙인다.** 전부 exit 2라 코드가 없으면 어느 분기로
+ * 죽었는지 사람도 오라클도 구별하지 못하고, 한 갈래가 죽어도 다른 갈래가 그 자리를
+ * 메워 관측이 조용히 통과한다.
+ *
+ * @param {object} config 스키마 검증을 이미 통과한 설정 객체
+ * @param {{found: boolean, value: *, error: string|null}} evidenceRead `readEvidence`의 결과
+ * @returns {{code: string, message: string}[]} 위반 목록(빈 배열이면 통과)
+ */
+export function checkLedgerAgreement(config, evidenceRead) {
+  const selected = config?.identitySelection?.selected;
+
+  // L1 — 게이트 자체가 미완료다. 원장이 실재하는 정상 루트에서는 아래 L3에
+  //      흡수되지만(수집기가 `--identity` 없이는 exit 2로 죽으므로 원장의 선택
+  //      집합은 비어 있지 않다), **그 상태에 정확한 이름을 붙이기 위해** 남긴다.
+  //      즉 이 갈래가 닫는 구멍은 없고, 여는 것은 진단의 정확도다.
+  if (!Array.isArray(selected) || selected.length === 0) {
+    return [{
+      code: "IDENTITY_GATE_INCOMPLETE",
+      message:
+        "저자 게이트가 완료되지 않았습니다 — identitySelection.selected가 비어 있습니다. " +
+        "0단계에서 본인 identity를 확정한 뒤 다시 부르십시오.",
+    }];
+  }
+
+  // L2a — 원장 부재. **통과로 강등하지 않는다**(절대 규칙 6): 강등하면 이 검사를
+  //       없애는 가장 싼 방법이 원장을 지우는 것이 된다.
+  if (evidenceRead.found === false) {
+    return [{
+      code: "LEDGER_MISSING",
+      message:
+        "저장 루트에 1단계가 만든 원장이 없습니다 — --root가 1단계가 보고한 저장 루트인지, " +
+        "수집을 먼저 돌렸는지 확인하십시오.",
+    }];
+  }
+
+  // L2b — 판독·파싱 실패. 부재와 **다른 코드**로 낸다. 「--root를 확인하라」는
+  //       손상된 원장에 대해 거짓 안내다.
+  if (evidenceRead.value === null || typeof evidenceRead.value !== "object" || Array.isArray(evidenceRead.value)) {
+    return [{
+      code: "LEDGER_UNREADABLE",
+      message:
+        `원장을 읽을 수 없습니다(${evidenceRead.error ?? "내용이 객체가 아닙니다"}) — ` +
+        "1단계를 다시 돌려 원장을 새로 만드십시오.",
+    }];
+  }
+
+  // L2c — 파싱은 됐으나 선택 저자 기록이 없다. **빈 배열로 간주하지 않는다** —
+  //        그렇게 메우면 아래 L3가 「원장에 아무도 없다」로 읽어 엉뚱한 차집합을
+  //        보고하고, 부재가 불일치로 위장된다.
+  const recorded = evidenceRead.value?.coverage?.exclusions?.selectedIdentities;
+  if (!Array.isArray(recorded)) {
+    return [{
+      code: "LEDGER_IDENTITY_RECORD_MISSING",
+      message:
+        "원장에 선택 저자 기록(coverage.exclusions.selectedIdentities)이 없습니다 — " +
+        "빈 값으로 간주하지 않습니다. 1단계를 다시 돌려 원장을 새로 만드십시오.",
+    }];
+  }
+
+  // L3 — 집합 동치. 여기가 실제로 위조 비용을 올리는 유일한 갈래다.
+  const configSet = new Set(selected);
+  const ledgerSet = new Set(recorded);
+  const onlyConfig = [...configSet].filter((x) => !ledgerSet.has(x));
+  const onlyLedger = [...ledgerSet].filter((x) => !configSet.has(x));
+  if (onlyConfig.length > 0 || onlyLedger.length > 0) {
+    const cut = (xs) => (xs.length <= 5 ? xs.join(", ") : `${xs.slice(0, 5).join(", ")} 외 ${xs.length - 5}건`);
+    return [{
+      code: "LEDGER_IDENTITY_SET_MISMATCH",
+      message:
+        "선택 저자가 원장의 기록과 다릅니다 — " +
+        `설정에만: [${cut(onlyConfig)}] / 원장에만: [${cut(onlyLedger)}]. ` +
+        "수집 뒤에 선택을 바꾸면 원장 전체의 제외 판정이 낡습니다 — 선택을 바꾸려면 수집을 다시 돌리십시오.",
+    }];
+  }
+
+  return [];
 }
 
 function failInput(message) {
@@ -182,6 +298,19 @@ function main() {
       "확정하지 않은 범위 위에 모든 근거가 서기 때문입니다. 범위 확정 대화에서 빠진 항목을 " +
       "확정해 --in 파일에 담으십시오."
     );
+    process.exit(2);
+  }
+
+  // **원장 대조는 스키마 검증 뒤, 쓰기 앞이다**(라운드 2 처방 5).
+  // 앞에 두면 required가 빠진 입력이 스키마 사유 대신 원장 사유로 죽어
+  // `(WC-3)`·`(WC-4)`가 관측하는 메시지가 바뀐다 — 그 두 루트에는 원장이 없다.
+  // 뒤에 두면 `selected`가 이미 문자열 배열임이 스키마로 보장돼 판정 함수가
+  // 형태 방어를 다시 하지 않는다. 그리고 `writeConfig` 앞이므로 **config.json이
+  // 생기지 않고 기존 파일도 그대로 남는다.**
+  const ledgerProblems = checkLedgerAgreement(config, readEvidence(root));
+  if (ledgerProblems.length > 0) {
+    for (const p of ledgerProblems) console.error(`[INPUT_ERROR] ${p.code}: ${p.message}`);
+    console.error("[write-config] 아무것도 쓰지 않았습니다.");
     process.exit(2);
   }
 

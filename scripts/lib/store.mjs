@@ -356,6 +356,17 @@ export const STATE_FILE_NAME = "state.json";
 export const CONFIG_FILE_NAME = "config.json";
 
 /**
+ * 원장 파일 이름 정본. 저장 루트 아래에 이 이름으로 놓인다(§9·AC-15).
+ *
+ * **정본이 여기로 옮겨진 이유(라운드 2 처방 5).** 원래는 `project-ledger.mjs`가
+ * 갖고 있었는데, `write-config.mjs`가 원장을 대조하려면 그 상수가 필요해졌다.
+ * CLI가 다른 CLI를 import하면 의존 방향이 뒤집히므로 **라이브러리로 내리고**
+ * `project-ledger.mjs`가 re-export한다 — 기존 import 지점과 `(SP-3)`의 닻이
+ * 그대로 유지된다.
+ */
+export const EVIDENCE_FILE_NAME = "evidence.json";
+
+/**
  * 저장 루트 기준 상대경로로 바꾼다. **항상 POSIX 구분자(`/`)를 쓴다.**
  *
  * 루트 밖을 가리키면 `..`가 섞인 경로가 되는데, 그것은 산출물에 기록될 값이
@@ -423,6 +434,24 @@ export function readState(root) {
 /** 저장 루트의 config.json을 읽는다(부재·손상 모두 예외 없이 보고한다). */
 export function readConfig(root) {
   return readJsonSafe(path.join(path.resolve(root), CONFIG_FILE_NAME));
+}
+
+/**
+ * 저장 루트의 원장을 읽는다(부재·손상 모두 예외 없이 보고한다).
+ *
+ * **`readJsonSafe`의 삼분을 그대로 쓴다** — `{found:false}`(부재)와
+ * `{found:true, value:null, error}`(손상)가 추가 코드 없이 갈린다. 라운드 2
+ * 처방 5의 `LEDGER_MISSING`과 `LEDGER_UNREADABLE`이 그 두 갈래에 각각 붙으며,
+ * 둘을 한 코드로 뭉개면 「`--root`를 확인하라」가 손상된 원장에 대해 거짓
+ * 안내가 된다.
+ *
+ * **이 함수는 원장 본문을 그대로 돌려준다.** 절대 규칙 2(원장 원본을 LLM
+ * 컨텍스트에 넣지 마라)는 프롬프트로 가는 경로에 대한 것이고, 스크립트 내부
+ * 처리는 대상이 아니다 — 투영이 필요한 호출자는 `projectLedgerForSkills`를
+ * 쓴다.
+ */
+export function readEvidence(root) {
+  return readJsonSafe(path.join(path.resolve(root), EVIDENCE_FILE_NAME));
 }
 
 /** state.json을 원자적으로 쓴다. */

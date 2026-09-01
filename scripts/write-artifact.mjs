@@ -43,16 +43,27 @@
 // 종료 코드(5분기 — 각각 호출자가 취할 조치가 다르다):
 //   0 산출물 기록 + 레지스트리 갱신 완료.
 //   1 계약·스키마 위반 — **아무것도 쓰지 않았다.** 출력을 고쳐 다시 부른다.
-//   2 입력 오류(인자·파일 부재·JSON 파싱) — 쓰지 않았다.
+//     여기에 **미해소 상위 참조**(LAYER_REF_UNRESOLVED, [LAYER_REF] 채널)도 온다 —
+//     draft가 실재하지 않는 상위 id를 인용한 경우이고, 출력을 고치면 해소된다.
+//   2 입력 오류(인자·**파일 부재**·JSON 파싱) — 쓰지 않았다. **상위 계층 산출물 부재
+//     (PARENT_ARTIFACT_MISSING)가 여기 온다** — `--root`를 고치거나 상위 계층을 먼저
+//     기록하면 해소되므로 사람의 결정이 필요한 상태가 아니다. 다만 이것은 **병합 뒤에
+//     오는 첫 exit 2**이며, 그 대가로 호출자의 조치가 「인자를 고친다」에서 「인자 또는
+//     호출 순서를 고친다」로 넓어진다는 점을 감추지 않는다.
 //   3 안전하게 쓸 수 없다 — 산출물 파일을 기록하지 않았다. **사람 결정·확인이
 //     필요하다**: 사용자 편집 감지(PREV_ARTIFACT_EDITED), 이전 산출물 판독 불가
 //     (PREV_ARTIFACT_UNREADABLE / _HASH_MISSING), 백업 실패
 //     (PREV_ARTIFACT_BACKUP_FAILED), 파일시스템 쓰기 실패(ARTIFACT_WRITE_FAILED),
 //     플러그인 설치 손상(LAYER_SCHEMA_UNREADABLE), **이전 산출물에서 온 내용의 스키마
-//     위반(PREV_ARTIFACT_SCHEMA_VIOLATION)**. 사유는 [HOLD] 줄의 코드로 나온다.
+//     위반(PREV_ARTIFACT_SCHEMA_VIOLATION)**, **상위 계층 산출물 판독 불가
+//     (PARENT_ARTIFACT_UNREADABLE)**, **이전 산출물에서 온 미해소 상위 참조
+//     (PREV_ARTIFACT_LAYER_REF_UNRESOLVED)**. 사유는 [HOLD] 줄의 코드로 나온다.
 //     공통점은 「인자나 출력을 고쳐서 해소되지 않는다」이다 — 그래서 1·2가 아니다.
 //
-//     **PREV_ARTIFACT_SCHEMA_VIOLATION만 `--force`로 넘어갈 수 없다**(f029375 Minor 12).
+//     **`--force`로 넘어갈 수 없는 것은 셋이다**(f029375 Minor 12 + 라운드 2 처방 7):
+//     PREV_ARTIFACT_SCHEMA_VIOLATION · PARENT_ARTIFACT_UNREADABLE ·
+//     PREV_ARTIFACT_LAYER_REF_UNRESOLVED. 그리고 exit 2의 PARENT_ARTIFACT_MISSING도
+//     마찬가지다 — 강행하면 고아 참조를 담은 산출물이 기록되기 때문이다.
 //     다른 보류는 「덮어써도 되는가」를 사람에게 묻는 것이라 강행이 답이 될 수 있지만,
 //     이것은 쓰기 직전 자기 검증이라 강행하면 스키마를 어기는 산출물이 기록된다.
 //     사람이 고쳐야 하는 대상이 draft가 아니라 **이전 산출물**이라는 점도 다르다.
@@ -70,9 +81,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   ARTIFACT_LAYERS,
+  ARTIFACT_PARENT_LAYER,
   AUTHORSHIP_STAGES,
   KNOWN_ARTIFACT_PRODUCERS,
   checkAuthorshipContract,
+  checkParentRefs,
   classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
   mergeArtifact,
@@ -330,6 +343,37 @@ function printViolations(kind, violations) {
   for (const v of violations) console.error(`[${kind}] ${v.code}: ${v.message}`);
 }
 
+/**
+ * 상위 계층 산출물 파일을 연다(라운드 2 처방 7).
+ *
+ * **`inspectPreviousArtifact`를 재사용하지 않는다.** 그 함수의 메시지에는 `--force`
+ * 강행 안내가 박혀 있고 그 안내는 **부모에 대해 틀리다** — 부모가 없는데 강행하면
+ * 고아 참조를 담은 산출물이 기록된다. 게다가 그 문자열은 `(WA-21)`·`(WA-22)`·
+ * `(WA-29)`가 관측하는 대상이라 손대면 그 셋이 함께 흔들린다.
+ *
+ * @returns {{existence: "absent"|"present"|"unknown", instance: object|null, reason: string|null}}
+ */
+function inspectParentArtifact(parentPath) {
+  let text;
+  try {
+    text = fs.readFileSync(parentPath, "utf8");
+  } catch (e) {
+    if (e && e.code === "ENOENT") return { existence: "absent", instance: null, reason: null };
+    return { existence: "unknown", instance: null, reason: `${e.code ?? e.message}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { existence: "present", instance: null, reason: `JSON 파싱 실패 — ${e.message}` };
+  }
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+    const shape = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+    return { existence: "present", instance: null, reason: `내용이 객체가 아닙니다(${shape})` };
+  }
+  return { existence: "present", instance: parsed, reason: null };
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const opts = { layer: null, draft: null, root: null, stage: null, skill: null, force: false, generatedAt: null };
@@ -512,6 +556,88 @@ function main() {
     for (const e of schemaErrors) console.error(`[SCHEMA] ${e}`);
     console.error("[write-artifact] 스키마 위반으로 아무것도 쓰지 않았습니다(구현 7단계 (a)).");
     process.exit(1);
+  }
+
+  // -------------------------------------------------------------------------
+  // 상위 계층 참조 해소 — 라운드 2 처방 7
+  //
+  // **여기가 배치 지점인 이유 셋.** (i) `merged`가 이미 스키마 적합이라 `parentRefs`가
+  // 문자열 배열임이 보장돼 형태 방어를 다시 하지 않는다. (ii) 백업·원자적 쓰기·레지스트리
+  // 갱신 어느 것도 아직 일어나지 않아 「쓰지 않았다」 불변식과 `.bak` 미생성이 유지된다.
+  // (iii) 어차피 쓰지 않을 실행 때문에 `.bak` 1세대를 소모하지 않는다.
+  //
+  // **왜 렌더 게이트가 있는데도 필요한가.** `verify-evidence`의 `checkLayerRefs`는 부모
+  // 산출물이 그 호출에 없으면 `unverifiable`로 두고 그 배열은 `hasFailures` 산식에
+  // **없다** — fail-open이다. 그것을 위반으로 보는 곳은 렌더 게이트 하나뿐이고 그 호출은
+  // 산문으로만 강제된다. 이 파일은 산출물이 디스크에 닿는 **유일한 경로**이므로, 여기 두면
+  // 탐지가 **무조건**이 된다. 그리고 환각한 상위 id가 다음 계층 LLM 프롬프트의 재료가
+  // 되기 전에 막힌다.
+  //
+  // **못 하는 것도 적는다**: 자식을 쓴 뒤 부모가 바뀌어 참조가 끊기는 축은 1회성 쓰기
+  // 검사가 원리적으로 못 막는다. 그 축은 매 호출 재계산하는 렌더 재검증이 계속 소유한다.
+  // 두 장치는 겹치는 것이 아니라 서로의 사각을 맡는다.
+  const parentLayer = ARTIFACT_PARENT_LAYER[opts.layer];
+  if (parentLayer !== undefined) {
+    const parentPath = path.join(root, ARTIFACT_LAYERS[parentLayer].fileName);
+    const parent = inspectParentArtifact(parentPath);
+
+    // **부모 실재 검사가 참조 개수보다 먼저다.** 「참조가 0건이면 통과」를 앞에 두면
+    // `plan`만 `nodes`에 `minItems`가 없어(스키마 실측) `--layer plan --draft <nodes:[]>`가
+    // 부모 없는 루트에 기록된다. 참조 0건은 대조를 건너뛸 근거일 뿐 저장 루트의 상태
+    // 검사를 건너뛸 근거가 아니다(절대 규칙 6). `(WA-35)`가 이 순서를 못 박는다.
+    if (parent.existence === "absent") {
+      console.error(
+        `[INPUT_ERROR] PARENT_ARTIFACT_MISSING: 상위 계층 산출물이 없습니다: ${parentPath} — ` +
+        `${opts.layer}는 ${parentLayer}를 상위로 갖습니다. --root가 맞는지 확인하고 ${parentLayer} 계층을 먼저 기록하십시오. ` +
+        "**--force로 넘어갈 수 없습니다** — 강행하면 고아 참조를 담은 산출물이 기록됩니다."
+      );
+      console.error("[write-artifact] 아무것도 쓰지 않았습니다.");
+      process.exit(2);
+    }
+
+    // 판독 불가는 부재와 **다른 코드·다른 채널**이다. 인자로도 draft로도 고칠 수 없고
+    // 사람이 부모 파일을 봐야 하므로 exit 3이다(`PREV_ARTIFACT_UNREADABLE`과 같은 성격).
+    if (parent.instance === null) {
+      console.error(
+        `[HOLD] PARENT_ARTIFACT_UNREADABLE: 상위 계층 산출물을 읽을 수 없습니다: ${parentPath} (${parent.reason}) — ` +
+        `${parentLayer} 계층을 --force와 함께 다시 기록하거나 ${ARTIFACT_LAYERS[parentLayer].fileName}.bak에서 복원한 뒤 다시 부르십시오.`
+      );
+      console.error("[write-artifact] 아무것도 쓰지 않았습니다 — 사람 확인이 필요합니다.");
+      process.exit(3);
+    }
+
+    const parentIds = new Set(
+      (Array.isArray(parent.instance.nodes) ? parent.instance.nodes : [])
+        .map((n) => n?.id)
+        .filter((id) => typeof id === "string")
+    );
+    const refViolations = checkParentRefs(opts.layer, merged, parentIds);
+    if (refViolations.length > 0) {
+      // **출처 판별에 사본을 만들지 않는다.** 기존 정본
+      // `classifySchemaErrorsByProvenance`에 같은 형태의 경로 문자열을 넘겨
+      // 이전 산출물 유래인지 draft 유래인지 가른다 — 병합 규칙이 바뀌면 판정이
+      // 자동으로 따라간다.
+      const asPaths = refViolations.map((v) => `$.nodes[${v.index}].parentRefs: ${v.message}`);
+      const { fromPrev } = classifySchemaErrorsByProvenance(asPaths, prevDerived);
+      if (fromPrev.length > 0) {
+        // draft를 고쳐도 해소되지 않는다 — 잠긴 생존자가 병합에 실려 온 참조다.
+        // exit 1(「출력을 고쳐 다시 부른다」)을 내면 거짓 안내가 된다.
+        for (const e of fromPrev) console.error(`[HOLD] PREV_ARTIFACT_LAYER_REF_UNRESOLVED: ${e}`);
+        console.error(
+          "[write-artifact] 아무것도 쓰지 않았습니다 — 사람 확인이 필요합니다. " +
+          `이전 ${opts.layer} 산출물에서 병합된 노드가 지금은 ${parentLayer}에 없는 id를 가리킵니다. ` +
+          `${parentLayer}에서 그 노드를 되살리거나, ${ARTIFACT_LAYERS[opts.layer].fileName}의 해당 노드를 직접 고친 뒤 다시 부르십시오. ` +
+          "**--force로 넘어갈 수 없습니다** — 강행하면 고아 참조가 기록됩니다."
+        );
+        process.exit(3);
+      }
+      printViolations("LAYER_REF", refViolations);
+      console.error(
+        `[write-artifact] 아무것도 쓰지 않았습니다 — ${opts.layer}의 parentRefs가 ${parentLayer}에서 해소되지 않습니다. ` +
+        `실재하는 ${parentLayer} 노드 id를 인용하도록 출력을 고쳐 다시 부르십시오.`
+      );
+      process.exit(1);
+    }
   }
 
   if (inspected.hold !== null && opts.force && inspected.existence !== "absent") {
