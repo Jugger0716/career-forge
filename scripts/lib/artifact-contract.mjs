@@ -47,6 +47,64 @@ export const ARTIFACT_LAYERS = Object.freeze({
 });
 
 /**
+ * 각 계층의 **상위 계층**. `parentRefs`가 가리켜야 할 곳이다(라운드 2 처방 7).
+ *
+ * **`ARTIFACT_LAYERS`에 키를 섞지 않고 별도 맵으로 둔다.** `career`는 여기 항목이
+ * **없고**, 그것은 관대함이 아니라 계층 위상이다 — 최상위라 상위가 존재하지 않는다.
+ * 별도 맵이면 `verify-evidence.mjs`의 `LAYER_PARENT`와 모양이 정확히 같아 거동 대조가
+ * 1:1이 된다.
+ *
+ * **왜 그쪽을 import하지 않는가.** `ARTIFACT_LAYERS`와 같은 이유다 — 저쪽은 CLI이고
+ * 순수 계약 모듈이 CLI에 의존하면 방향이 뒤집힌다. 대신 `(AC-1b)`가 **철자가 아니라
+ * 거동**으로 대조한다: 이 사본이 지목하는 부모로 합성 쌍을 만들어 슬라이스 A의
+ * `checkLayerRefs`에 넘겨 같은 판정이 나오는지 본다. 철자 스캔은 리팩터링에 눈이 멀지만
+ * 거동 대조는 그렇지 않다.
+ */
+export const ARTIFACT_PARENT_LAYER = Object.freeze({
+  "knowledge-map": "career",
+  "gap-report": "knowledge-map",
+  "plan": "gap-report",
+});
+
+/**
+ * 이 계층의 `parentRefs`가 상위 계층 노드 id 집합 안에서 전부 해소되는지 본다.
+ *
+ * **부모 인스턴스가 아니라 id 집합을 받는다** — 이 모듈의 「디스크에 닿지 않는다」
+ * 계약을 유지하기 위해서다. 파일을 여는 몫은 `write-artifact.mjs`에 있다.
+ *
+ * `index`를 함께 돌려주는 이유는 호출자가 위반을 `$.nodes[i].parentRefs` 형태
+ * 문자열로 만들어 **기존 정본** `classifySchemaErrorsByProvenance`에 넘겨 출처(이전
+ * 산출물 유래인가 draft 유래인가)를 판별하기 때문이다. 출처 규칙의 사본을 만들지
+ * 않는 것이 이 설계의 전부다 — 병합 규칙이 바뀌면 판정이 자동으로 따라간다.
+ *
+ * @param {string} layer
+ * @param {object} instance 병합까지 끝난 인스턴스
+ * @param {Set<string>} parentIdSet 상위 계층 nodes[].id 전량
+ * @returns {{index: number, nodeId: string, ref: string, code: string, message: string}[]}
+ */
+export function checkParentRefs(layer, instance, parentIdSet) {
+  const parentLayer = ARTIFACT_PARENT_LAYER[layer];
+  if (parentLayer === undefined) return [];
+  const nodes = Array.isArray(instance?.nodes) ? instance.nodes : [];
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const refs = Array.isArray(node?.parentRefs) ? node.parentRefs : [];
+    for (const ref of refs) {
+      if (parentIdSet.has(ref)) continue;
+      out.push({
+        index: i,
+        nodeId: node?.id ?? "(id 없음)",
+        ref,
+        code: "LAYER_REF_UNRESOLVED",
+        message: `parentRefs '${ref}'가 상위 계층(${parentLayer})의 nodes[].id에 존재하지 않습니다.`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * `skills/` 아래 실재하는 스킬 이름. **정본은 디렉터리이고 이 상수는 사본이다** —
  * 드리프트는 `(AP-1)`이 양방향으로 관측한다(상수에만 있는 것도, 디렉터리에만 있는 것도 FAIL).
  *

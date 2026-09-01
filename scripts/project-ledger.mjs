@@ -43,10 +43,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { checkStorageBoundary, projectLedgerForSkills } from "./lib/store.mjs";
+import { checkStorageBoundary, projectLedgerForSkills, EVIDENCE_FILE_NAME } from "./lib/store.mjs";
 
-/** 원장 파일 이름 정본. 저장 루트 아래에 이 이름으로 놓인다(§9·AC-15). */
-export const EVIDENCE_FILE_NAME = "evidence.json";
+/**
+ * 원장 파일 이름 — **정본은 `lib/store.mjs`이고 여기서는 re-export만 한다**
+ * (라운드 2 처방 5). `write-config.mjs`도 이 상수가 필요해졌는데 CLI가 CLI를
+ * import하면 의존 방향이 뒤집히므로 정본을 라이브러리로 내렸다. 이 줄을 남기는
+ * 이유는 기존 import 지점(`tests/run-smoke.mjs`)과 `(SP-3)`의 닻을 깨지 않기
+ * 위해서다.
+ */
+export { EVIDENCE_FILE_NAME };
 
 /**
  * 투영 결과와 함께 **무엇이 빠졌는지**를 돌려준다.

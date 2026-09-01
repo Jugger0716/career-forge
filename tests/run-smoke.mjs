@@ -67,8 +67,10 @@ import {
 import { renderLayer } from "../scripts/render-markdown.mjs";
 import {
   ARTIFACT_LAYERS,
+  ARTIFACT_PARENT_LAYER,
   AUTHORSHIP_STAGES,
   checkAuthorshipContract,
+  checkParentRefs,
   classifySchemaErrorsByProvenance,
   computeArtifactContentHash,
   mergeArtifact,
@@ -518,7 +520,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       (RV-6)~(RV-8) 인용 재검증 게이트의 금지 방향 572 → 576.
   //       콜드 리뷰 라운드 2 처방 11의 (GP-1)~(GP-4)·(SA-1)~(SA-4) 절대 규칙 4·5
   //       관측(총량 가드 연산자 형태 축 + 슬라이스 A 내용 핀) 576 → 584.
-  default: 584,
+  //       콜드 리뷰 라운드 2 처방 5·7의 (WC-7)~(WC-12)·(WA-34)~(WA-39)·(AC-1b)
+  //       원장 대조와 상위 계층 참조 해소 584 → 597.
+  default: 597,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -2661,6 +2665,63 @@ function runArtifactContractOracleSmoke() {
       console.log(`    실제: ${why} empty=${JSON.stringify(mine)} schema=${JSON.stringify(schemaKeys)}`);
     }
     report(ok, "(AC-2b) EMPTY_REGISTRY_ARTIFACTS의 키 집합이 state.schema.json의 artifacts.required와 일치(계층 키 세 번째 사본의 드리프트 가드)");
+  }
+
+  // ---- (AC-1b) ARTIFACT_PARENT_LAYER ↔ 슬라이스 A의 checkLayerRefs (라운드 2 처방 7) ----
+  //      **철자가 아니라 거동으로 대조한다.** `verify-evidence.mjs`의 `LAYER_PARENT`는
+  //      슬라이스 A CLI 안에 있어 import하면 의존 방향이 뒤집히고(=`ARTIFACT_LAYERS`와
+  //      같은 판단), 소스에서 정규식으로 긁으면 리팩터링에 눈이 먼다.
+  //
+  //      대신 사본이 지목하는 부모로 **합성 쌍을 만들어 저쪽 함수에 넘긴다**. 사본에
+  //      부모가 있는 계층에서는 미해소 참조 1건이 위반으로 잡히고 `unverifiable`은
+  //      0건이어야 한다 — `unverifiable`이 나오면 저쪽이 다른 부모를 기대한다는 뜻이다.
+  //      `career`는 사본에 항목이 없으므로 단독으로 넘겨도 위반·unverifiable 둘 다 0건이다.
+  //
+  //      행 삭제·행 추가·잘못된 부모 지목이 **전부** 이 한 단언에 걸린다.
+  {
+    const mk = (nodes) => ({ nodes });
+    const problems = [];
+
+    for (const layer of Object.keys(ARTIFACT_LAYERS)) {
+      const parent = ARTIFACT_PARENT_LAYER[layer];
+      // **부모 노드에는 `parentRefs` 키를 아예 두지 않는다.** 빈 배열을 두면
+      // `checkLayerRefs`가 그 계층의 **조부모**가 이번 호출에 없다고 보고
+      // `unverifiable` 1건을 낸다(실측) — 이번 축과 무관한 잡음이고, 키가 없으면
+      // 저쪽이 그 노드를 건너뛴다. 시험 대상은 자식 계층의 참조 하나뿐이다.
+      if (parent === undefined) {
+        // 사본이 최상위라고 선언한 계층 — 단독으로 넘겨도 조용해야 한다.
+        const r = checkLayerRefs({ [layer]: mk([{ id: "x:1", parentRefs: [] }]) });
+        if (r.violations.length !== 0 || r.unverifiable.length !== 0) {
+          problems.push(`${layer}: 최상위라고 선언했으나 저쪽은 부모를 기대한다(위반 ${r.violations.length} / 미검증 ${r.unverifiable.length})`);
+        }
+        continue;
+      }
+      if (ARTIFACT_LAYERS[parent] === undefined) {
+        problems.push(`${layer}: 부모로 지목한 '${parent}'가 계층 표에 없다`);
+        continue;
+      }
+      const r = checkLayerRefs({
+        [parent]: mk([{ id: "p:1" }]),
+        [layer]: mk([{ id: "c:1", parentRefs: ["없는-id"] }]),
+      });
+      if (r.violations.length !== 1 || r.unverifiable.length !== 0) {
+        problems.push(
+          `${layer}: 부모를 '${parent}'로 지목했으나 저쪽 판정이 다르다(위반 ${r.violations.length}(기대 1) / 미검증 ${r.unverifiable.length}(기대 0))`
+        );
+      }
+    }
+
+    // 사본이 계층 표 밖의 키를 담고 있으면 그 자체가 드리프트다.
+    for (const key of Object.keys(ARTIFACT_PARENT_LAYER)) {
+      if (ARTIFACT_LAYERS[key] === undefined) problems.push(`사본에 계층 표 밖의 키 '${key}'가 있다`);
+    }
+
+    const ok = problems.length === 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(problems)}`);
+    report(
+      ok,
+      "(AC-1b) ARTIFACT_PARENT_LAYER의 계층별 부모 지목이 verify-evidence의 checkLayerRefs와 거동으로 일치한다(철자 스캔이 아니라 합성 쌍 대조)"
+    );
   }
 
   // ---- (AC-2c) STATE_SCHEMA_VERSION ↔ state.schema.json의 default (8번 ④) ----
@@ -5577,13 +5638,15 @@ function runWriteArtifactOracleSmoke() {
   const readJsonOrNull = (p) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null);
   const readTextOrNull = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null);
 
-  const runWriter = (root, draftObj, extra = [], stage = "fact-checked") => {
+  // `layer`는 **뒤에 default 인자로 붙였다** — 기존 호출부 전부가 career를 쓰므로
+  // 시그니처를 앞에서 바꾸면 이 절의 단언 수십 건이 한꺼번에 흔들린다(라운드 2 처방 7).
+  const runWriter = (root, draftObj, extra = [], stage = "fact-checked", layer = "career") => {
     const draftPath = path.join(tmp, `draft-${crypto.randomBytes(6).toString("hex")}.json`);
     fs.writeFileSync(draftPath, JSON.stringify(draftObj), "utf8");
     return spawnSync(
       process.execPath,
-      [WRITER, "--layer", "career", "--draft", draftPath, "--root", root, "--stage", stage,
-       "--skill", "career-from-git", "--generated-at", FIXED_AT, ...extra],
+      [WRITER, "--layer", layer, "--draft", draftPath, "--root", root, "--stage", stage,
+       "--skill", layer === "career" ? "career-from-git" : "skill-gap", "--generated-at", FIXED_AT, ...extra],
       { encoding: "utf8" }
     );
   };
@@ -6203,6 +6266,179 @@ function runWriteArtifactOracleSmoke() {
       const ok = ret.ok === true && ret.error === null && state?.artifacts?.career?.path === "career.json";
       if (!ok) console.log(`    실제: ret=${JSON.stringify(ret)} state=${JSON.stringify(state)}`);
       report(ok, "(WA-26) 허용 방향: 정상 루트에서는 {ok:true}이고 state.json 레지스트리에 항목이 기재된다");
+    }
+
+    // -----------------------------------------------------------------------
+    // 상위 계층 참조 해소 — 라운드 2 처방 7
+    //
+    // **`buildHonestRenderRoot()`를 재사용하지 않는다.** 그 헬퍼는 (RV-5)(RV-7)(RV-8)
+    // (RM-7)의 전제이고 career 노드가 1건이라 아래 「첫 노드만 본다」류 축소 구현을
+    // 격리할 수 없다. 여기서는 신설 루트에 노드 2건짜리 부모를 직접 만든다.
+    // -----------------------------------------------------------------------
+
+    /** 이 절의 knowledge-map 노드 — 모양은 buildHonestRenderRoot의 km 노드를 따른다. */
+    // `text`를 인자로 받는다 — 같은 루트에 두 번 쓰면서 서술이 같으면
+    // `NODE_ID_CHURN`(같은 사실에 새 id)이 **먼저** 걸려 이번 축에 닿지 못한다((WA-38)에서 실측).
+    const kmNode = (id, parentRefs, text = "상위 계층 참조 해소 픽스처의 지식맵 노드.") => ({
+      id, basis: "insufficient", evidence: [], parentRefs,
+      verification: { status: "not-attempted", attempts: 0, reasonCode: null },
+      origin: "generated", topic: "문서화", text,
+    });
+
+    /** career 노드 두 건을 담은 부모를 실제 CLI로 기록한다. */
+    const seedParent = (root) => runWriter(root, makeCareerInstance([
+      makeFactCheckedNode({ id: "car:p01", text: "상위 계층 참조 픽스처의 첫 커리어 노드." }),
+      makeFactCheckedNode({ id: "car:p02", text: "상위 계층 참조 픽스처의 둘째 커리어 노드." }),
+    ]));
+
+    // ---- (WA-34) 금지 방향: 부모 산출물이 없다 ----
+    //      **`--force`로도 넘어갈 수 없다.** 강행하면 고아 참조를 담은 산출물이
+    //      기록되므로, 한 단언 안에서 두 호출을 돌려 우회로 부재까지 함께 못 박는다.
+    {
+      const root = freshRoot("parent-missing");
+      const draft = makeCareerInstance([kmNode("km:x01", ["car:p01"])]);
+      const plain = runWriter(root, draft, [], "fact-checked", "knowledge-map");
+      const forced = runWriter(root, draft, ["--force"], "fact-checked", "knowledge-map");
+      const state = readJsonOrNull(path.join(root, "state.json"));
+      const ok =
+        plain.status === 2 && plain.stderr.includes("PARENT_ARTIFACT_MISSING") &&
+        forced.status === 2 && forced.stderr.includes("PARENT_ARTIFACT_MISSING") &&
+        readTextOrNull(path.join(root, "knowledge-map.json")) === null &&
+        (state === null || state.artifacts?.knowledgeMap == null);
+      if (!ok) {
+        console.log(`    실제: plain=${plain.status} forced=${forced.status} stderr=${plain.stderr.slice(0, 250)}`);
+      }
+      report(
+        ok,
+        "(WA-34) 금지 방향: career.json이 없는 루트에 knowledge-map을 쓰면 exit 2 + PARENT_ARTIFACT_MISSING이고, --force로도 넘어가지 않으며 파일도 레지스트리 항목도 생기지 않는다"
+      );
+    }
+
+    // ---- (WA-35) 금지 방향: 참조 0건이어도 부모 실재는 검사한다 ----
+    //      **판정 순서를 못 박는 유일한 단언이다.** `plan`만 `nodes`에 `minItems`가
+    //      없어(스키마 실측) 노드가 빈 draft를 만들 수 있고, 「참조 0건이면 통과」를
+    //      부모 실재 검사보다 앞에 두면 **부모 없는 루트에 exit 0으로 기록된다.**
+    //      참조 0건은 대조를 건너뛸 근거일 뿐 저장 루트 상태 검사를 건너뛸 근거가 아니다.
+    {
+      const root = freshRoot("plan-empty-nodes");
+      const r = runWriter(root, makeCareerInstance([]), [], "draft", "plan");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("PARENT_ARTIFACT_MISSING") &&
+        readTextOrNull(path.join(root, "plan.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(WA-35) 금지 방향: 해소할 참조가 0건인 plan draft도 gap-report.json이 없으면 exit 2 + PARENT_ARTIFACT_MISSING이다(부모 실재 검사가 참조 개수보다 먼저다)"
+      );
+    }
+
+    // ---- (WA-36) 금지 방향: draft가 실재하지 않는 상위 id를 인용 ----
+    //      draft를 고치면 해소되므로 **exit 1**이다. 전부 exit 3으로 보내는 구현이
+    //      이 단언에 걸린다.
+    {
+      const root = freshRoot("ref-unresolved");
+      const seeded = seedParent(root);
+      const r = runWriter(root, makeCareerInstance([kmNode("km:x02", ["car:nonexistent"])]), [], "fact-checked", "knowledge-map");
+      const ok =
+        seeded.status === 0 &&
+        r.status === 1 &&
+        r.stderr.includes("[LAYER_REF]") &&
+        r.stderr.includes("LAYER_REF_UNRESOLVED") &&
+        readTextOrNull(path.join(root, "knowledge-map.json")) === null;
+      if (!ok) console.log(`    실제: seed=${seeded.status} exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(WA-36) 금지 방향: draft가 career에 없는 id를 parentRefs로 인용하면 exit 1 + [LAYER_REF] LAYER_REF_UNRESOLVED이고 파일이 생기지 않는다"
+      );
+    }
+
+    // ---- (WA-37) 금지 방향: 부모를 읽을 수 없다 ----
+    //      부재의 exit 2와 **다른 코드·다른 채널**이다. 인자로도 draft로도 고칠 수
+    //      없고 사람이 부모 파일을 봐야 하므로 exit 3이다 — 훼손을 부재로 강등하지 않는다.
+    {
+      const root = freshRoot("parent-unreadable");
+      const seeded = seedParent(root);
+      fs.writeFileSync(path.join(root, "career.json"), "{ 이것은 JSON이 아니다", "utf8");
+      const r = runWriter(root, makeCareerInstance([kmNode("km:x03", ["car:p01"])]), [], "fact-checked", "knowledge-map");
+      const ok =
+        seeded.status === 0 &&
+        r.status === 3 &&
+        r.stderr.includes("[HOLD]") &&
+        r.stderr.includes("PARENT_ARTIFACT_UNREADABLE") &&
+        readTextOrNull(path.join(root, "knowledge-map.json")) === null;
+      if (!ok) console.log(`    실제: seed=${seeded.status} exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(WA-37) 금지 방향: 부모 career.json이 깨진 JSON이면 exit 3 + [HOLD] PARENT_ARTIFACT_UNREADABLE이다(부재의 exit 2와 다른 코드다)"
+      );
+    }
+
+    // ---- (WA-38) 금지 방향: 이전 산출물에서 병합된 미해소 참조 ----
+    //      **draft를 고쳐도 해소되지 않는다** — 잠긴 생존자가 병합에 실려 온 참조다.
+    //      exit 1(「출력을 고쳐 다시 부른다」)을 내면 거짓 안내가 되므로 exit 3이다.
+    //      `.bak`이 생기지 않는 것은 **이 검사가 백업 블록보다 앞이기 때문**이다.
+    {
+      const root = freshRoot("prev-ref-unresolved");
+      const seeded = seedParent(root);
+      // **생존자는 부모의 첫 노드를 가리키고, 나중에 사라지는 것도 그 첫 노드다.**
+      // 둘째 노드를 쓰면 「부모 id 집합을 첫 노드만으로 좁히는」 변이가 이 단언의
+      // **셋업 단계**에서 먼저 죽어 (WA-39)와 함께 FAIL한다 — 실측으로 확인하고
+      // 고유 관측점을 되찾으려고 순서를 뒤집었다.
+      const w1 = runWriter(root, makeCareerInstance([kmNode("km:s01", ["car:p01"])]), [], "fact-checked", "knowledge-map");
+      // CLI만으로는 `locked: true`를 만들 수 없다 — mergeArtifact가 신규 노드에
+      // `locked: false`를 박는다. (WA-30)/(WA-32)가 쓰는 것과 같은 주입 레시피다.
+      const kmPath = path.join(root, "knowledge-map.json");
+      const km = readJsonOrNull(kmPath);
+      if (km !== null) {
+        km.nodes[0].locked = true;
+        fs.writeFileSync(kmPath, JSON.stringify(km), "utf8");
+      }
+      // 부모에서 `car:p01`을 없앤다(career는 부모가 없어 새 검사에 걸리지 않는다).
+      // 남는 `car:p02`가 이제 **유일한 = 첫** 노드라, 아래 새 draft는 좁히기 변이
+      // 아래에서도 해소된다.
+      const w2 = runWriter(root, makeCareerInstance([
+        makeFactCheckedNode({ id: "car:p02", text: "상위 계층 참조 픽스처의 둘째 커리어 노드." }),
+      ]), ["--force"]);
+      // 잠긴 생존자를 언급하지 않는 draft — 생존자가 병합에 실려 온다.
+      const r = runWriter(
+        root,
+        makeCareerInstance([kmNode("km:s02", ["car:p02"], "잠긴 생존자와 서술이 다른 새 지식맵 노드.")]),
+        ["--force"], "fact-checked", "knowledge-map"
+      );
+      const ok =
+        seeded.status === 0 && w1.status === 0 && w2.status === 0 &&
+        r.status === 3 &&
+        r.stderr.includes("PREV_ARTIFACT_LAYER_REF_UNRESOLVED") &&
+        readTextOrNull(`${kmPath}.bak`) === null;
+      if (!ok) {
+        console.log(`    실제: seed=${seeded.status} w1=${w1.status} w2=${w2.status} exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      }
+      report(
+        ok,
+        "(WA-38) 금지 방향: 부모에서 사라진 id를 가리키는 잠긴 생존자가 병합되면 exit 3 + PREV_ARTIFACT_LAYER_REF_UNRESOLVED이고, --force로도 넘어가지 않으며 .bak도 생기지 않는다"
+      );
+    }
+
+    // ---- (WA-39) 허용 방향: 정직한 참조는 기록된다 ----
+    //      **두 번째 노드를 가리킨다** — 「첫 노드만 본다」류 축소 구현이 이 단언에만
+    //      걸리게 하려는 것이다. 금지 방향만 두면 부모 id 집합을 통째로 좁히는 변경이
+    //      통과한다.
+    {
+      const root = freshRoot("ref-resolved");
+      const seeded = seedParent(root);
+      const r = runWriter(root, makeCareerInstance([kmNode("km:x04", ["car:p02"])]), [], "fact-checked", "knowledge-map");
+      const state = readJsonOrNull(path.join(root, "state.json"));
+      const ok =
+        seeded.status === 0 &&
+        r.status === 0 &&
+        readTextOrNull(path.join(root, "knowledge-map.json")) !== null &&
+        state?.artifacts?.knowledgeMap != null;
+      if (!ok) console.log(`    실제: seed=${seeded.status} exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(WA-39) 허용 방향: 부모의 **두 번째** 노드 id를 가리키는 knowledge-map draft는 exit 0으로 기록되고 레지스트리에 오른다"
+      );
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -9481,6 +9717,10 @@ function runConfigWriterSmoke() {
       input.schemaVersion = "9.9.9";
       const target = path.join(tmp, "stamp", STATE_DIR_NAME);
       fs.mkdirSync(target, { recursive: true });
+      // **원장을 복사한다(라운드 2 처방 5).** 이 루트는 수집기를 돌린 적이 없어
+      // 원장 대조가 `LEDGER_MISSING`으로 죽는다 — 이 단언의 관측점은 스탬프의
+      // 주인이지 원장이 아니므로, 재료를 갖춰 그 축을 그대로 살린다.
+      fs.copyFileSync(evPath, path.join(target, "evidence.json"));
       const r = runWriteConfig(input, target, "stamp");
       const written = readJsonAt(path.join(target, "config.json"));
       const ok =
@@ -9492,6 +9732,146 @@ function runConfigWriterSmoke() {
       report(
         ok,
         "(WC-6) 입력이 실은 updatedAt·schemaVersion을 CLI 값이 덮어쓴다(두 필드의 주인은 CLI다)"
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // 원장 대조 — 라운드 2 처방 5
+    //
+    // **전용 루트를 새로 만든다. 공용 `root`를 재사용하지 마라.** 그쪽에는 (WC-1)이
+    // 이미 config.json을 써 두어 「미기록」이 어떤 변이에도 참이 된다 — 라벨이
+    // 약속한 것이 공허해진다. (WC-3)(WC-4)(WC-5)가 신설 루트를 쓰는 것과 같은 모양이다.
+    // -----------------------------------------------------------------------
+
+    /** `.devcareer` 세그먼트를 가진 신설 루트를 만든다(원장은 호출자가 갖춘다). */
+    const ledgerRoot = (tag) => {
+      const p = path.join(tmp, `lg-${tag}`, STATE_DIR_NAME);
+      fs.mkdirSync(p, { recursive: true });
+      return p;
+    };
+
+    // ---- (WC-7) 금지 방향: 저자 게이트 미완료 ----
+    {
+      const target = ledgerRoot("empty-selected");
+      fs.copyFileSync(evPath, path.join(target, "evidence.json"));
+      const input = baseInput();
+      input.identitySelection.selected = [];
+      const r = runWriteConfig(input, target, "empty-selected");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("IDENTITY_GATE_INCOMPLETE") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-7) 금지 방향: identitySelection.selected가 빈 입력은 exit 2 + IDENTITY_GATE_INCOMPLETE이고 config.json이 생기지 않는다"
+      );
+    }
+
+    // ---- (WC-8) 금지 방향: 원장에 없는 날조 저자 ----
+    //      **이 갈래가 실제로 위조 비용을 올리는 유일한 지점이다.** 원장은 LLM이
+    //      아니라 결정적 수집기가 git에서 만들므로, 거기 없는 이메일은 저자 게이트를
+    //      실제로 수행하지 않았다는 증거다.
+    {
+      const target = ledgerRoot("fabricated");
+      fs.copyFileSync(evPath, path.join(target, "evidence.json"));
+      const FAKE = "fabricated@nowhere.invalid";
+      const input = baseInput();
+      input.identitySelection.selected = [OWNER_EMAIL, FAKE];
+      const r = runWriteConfig(input, target, "fabricated");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("LEDGER_IDENTITY_SET_MISMATCH") &&
+        r.stderr.includes(FAKE) &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 300)}`);
+      report(
+        ok,
+        "(WC-8) 금지 방향: 원장에 없는 날조 저자를 담은 입력은 exit 2 + LEDGER_IDENTITY_SET_MISMATCH이고, 차집합이 그 이메일을 지목한다"
+      );
+    }
+
+    // ---- (WC-9) 금지 방향: 원장이 없는 루트 ----
+    //      **부재를 통과로 강등하지 않는다**(절대 규칙 6). 강등하면 이 검사를 없애는
+    //      가장 싼 방법이 원장을 지우는 것이 된다.
+    {
+      const target = ledgerRoot("no-ledger");
+      const r = runWriteConfig(baseInput(), target, "no-ledger");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("LEDGER_MISSING") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-9) 금지 방향: 경계는 통과하지만 원장이 없는 루트는 exit 2 + LEDGER_MISSING이고 config.json이 생기지 않는다"
+      );
+    }
+
+    // ---- (WC-10) 허용 방향: 집합 동치이지 배열 동등이 아니다 ----
+    //      **재료를 2저자로 바꾼 이유.** 공용 원장의 selectedIdentities는 원소가
+    //      1건이라 「다른 순서」가 존재하지 않는다 — 그 재료로는 이 축이 공허하다.
+    //      `buildMultiAuthor`는 `fixtures/make-fixture.mjs`가 export하고 이 파일이
+    //      이미 import한다(슬라이스 A 제약은 「고치지 마라」이지 「쓰지 마라」가 아니다).
+    {
+      const multiRepo = path.join(tmp, "multi-repo");
+      buildMultiAuthor(multiRepo);
+      const target = ledgerRoot("set-equal");
+      const c = spawnSync(
+        process.execPath,
+        [COLLECTOR, "--repo", multiRepo, "--identity", OWNER_EMAIL, "--identity", ALICE_EMAIL, "--out", target],
+        { encoding: "utf8" }
+      );
+      const input = baseInput();
+      // 원장과 **순서가 다르고 중복이 섞인** 정직한 입력.
+      input.identitySelection.selected = [ALICE_EMAIL, OWNER_EMAIL, OWNER_EMAIL];
+      const r = runWriteConfig(input, target, "set-equal");
+      const written = readJsonAt(path.join(target, "config.json"));
+      const ok = c.status === 0 && r.status === 0 && written !== null;
+      if (!ok) console.log(`    실제: collect=${c.status} exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-10) 허용 방향: 원장과 순서가 다르고 중복이 섞인 선택 저자는 exit 0으로 기록된다(비교가 배열이 아니라 집합이다)"
+      );
+    }
+
+    // ---- (WC-11) 금지 방향: 원장 판독 실패는 부재와 다른 코드다 ----
+    //      「--root를 확인하라」는 **손상된** 원장에 대해 거짓 안내다.
+    {
+      const target = ledgerRoot("broken-ledger");
+      const broken = fs.readFileSync(evPath, "utf8").replace("{", "{{");
+      fs.writeFileSync(path.join(target, "evidence.json"), broken, "utf8");
+      const r = runWriteConfig(baseInput(), target, "broken-ledger");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("LEDGER_UNREADABLE") &&
+        !r.stderr.includes("LEDGER_MISSING") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-11) 금지 방향: 원장이 있으나 파싱에 실패하면 exit 2 + LEDGER_UNREADABLE이다(부재와 같은 코드로 뭉개지 않는다)"
+      );
+    }
+
+    // ---- (WC-12) 금지 방향: 선택 저자 기록의 부재 ----
+    //      **빈 배열로 강등하지 않는다.** 강등하면 아래 집합 대조가 「원장에 아무도
+    //      없다」로 읽어 엉뚱한 차집합을 보고하고, 부재가 불일치로 위장된다 —
+    //      절대 규칙 6이 지목한 사고 형태 그 자체다.
+    {
+      const target = ledgerRoot("no-identity-record");
+      const ev = readJsonAt(evPath);
+      delete ev.coverage.exclusions.selectedIdentities;
+      fs.writeFileSync(path.join(target, "evidence.json"), JSON.stringify(ev), "utf8");
+      const r = runWriteConfig(baseInput(), target, "no-identity-record");
+      const ok =
+        r.status === 2 &&
+        r.stderr.includes("LEDGER_IDENTITY_RECORD_MISSING") &&
+        readTextAt(path.join(target, "config.json")) === null;
+      if (!ok) console.log(`    실제: exit=${r.status} stderr=${r.stderr.slice(0, 250)}`);
+      report(
+        ok,
+        "(WC-12) 금지 방향: 원장에 selectedIdentities 키가 없으면 exit 2 + LEDGER_IDENTITY_RECORD_MISSING이다(부재를 빈 배열로 메우지 않는다)"
       );
     }
 
