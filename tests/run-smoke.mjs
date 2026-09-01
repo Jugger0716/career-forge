@@ -83,6 +83,7 @@ import {
 } from "../scripts/write-artifact.mjs";
 import { CONFIG_SCHEMA_VERSION } from "../scripts/write-config.mjs";
 import { KNOWN_SKILLS, NON_SKILL_PRODUCERS, KNOWN_ARTIFACT_PRODUCERS } from "../scripts/lib/artifact-contract.mjs";
+import { checkRenderInput } from "../scripts/render-markdown.mjs";
 import { CONFIG_FILE_NAME } from "../scripts/lib/store.mjs";
 import {
   computeRepoKeyForPath,
@@ -504,7 +505,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       14번 착수분의 (LN-1)~(LN-4) 소스 참조 형태 가드(A-37 재발 차단) 518 → 522.
   //       14번 (a)의 (CT-1)~(CT-14) 오염 채점 엔진 오라클(기계 3종 30건) 522 → 536.
   //       콜드 리뷰 라운드 2 처방 2·9의 (RT-1)(RT-2)(AP-1)~(AP-3) 승격 536 → 541.
-  default: 541,
+  //       콜드 리뷰 라운드 2 처방 1의 (RV-1)~(RV-4) 렌더 입력 게이트 541 → 545.
+  default: 545,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4256,6 +4258,113 @@ function runSourceLineReferenceSmoke() {
  *
  * 경계 정본은 `docs/devcareer-prep-plugin/cold_review_round2.md`이며 여기서 재서술하지 않는다.
  */
+/**
+ * 콜드 리뷰 라운드 2 처방 1 오라클 — 렌더 입력 게이트.
+ *
+ * **왜 이 절이 있는가.** 이 게이트가 붙기 전 `render-markdown.mjs`는 아무 JSON이나 받아
+ * exit 0으로 렌더했다. 그 CLI의 import는 `fs`·`node:url`·`render-contract.mjs`뿐이었고
+ * `validateInstance`도 `computeArtifactContentHash`도 없었다. 라운드 2가 실측한 것:
+ * 레포에 없는 해시를 인용하고 `verification.status`를 `"verified"`로 자칭하고
+ * `contentHash`가 `"deadbeef"`이고 required `coverage`·`truncated`가 통째로 빠진 입력이
+ * **exit 0으로 「근거 등급: 커밋 근거 · 검증: verified」가 붙은 문서**가 됐다.
+ *
+ * **그리고 위조본이 정직한 산출물보다 깨끗했다** — 배지가 `verification.status`에서만
+ * 파생하므로 자칭 verified가 강등 배지를 껐다. 방어용 필드가 공격자 자산이 된 형태다.
+ *
+ * **이 표면이 특별한 이유**: 사용자가 보는 것은 그 `.md`뿐이고 **어떤 스크립트도 그것을
+ * 다시 읽지 않는다**(`--secret-scan`조차 보지 않는다). 다른 미포착은 파일에 흔적이 남아
+ * 사후 감사가 가능하지만 이것은 아니다.
+ */
+function runRenderGateSmoke() {
+  console.log("[렌더 입력 게이트] 부적합한 산출물은 사용자 표면에 닿지 않는다(라운드 2 처방 1)");
+
+  const R = path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+  const realPath = path.join(R, "career.json");
+  let real = null;
+  try { real = JSON.parse(fs.readFileSync(realPath, "utf8")); } catch { /* (RV-3)이 잡는다 */ }
+
+  const renderCli = (layer, obj, outPath) => {
+    const inPath = path.join(os.tmpdir(), `devcareer-rv-${layer}-${crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex").slice(0, 12)}.json`);
+    fs.writeFileSync(inPath, JSON.stringify(obj), "utf8");
+    const r = spawnSync("node", [
+      path.join(REPO_ROOT, "scripts", "render-markdown.mjs"),
+      "--layer", layer, "--in", inPath, ...(outPath ? ["--out", outPath] : []),
+    ], { cwd: REPO_ROOT, encoding: "utf8" });
+    return { status: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
+  };
+
+  // ---- (RV-1) 금지 방향: 스키마 부적합은 렌더되지 않고 파일도 생기지 않는다 ----
+  //      「거부했다」와 「거부했지만 파일은 남겼다」는 다르다 — 후자면 사용자가 그 문서를
+  //      읽는다.
+  {
+    const forged = {
+      schemaVersion: "0.1.0",
+      generatedAt: "2026-09-01T00:00:00.000Z",
+      sourceRepoHead: "0".repeat(40),
+      contentHash: "deadbeef",
+      nodes: [{
+        id: "forged-1", basis: "commit", origin: "generated", locked: false,
+        evidence: [{ ledgerId: "commit:" + "1".repeat(40) }],
+        verification: { status: "verified", attempts: 0, reasonCode: null },
+        text: "근거 없이 검증 완료를 자칭하는 항목이다.",
+      }],
+    };
+    // **해시를 올바르게 계산해 담는다 — 이 단언이 보는 것은 스키마 축이다.**
+    // 자리표시자 해시를 두면 이 픽스처가 스키마·해시 **두 축 모두**에 걸려, 스키마 검증만
+    // 무력화하는 변이에서 이 단언이 여전히 PASS한다(고유 관측점이 사라진다). 해시 축은
+    // (RV-2)가 자기 픽스처로 따로 본다.
+    const forgedHashed = { ...forged, contentHash: computeArtifactContentHash("career", forged) };
+    const outPath = path.join(os.tmpdir(), `devcareer-rv1-${Date.now()}.md`);
+    try { fs.rmSync(outPath, { force: true }); } catch { /* 없으면 그만 */ }
+    const r = renderCli("career", forgedHashed, outPath);
+    const wrote = fs.existsSync(outPath);
+    const ok = r.status === 1 && !wrote && r.out.includes("[SCHEMA]");
+    if (!ok) console.log(`    실제: exit=${r.status} 파일생성=${wrote} 출력=${JSON.stringify(r.out.slice(0, 160))}`);
+    report(ok, "(RV-1) 금지 방향: 스키마 부적합 산출물은 exit 1이고 마크다운 파일이 생기지 않는다(required 부재·자칭 verified 포함)");
+  }
+
+  // ---- (RV-2) 금지 방향: contentHash 불일치는 렌더되지 않는다 ----
+  //      스키마는 통과하지만 본문이 기록 이후 손으로 고쳐진 경우다. 키 없는 SHA-256이라
+  //      의도적 위조는 못 막지만 **「임시 조립 JSON을 그대로 렌더」라는 가장 싼 경로**는
+  //      닫힌다.
+  {
+    const tampered = real === null ? null : { ...real, contentHash: "0".repeat(64) };
+    const r = tampered === null ? { status: null, out: "" } : renderCli("career", tampered, null);
+    const ok = r.status === 1 && r.out.includes("contentHash");
+    if (!ok) console.log(`    실제: exit=${r.status} 출력=${JSON.stringify(r.out.slice(0, 160))}`);
+    report(ok, "(RV-2) 금지 방향: contentHash가 본문 재계산값과 다르면 exit 1이다(기록 이후 손으로 고친 본문 차단)");
+  }
+
+  // ---- (RV-3) 허용 방향: 실제 산출물 세 계층이 그대로 렌더된다 ----
+  //      금지 방향만 두면 **전부 거부**해도 아무것도 깨지지 않는다 — 그러면 제품이 문서를
+  //      만들 수 없게 되는데 게이트는 초록이다. `write-artifact.mjs`가 실제로 쓴 파일을
+  //      쓴다(합성 입력이면 「쓰기와 렌더가 접합되는가」가 관측되지 않는다).
+  {
+    const bad = [];
+    for (const layer of ["career", "knowledge-map", "gap-report"]) {
+      const p = path.join(R, `${layer}.json`);
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", layer, "--in", p,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      if (r.status !== 0) bad.push(`${layer}=exit ${r.status}: ${((r.stderr ?? "") + (r.stdout ?? "")).slice(0, 120)}`);
+    }
+    const ok = real !== null && bad.length === 0;
+    if (!ok) console.log(`    실제: 원본판독=${real !== null} 거부된 계층 ${JSON.stringify(bad)}`);
+    report(ok, "(RV-3) 허용 방향: write-artifact가 실제로 기록한 세 계층이 전부 exit 0으로 렌더된다(전부 거부하는 퇴행 차단)");
+  }
+
+  // ---- (RV-4) 금지 방향: 스키마를 못 읽으면 「검사 생략」이 아니라 위반이다 ----
+  //      판독 실패를 통과로 강등하면 **이 게이트를 없애는 가장 쉬운 방법이 스키마 파일을
+  //      지우는 것**이 된다(절대 규칙 6). 모듈을 직접 불러 미지 계층으로 확인한다 —
+  //      스키마 파일을 실제로 지우면 다른 절 전부가 함께 무너져 관측이 흐려진다.
+  {
+    const problems = checkRenderInput("no-such-layer", real ?? {});
+    const ok = Array.isArray(problems) && problems.length >= 1 && problems[0].includes("계층 스키마");
+    if (!ok) console.log(`    실제: ${JSON.stringify(problems)}`);
+    report(ok, "(RV-4) 금지 방향: 계층 스키마를 읽지 못하면 위반으로 돌려준다(판독 실패를 검사 생략으로 강등 금지)");
+  }
+}
+
 function runRound2DeviceSmoke() {
   console.log("[라운드 2 승격 오라클] 절단 고지 부재 · 산출물 생산자 인증");
 
@@ -9004,7 +9113,13 @@ function runLayerRenderSmoke() {
     try {
       const inPath = path.join(tmp, "gap-report.json");
       const outPath = path.join(tmp, "gap-report.md");
-      fs.writeFileSync(inPath, JSON.stringify(gapReport), "utf8");
+      // **`contentHash`를 실제로 계산해 담는다(라운드 2 처방 1).** 초판은 자리표시자
+      // 리터럴을 담았는데, 렌더 입력 게이트가 붙은 뒤 그것이 정확히 「write-artifact를
+      // 거치지 않은 JSON」으로 판정돼 exit 1을 받았다 — **게이트가 옳고 픽스처가 틀렸다.**
+      // CLI 왕복이 관측하려는 것은 「진입점이 막히지 않았는가」이지 「계약 위반도
+      // 렌더되는가」가 아니므로, 픽스처가 계약을 만족하게 고치는 것이 맞다.
+      const roundTripInstance = { ...gapReport, contentHash: computeArtifactContentHash("gap-report", gapReport) };
+      fs.writeFileSync(inPath, JSON.stringify(roundTripInstance), "utf8");
       const r = spawnSync(
         process.execPath,
         [path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "gap-report", "--in", inPath, "--out", outPath],
@@ -9277,6 +9392,7 @@ function runCommonSections() {
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
   runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
+  runSection("렌더 입력 게이트(라운드 2 처방 1)", runRenderGateSmoke);
   runSection("라운드 2 승격 오라클(절단 고지 부재·생산자 인증)", runRound2DeviceSmoke);
   runSection("오염 채점 엔진 오라클(구현 9단계·순서 14번)", runContaminationGraderSmoke);
   runSection("쓰기 경계 오라클(구현 7단계 (a)·AC-16·AC-22)", runWriteArtifactOracleSmoke);
