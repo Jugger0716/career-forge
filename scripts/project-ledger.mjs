@@ -121,7 +121,17 @@ function main() {
   }
 
   const { projected, totalCommits, excludedCommits } = projectWithReport(evidence);
-  const serialized = JSON.stringify(projected, null, 2) + "\n";
+  // **들여쓰기 폭 1(성능 콜드 리뷰 라운드 3 처방 3).** 이 파일은 LLM 컨텍스트에
+  // 들어가는 것이 목적이고, 폭 2에서는 순수 공백이 전체의 상당 부분을 차지한다.
+  // 1로 줄이면 **-12.1%**(300커밋 픽스처 실측)이고 「키당 한 줄」이라는 형태는
+  // 그대로 남는다.
+  //
+  // **최소화(들여쓰기 0)하지 않은 이유를 정직하게 적는다.** 최소화는 -30.2%로 더
+  // 크지만, 「최소화된 JSON은 LLM이 읽기 어려워 할루시네이션 위험이 는다」는
+  // 근거가 이 레포에 **측정된 바 없다**(perf_review.md의 등급으로 `unmeasured`).
+  // 이 제품의 핵심 가치가 할루시네이션 방지이므로 측정되지 않은 위험 쪽으로
+  // 기울였을 뿐이며, **그 판단 자체가 근거 있는 것은 아니다.** 재면 뒤집힐 수 있다.
+  const serialized = JSON.stringify(projected, null, 1) + "\n";
 
   if (opts.outPath) {
     // **쓰기 실패를 종료 코드 계약 안으로 들여놓는다(콜드 리뷰 Correctness).**

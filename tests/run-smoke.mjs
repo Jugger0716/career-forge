@@ -510,7 +510,8 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       콜드 리뷰 라운드 2 처방 1의 (RV-1)~(RV-4) 렌더 입력 게이트 541 → 545.
   //       성능 콜드 리뷰 라운드 3 처방 2[A]의 (LP-12)~(LP-27) 투영 필드 삭감
   //       양방향 단언 + 완전성 게이트 + 스키마 사본 드리프트 가드 545 → 561.
-  default: 561,
+  //       성능 콜드 리뷰 라운드 3 처방 3의 (LP-28) 투영 직렬화 폭 고정 561 → 562.
+  default: 562,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -3700,6 +3701,33 @@ function runLedgerProjectionOracleSmoke() {
         const ok4 = r.status === 0 && written?.commits?.length === 2 && r.stdout === "" && r.stderr.includes(outPath);
         if (!ok4) console.log(`    실제: status=${r.status} 파일=${fs.existsSync(outPath)} stdout길이=${r.stdout.length}`);
         report(ok4, "(LP-8) --out은 지정 경로에 투영을 쓰고 stdout으로는 아무것도 내지 않는다(콜드 리뷰 Testing #3)");
+
+        // ---- (LP-28) 직렬화 형태가 들여쓰기 폭 1로 고정돼 있는가 ----
+        //      성능 콜드 리뷰 라운드 3 처방 3. 폭 1은 폭 2 대비 -12.1%(실측)이고
+        //      「키당 한 줄」 형태는 유지한다.
+        //
+        //      **단언을 하나로 둔 이유.** 기록된 바이트를 `indent 1` 재직렬화와
+        //      정확히 대조하므로 **양쪽 방향이 같은 관측점에 걸린다** — 폭 2로
+        //      되돌려도, 최소화해도 어긋난다. 방향마다 단언을 따로 두면 최소화
+        //      변이가 둘을 함께 깨서 각자의 고유 관측점이 사라진다.
+        //
+        //      **최소화를 금지 대상에 넣은 근거는 측정된 것이 아니다.** 최소화는
+        //      -30.2%로 더 크고, 그것을 택하지 않은 이유는 「LLM이 읽기 어려울
+        //      것」이라는 `unmeasured` 전제뿐이다(perf_review.md의 등급 어휘).
+        //      재면 이 단언의 기대값이 뒤집힐 수 있고, 그때 고칠 곳은 여기다.
+        {
+          const text = fs.existsSync(outPath) ? fs.readFileSync(outPath, "utf8") : null;
+          let expected = null;
+          if (text !== null) {
+            try { expected = JSON.stringify(JSON.parse(text), null, 1) + "\n"; } catch { /* 아래에서 FAIL */ }
+          }
+          const ok5 = text !== null && expected !== null && text === expected;
+          if (!ok5) {
+            const head = (text ?? "").split("\n").slice(0, 3).map((l) => JSON.stringify(l)).join(" / ");
+            console.log(`    실제: 기록 바이트 ${text === null ? "없음" : text.length} · 첫 줄들 ${head}`);
+          }
+          report(ok5, "(LP-28) 투영 파일이 들여쓰기 폭 1로 직렬화된다(폭 2 회귀와 최소화를 같은 관측점이 잡는다 — 처방 3)");
+        }
       }
 
       // ---- (LP-9) 금지 방향: --root·--out이 저장 경계 밖이면 거부하는가 ----
