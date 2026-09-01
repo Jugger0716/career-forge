@@ -516,7 +516,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       불변식 넷의 양방향 관측 + 계층 중립 + CLI 배선 562 → 572.
   //       콜드 리뷰 라운드 2 처방 8의 (RV-5) 정직한 렌더 루트 전제 +
   //       (RV-6)~(RV-8) 인용 재검증 게이트의 금지 방향 572 → 576.
-  default: 576,
+  //       콜드 리뷰 라운드 2 처방 11의 (GP-1)~(GP-4)·(SA-1)~(SA-4) 절대 규칙 4·5
+  //       관측(총량 가드 연산자 형태 축 + 슬라이스 A 내용 핀) 576 → 584.
+  default: 584,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4613,6 +4615,306 @@ function runSourceLineReferenceSmoke() {
       ok,
       `(LN-4) 허용 방향: 프로덕션 스크립트가 인용한 단언 라벨 ${cited.size}종이 전부 run-smoke.mjs에서 해소된다` +
       "(라벨은 사라지면 grep 0건으로 드러난다 — 그 grep을 실제로 돈다)"
+    );
+  }
+}
+
+/**
+ * 슬라이스 A 완료(`97675e7`) 이후 **수정 이력이 0건인** 슬라이스 A 파일과 그 내용 핀.
+ *
+ * **왜 이 부분집합인가(사용자 결정, 2026-09-02).** 슬라이스 A 파일은 전부 27건이고 그중
+ * 11건은 `slice_plan.md`의 예외 표가 **정당하게** 건드린 것들이다. 그 11건까지 핀하면
+ * 앞으로 예외 작업을 할 때마다 핀 갱신이 강제되는데, 그 마찰은 「예외 표를 거쳤는가」를
+ * 관측하지 못하면서 비용만 낸다. 여기 남는 16건은 **어떤 변경도 정의상 절대 규칙 5 위반**
+ * 이므로 정당한 핀 갱신이 발생할 일이 없다 — 마찰이 0이면서 관측은 최대다.
+ *
+ * **`lib/store.mjs`·`render-markdown.mjs`는 여기 없다.** 둘 다 슬라이스 A 커밋에 이미
+ * 존재했지만 `slice_plan.md`의 슬라이스 B `In scope` 열이 명시적으로 담고 있어 **슬라이스 B
+ * 소유**다. 파일의 생성 시점이 아니라 계획의 소유 선언이 기준이며, `(SA-4)`가 그 경계를
+ * 양방향으로 못 박는다.
+ *
+ * **CR을 지우고 해시한다 — 그러지 않으면 이 핀은 기계마다 다르게 FAIL한다.** 실측:
+ * 이 워킹 트리에서 `package.json`(CR 21) · `.claude-plugin/marketplace.json`(CR 32) ·
+ * `schemas/config.schema.json`(CR 155)이 CRLF이고 나머지 13건은 LF다. 세 파일은
+ * `.gitattributes`의 `* text=auto`에 걸려 인덱스는 LF인데 `core.autocrlf=true`인
+ * 체크아웃에서만 CRLF가 되고, `scripts/**` 아래 `.mjs`류는 `eol=lf`라 항상 LF다. 즉 **원시
+ * 바이트 해시는 인덱스가 아니라 체크아웃 설정을 핀하는 것**이 되어 리눅스 CI에서 16건 중
+ * 3건이 거짓 FAIL한다. CR 제거는 인덱스 표현과 일치시키는 정규화이며, 그래서 이 핀은
+ * 워킹 트리가 아니라 커밋된 내용을 본다.
+ *
+ * **이 핀이 막지 못하는 것(감추지 않는다).** 슬라이스 A 파일을 고치고 **핀도 함께 고치는**
+ * 편집은 통과한다. 그것을 막는 장치는 두지 않는다 — 핀 갱신은 diff에 리터럴로 드러나고,
+ * 이 레포의 관례는 총량 가드(`EXPECTED_ASSERTIONS_BEFORE_GUARDS`)와 같이 **고치게 만들되
+ * 고친 사실이 보이게** 하는 쪽이다. 조용한 변경을 막는 것이 목적이지 변경을 금지하는 것이
+ * 목적이 아니다.
+ */
+const PINNED_SLICE_A_FILES = Object.freeze([
+  [".claude-plugin/marketplace.json", "c953e70458b89af7624a7e0b46be039d07758dc4fb1cef53d0ca9ad9f3605a5e"],
+  [".claude-plugin/plugin.json", "8ba73a47a07cd3e94d0c4b40d02b2eb50229f46a1ab318930f993cab719e7e86"],
+  ["fixtures/golden/case-17-merge-hash-claim.json", "dad961a153c7fcef66f506ead8308df38001003b924bf8075e8a304b1e435214"],
+  ["fixtures/golden/compute-sampling-golden.mjs", "5970159d6c960adf105672215dc0bfb24cab5cefe8547b15096f1aa47fd37ce9"],
+  ["fixtures/golden/sampling-300.expected.json", "8b569152c38d5cbb6723603fc0564b8c7a796301fdaa8d34cb559f58f452bb4d"],
+  ["fixtures/make-fixture.mjs", "f81c396a45d0e6d05bb9864756b900d1bdd4b98e9ea3e4fb6a24c95ede14b55d"],
+  ["package.json", "1228b9b9cc30c9d27ce92937de45898a295069c7451747738fc6d46d60d179c0"],
+  ["schemas/config.schema.json", "a30549372b7bbdfe296261bc3cc5b71005be3a43aca23312b79dccba1ce77af2"],
+  ["schemas/state.schema.json", "a188019a792ddf271d4304800f7d4f7dd77fb1e40af5fd7b6ee73360b150d2f6"],
+  ["scripts/lib/content-hash.mjs", "a66105060109228f20c3c1b57aa70cc0d21cdc8c4a811222b783315255248937"],
+  ["scripts/lib/frontmatter.mjs", "ea3e85d75068717d61ac7f6653f7247f2b49780cde0966ca519f9c2841ef9f38"],
+  ["scripts/lib/fs-walk.mjs", "82336e83b6fe52f408d7ffca440d677cba1ae3d15b55571a6295ffef691a8f11"],
+  ["scripts/lib/git.mjs", "fee563a864e397b008e1446428cf74ccbc4c65a89aa3b6a441e0cc07ab92647a"],
+  ["scripts/lib/invariants.mjs", "d19eb71038d979d1fedd32f52bd3e35ccab78be22abac3c496caa8f15cf7f92c"],
+  ["scripts/lib/redact.mjs", "3761f4cba8b3e077792817709bfe1395839c0854956c2721308c4dce13b17d5e"],
+  ["scripts/lib/sampling.mjs", "6db4a55feb31adad37112c8b8aaca89cb63d7a18260f044ac1edcefedfd9164d"],
+]);
+
+/**
+ * 핀 목록의 정본 건수. **목록 길이를 여기서 한 번 더 못 박는 이유**는 총량 가드와 같다 —
+ * 목록에서 한 줄을 지우는 변경은 `(SA-2)`를 여전히 PASS시키면서 관측 대상만 조용히
+ * 줄인다(`(SA-2)`는 「목록의 전건이 일치하는가」이지 「목록이 온전한가」가 아니다).
+ */
+const EXPECTED_PIN_COUNT = 16;
+
+/** 핀 해시 대상 정규화 — CR을 지워 인덱스 표현과 맞춘다(위 JSDoc의 실측 근거). */
+function pinDigest(text) {
+  return crypto.createHash("sha256").update(text.replace(/\r/g, ""), "utf8").digest("hex");
+}
+
+/**
+ * 핀 대조기 — **순수 함수로 뽑아 둔 이유는 `(SA-3)`이 여기에 위조 입력을 먹여
+ * 검출력을 실제로 관측하기 위해서다.** 실제 트리에서 「위반 0건」만 보는 검사는
+ * 대조를 통째로 지워도 똑같이 초록이다(라운드 2가 `(RV-1)` 초판에서 실측한 형태).
+ *
+ * @param {ReadonlyArray<readonly [string, string]>} entries
+ * @param {(rel: string) => string | null} readText `null`은 판독 실패이며 **위반으로 센다** —
+ *   못 읽은 것을 「일치한다」로 강등하면 핀을 지우는 가장 싼 방법이 파일을 지우는 것이 된다
+ *   (절대 규칙 6).
+ * @returns {string[]} 위반 서술
+ */
+function checkPinnedContents(entries, readText) {
+  const violations = [];
+  for (const [rel, expected] of entries) {
+    const text = readText(rel);
+    if (text === null) {
+      violations.push(`${rel}: 판독 실패(핀 대상이 사라졌거나 읽을 수 없다)`);
+      continue;
+    }
+    const actual = pinDigest(text);
+    if (actual !== expected) {
+      violations.push(`${rel}: 기대 ${expected.slice(0, 12)}… 실제 ${actual.slice(0, 12)}…`);
+    }
+  }
+  return violations;
+}
+
+/**
+ * 절대 규칙 4·5 관측 오라클 — 콜드 리뷰 라운드 2 처방 11.
+ *
+ * **두 규칙이 지금까지 산문뿐이었다.** 규칙 4(총량 가드를 하한으로 완화하지 마라)와
+ * 규칙 5(슬라이스 A 파일을 고치지 마라)는 `CLAUDE.md`와 핸드오프 Do NOT에만 있었고,
+ * 그 둘을 어기는 편집을 관측하는 장치가 0건이었다.
+ *
+ * **규칙 4 쪽의 구멍은 이 파일이 스스로 실측해 적어 두었다.** `finishMode`의 JSDoc이
+ * 「정확 일치를 하한(`>=`)으로 완화하는 변이는 무변이 트리에서 **아무것도 깨지 않는다**
+ * (실측 447 PASS / 0 FAIL)」라고 기록했다. 즉 구멍이 명명된 채 메워지지 않은 상태였다.
+ *
+ * **같은 JSDoc이 「가드를 세는 가드를 두지 않는다」고도 적었다 — 그 결정과 충돌하지
+ * 않는다.** 그쪽이 거절한 것은 **개수 축**이다(가드가 자기 개수를 세면 재귀한다).
+ * 여기서 세우는 것은 **형태 축**이다 — 비교 연산자가 무엇인지를 소스에서 본다.
+ * 형태 축은 재귀하지 않는다: 이 절의 단언들은 자기 자신의 형태를 보지 않고
+ * `finishMode` 본문만 본다. 그리고 이 절을 통째로 지우는 변경은 단언 8건이 사라지므로
+ * **총량 가드가 잡는다** — 두 축이 서로 다른 방향에서 받친다.
+ *
+ * **`(LN-4)`가 이미 `run-smoke.mjs` 자기 소스를 판독하는 선례다.** 자기 소스 판독 자체는
+ * 이 레포에서 새 형태가 아니다.
+ *
+ * **이 절이 막지 못하는 것**: `finishMode` 본문 **밖**에서 총량을 무력화하는 변경
+ * (예: `passed`/`failed` 카운터 자체를 조작). 그 축은 이 절의 범위가 아니고, 여기서
+ * 넓히면 「전부를 보는 가드」가 되어 무엇을 보는지가 흐려진다.
+ */
+function runSliceRuleObservationSmoke() {
+  console.log("[절대 규칙 4·5 관측] 총량 가드의 연산자 형태와 슬라이스 A 내용을 못 박는다(라운드 2 처방 11)");
+
+  const { text: smokeText, error: smokeError } = readRepoTextSafe("tests/run-smoke.mjs");
+
+  // `finishMode` **본문만** 잘라낸다. 파일 전체를 스캔하면 이 절의 코드 자신이 스캔
+  // 대상이 되어 「가드가 스스로를 잡는」 오탐이 난다 — 라운드 3이 `includes("FAIL ")`
+  // 오탐 20건으로 실측한 것과 같은 형태의 파서 사고다.
+  const FN_ANCHOR = "\nfunction finishMode(mode) {";
+  const CONST_ANCHOR = "\nconst EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({";
+  let fnBody = null;
+  let constBlock = null;
+  if (smokeText !== null) {
+    const fnStart = smokeText.indexOf(FN_ANCHOR);
+    if (fnStart !== -1) {
+      const rest = smokeText.slice(fnStart + FN_ANCHOR.length);
+      const end = rest.indexOf("\n}\n");
+      if (end !== -1) fnBody = rest.slice(0, end);
+    }
+    const cStart = smokeText.indexOf(CONST_ANCHOR);
+    if (cStart !== -1) {
+      const rest = smokeText.slice(cStart + CONST_ANCHOR.length);
+      const end = rest.indexOf("\n});");
+      if (end !== -1) constBlock = rest.slice(0, end);
+    }
+  }
+
+  // ---- (GP-1) 전제: 관측 대상 둘을 실제로 잘라냈는가 ----
+  //      아래 세 단언은 대상이 비면 **공허하게 통과한다**(빈 문자열에는 위반이 0건이다).
+  //      `(SP-1)`·`(LN-1)`이 세운 것과 같은 전제이며, 두 대상을 한 단언에 묶는 이유는
+  //      둘 중 하나만 실패해도 나머지 셋이 전부 무의미해지기 때문이다.
+  {
+    const ok =
+      smokeError === null && fnBody !== null && constBlock !== null &&
+      fnBody.length > 0 && constBlock.length > 0;
+    if (!ok) {
+      console.log(`    실제: ${smokeError ?? ""} finishMode 본문=${fnBody === null ? "미추출" : `${fnBody.length}자`} 상수 블록=${constBlock === null ? "미추출" : `${constBlock.length}자`}`);
+      console.log("    처방: 두 닻(finishMode 선언 줄 / 정본 상수 선언 줄)이 개명됐다면 이 절의 닻 상수를 함께 고쳐라.");
+    }
+    report(ok, "(GP-1) 전제: finishMode 본문과 정본 상수 블록을 소스에서 잘라냈다(아래 세 단언이 공허해지지 않는 전제)");
+  }
+
+  // ---- (GP-2) 금지 방향: 총량 비교가 완화형이 아닌가 ----
+  //      절대 규칙 4가 이름으로 금지한 하한을 포함해, `observed`와 `expected`를 잇는
+  //      **부등호** 비교는 전부 위반이다. 한 방향만 보면 피연산자를 뒤집는 것으로
+  //      빠져나가므로 양쪽 순서를 다 본다.
+  //
+  //      **`!==`는 금지 집합에서 뺐고, 그것은 초판의 오탐을 게이트가 잡아 준 결과다.**
+  //      초판은 `!==`도 완화형으로 셌는데, 이 함수에는 진단 출력을 위한 정당한
+  //      `if (observed !== expected)` 분기가 있어 무변이 트리에서 이 단언이 FAIL했다
+  //      (실측 585 PASS / 1 FAIL). 대상을 좁히는 대신 「부등호만」으로 축을 바꾼 이유는
+  //      **판정을 `!==`로 뒤집는 변이는 `(GP-3)`이 이미 잡기 때문**이다 — 그 변이는
+  //      정확 일치 비교를 소멸시킨다. 두 단언이 같은 갈래를 두 번 보는 것보다
+  //      각자 고유 관측점을 갖는 편이 낫다.
+  {
+    const relaxedRe = /(observed\s*(?:>=|<=|>|<)\s*expected|expected\s*(?:>=|<=|>|<)\s*observed)/g;
+    const hits = fnBody === null ? [] : [...new Set(fnBody.match(relaxedRe) ?? [])];
+    const ok = fnBody !== null && hits.length === 0;
+    if (!ok) {
+      console.log(`    실제: 완화형 비교 ${JSON.stringify(hits)}`);
+      console.log("    처방: 총량 가드는 정확 일치여야 한다 — 하한은 「단언 3건을 늘리고 2건을 잃어 순증 +1」인 변경을 통과시킨다(절대 규칙 4).");
+    }
+    report(ok, "(GP-2) 금지 방향: finishMode에 observed/expected를 잇는 부등호 비교가 0건이다(절대 규칙 4)");
+  }
+
+  // ---- (GP-3) 허용 방향: 정확 일치 비교가 실제로 report()에 실려 있는가 ----
+  //      금지 방향만 두면 **비교를 통째로 지우는** 변경이 통과한다. 그러면 이 가드는
+  //      「완화하지 마라」가 아니라 「비교하지 마라」가 되어 정반대가 된다.
+  {
+    const exactRe = /report\(\s*observed === expected\s*,/g;
+    const count = fnBody === null ? 0 : (fnBody.match(exactRe) ?? []).length;
+    const ok = count === 1;
+    if (!ok) {
+      console.log(`    실제: 정확 일치 판정을 실은 report() 호출 ${count}건(기대 1건)`);
+    }
+    report(ok, "(GP-3) 허용 방향: 정확 일치 비교가 report()의 판정으로 정확히 1건 실려 있다");
+  }
+
+  // ---- (GP-4) 금지 방향: 정본 값이 리터럴인가, 그리고 런타임 값과 일치하는가 ----
+  //      완화의 다른 갈래는 연산자가 아니라 **피연산자**를 건드리는 것이다. 모드 값을
+  //      계산식으로 바꾸면 비교는 정확 일치인 채로 **항상 참**이 된다. 리터럴 강제 +
+  //      런타임 대조를 함께 두는 이유는 소스만 보면 「적힌 값」과 「쓰이는 값」이
+  //      갈릴 수 있기 때문이다.
+  {
+    const modes = ["default", "negative", "golden", "contamination"];
+    const problems = [];
+    if (constBlock === null) problems.push("상수 블록 미추출");
+    else {
+      for (const mode of modes) {
+        const m = constBlock.match(new RegExp(`\\n\\s*${mode}:\\s*(\\d+),`));
+        if (m === null) { problems.push(`${mode}: 정수 리터럴이 아니다`); continue; }
+        if (Number(m[1]) !== EXPECTED_ASSERTIONS_BEFORE_GUARDS[mode]) {
+          problems.push(`${mode}: 소스 리터럴 ${m[1]} 대 런타임 ${EXPECTED_ASSERTIONS_BEFORE_GUARDS[mode]}`);
+        }
+      }
+    }
+    const ok = problems.length === 0;
+    if (!ok) console.log(`    실제: ${JSON.stringify(problems)}`);
+    report(ok, `(GP-4) 금지 방향: 정본 상수 ${modes.length}개 모드가 전부 정수 리터럴이고 런타임 값과 일치한다(계산식 우회 차단)`);
+  }
+
+  // ---- (SA-1) 전제: 핀 목록이 온전한가 ----
+  //      `(SA-2)`는 「목록의 전건이 일치하는가」만 본다 — 목록에서 한 줄을 지우면
+  //      여전히 PASS하면서 관측 대상만 줄어든다. 그 갈래를 여기서 닫는다.
+  {
+    const rels = PINNED_SLICE_A_FILES.map(([rel]) => rel);
+    const unique = new Set(rels);
+    const ok = PINNED_SLICE_A_FILES.length === EXPECTED_PIN_COUNT && unique.size === EXPECTED_PIN_COUNT;
+    if (!ok) {
+      console.log(`    실제: 핀 ${PINNED_SLICE_A_FILES.length}건(기대 ${EXPECTED_PIN_COUNT}건) 고유 경로 ${unique.size}건`);
+      console.log("    처방: 핀을 줄이려면 그 파일이 왜 더 이상 「수정 이력 0건」이 아닌지를 먼저 적어라 — 예외 표를 거치지 않은 수정이라면 그것이 곧 절대 규칙 5 위반이다.");
+    }
+    report(ok, `(SA-1) 전제: 슬라이스 A 내용 핀이 정확히 ${EXPECTED_PIN_COUNT}건이고 경로 중복이 없다`);
+  }
+
+  // ---- (SA-2) 금지 방향: 실제 트리가 핀과 일치하는가 ----
+  {
+    const violations = checkPinnedContents(PINNED_SLICE_A_FILES, (rel) => readRepoTextSafe(rel).text);
+    const ok = violations.length === 0;
+    if (!ok) {
+      console.log(`    실제: ${JSON.stringify(violations)}`);
+      console.log("    처방: 이 FAIL은 슬라이스 A 파일이 바뀌었다는 뜻이다. slice_plan.md의 예외 표에 그 행이 있는지 먼저 확인하라 — 없으면 되돌려라(절대 규칙 5).");
+    }
+    report(ok, `(SA-2) 금지 방향: 수정 이력 0건인 슬라이스 A 파일 ${PINNED_SLICE_A_FILES.length}건의 내용이 핀과 전부 일치한다(절대 규칙 5)`);
+  }
+
+  // ---- (SA-3) 검출력: 대조기가 실제로 발화하는가 ----
+  //      실제 트리에서 「위반 0건」만 보는 검사는 대조를 통째로 지워도 똑같이 초록이다.
+  //      두 갈래(내용 변조 · 판독 실패)를 각각 먹여 **자기 1건만 더** 보고하는지 본다.
+  //
+  //      **절대 수가 아니라 기준선 대비 증분으로 본다.** 「위반이 정확히 1건」으로 적으면
+  //      `(SA-2)`가 이미 FAIL인 트리(= 슬라이스 A 파일이 실제로 바뀐 트리)에서 이 단언까지
+  //      함께 FAIL한다. 그러면 변이 하나가 단언 둘을 깨서 각 단언의 고유 관측점이 사라진다 —
+  //      라운드 2가 `(RV-1)` 초판에서, 라운드 3이 `(LP-22)` 설계에서 각각 겪은 형태다.
+  {
+    const [victimRel] = PINNED_SLICE_A_FILES[0];
+    const realText = (rel) => readRepoTextSafe(rel).text;
+    const base = checkPinnedContents(PINNED_SLICE_A_FILES, realText);
+    const mutated = checkPinnedContents(
+      PINNED_SLICE_A_FILES,
+      (rel) => (rel === victimRel ? `${realText(rel) ?? ""}\n// 변이` : realText(rel))
+    );
+    const missing = checkPinnedContents(
+      PINNED_SLICE_A_FILES,
+      (rel) => (rel === victimRel ? null : realText(rel))
+    );
+    const addedBy = (after) => after.filter((v) => !base.includes(v));
+    const mutatedAdded = addedBy(mutated);
+    const missingAdded = addedBy(missing);
+    const ok =
+      mutatedAdded.length === 1 && mutatedAdded[0].startsWith(`${victimRel}: 기대 `) &&
+      missingAdded.length === 1 && missingAdded[0].startsWith(`${victimRel}: 판독 실패`);
+    if (!ok) {
+      console.log(`    실제: 기준선 ${base.length}건 / 변조가 더한 것 ${JSON.stringify(mutatedAdded)} / 판독 실패가 더한 것 ${JSON.stringify(missingAdded)}`);
+    }
+    report(ok, "(SA-3) 검출력: 대조기가 내용 변조와 판독 실패에 대해 각각 기준선보다 자기 1건만 더 보고한다(판독 실패를 일치로 강등하지 않는다)");
+  }
+
+  // ---- (SA-4) 금지 방향(반대 축): 핀이 슬라이스 B 파일을 얼리지 않는가 ----
+  //      이 가드의 사고 형태는 두 방향이다. 하나는 슬라이스 A가 조용히 바뀌는 것이고,
+  //      다른 하나는 **슬라이스 B 파일이 핀 목록에 들어가 이번 회차 작업이 막히는 것**이다.
+  //      후자를 두면 다음 세션이 「가드가 막으니 슬라이스 A인가 보다」로 오독한다.
+  //      경계의 정본은 `slice_plan.md`의 슬라이스 B `In scope` 열이다 — 파일이 언제
+  //      만들어졌는가가 아니라 계획이 누구 것이라 선언했는가가 기준이다.
+  {
+    const { text: planText, error: planError } = readRepoTextSafe("docs/devcareer-prep-plugin/slice_plan.md");
+    const row = planText === null
+      ? null
+      : (planText.split("\n").find((l) => l.startsWith("| `slice-b-p0-skill-layer`")) ?? null);
+    const declared = new Set();
+    if (row !== null) {
+      for (const m of row.match(/`([A-Za-z0-9_.\-/]+\.(?:mjs|json|md))`/g) ?? []) {
+        declared.add(m.slice(1, -1));
+      }
+    }
+    const trespass = PINNED_SLICE_A_FILES.map(([rel]) => rel).filter((rel) => declared.has(rel));
+    const ok = planError === null && row !== null && declared.size >= 3 && trespass.length === 0;
+    if (!ok) {
+      console.log(`    실제: ${planError ?? ""} 슬라이스 B 행=${row === null ? "미발견" : "발견"} 선언 파일 ${declared.size}건 침범 ${JSON.stringify(trespass)}`);
+    }
+    report(
+      ok,
+      `(SA-4) 금지 방향: 핀 목록이 slice_plan.md의 슬라이스 B In scope 파일 ${declared.size}건 중 어느 것도 얼리지 않는다` +
+      "(파일 생성 시점이 아니라 계획의 소유 선언이 경계다)"
     );
   }
 }
@@ -8901,12 +9203,20 @@ async function runSectionAsync(label, fn) {
  * - **총량 가드는 「삭제된 중단 가드」를 보지 못한다.** 중단 가드 한 줄을 지우면 총량 가드는
  *   그대로 PASS한다(실측 446 PASS / **0 FAIL**). 아래에서 `observed`를 가드 실행 **전**에
  *   잡으므로 가드 자신의 개수는 `observed`에 들어가지 않는다 — 즉 가드를 지우는 변경은
- *   이 축이 아니라 리뷰가 잡아야 한다. 그 한계를 메우려고 「가드를 세는 가드」를 두지는 않는다:
- *   메타 가드는 끝없이 재귀하고, 이 레포의 관례는 막지 못하는 것을 정확히 적어 두는 쪽이다.
+ *   이 축이 아니라 리뷰가 잡아야 한다. 그 한계를 메우려고 「가드를 **세는** 가드」를 두지는
+ *   않는다: 개수를 세는 메타 가드는 끝없이 재귀하고, 이 레포의 관례는 막지 못하는 것을
+ *   정확히 적어 두는 쪽이다. **개수 축의 이야기이며, 형태 축은 아래에서 달라졌다.**
  *
- * 정확 일치를 하한(`>=`)으로 완화하는 변이는 무변이 트리에서 **아무것도 깨지 않는다**(실측
- * 447 PASS / 0 FAIL) — 하한의 약점은 「단언을 3건 늘리고 2건 잃어 순증 +1」인 변경에서만
- * 드러나므로, 그 완화를 되돌릴 근거가 게이트에 남지 않는다는 점도 함께 기록한다.
+ * **정정(2026-09-02, 라운드 2 처방 11).** 이 자리에 있던 서술 — 「정확 일치를 하한(`>=`)으로
+ * 완화하는 변이는 무변이 트리에서 아무것도 깨지 않는다(실측 447 PASS / 0 FAIL)」 — 은
+ * **더 이상 참이 아니다.** `runSliceRuleObservationSmoke`의 `(GP-2)`가 이 함수 본문을 소스
+ * 스캔해 완화형 비교를 금지하고, `(GP-3)`이 정확 일치 비교의 실재를 허용 방향으로 못 박으며,
+ * `(GP-4)`가 「연산자는 그대로 두고 피연산자를 계산식으로 바꾸는」 갈래를 막는다.
+ * 그 절이 세우는 것은 **개수 축이 아니라 형태 축**이므로 바로 위 문단의 결정과 충돌하지
+ * 않는다 — 그쪽은 자기 개수를 세지 말라는 것이고, 이쪽은 비교의 모양을 본다.
+ * **여전히 남는 한계**: 하한의 약점 자체(「단언을 3건 늘리고 2건 잃어 순증 +1」)는 형태 축이
+ * 아니라 정확 일치 그 자체가 막는 것이고, `(GP-2)`가 지키는 것은 그 정확 일치가 조용히
+ * 완화되지 않는다는 사실뿐이다.
  *
  * @param {"default"|"negative"|"golden"} mode
  * @returns {never} `process.exit`으로 끝난다 — **돌아오지 않는다.** 세 호출부가 전부
@@ -10010,6 +10320,7 @@ function runCommonSections() {
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
   runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
+  runSection("절대 규칙 4·5 관측 오라클(라운드 2 처방 11)", runSliceRuleObservationSmoke);
   runSection("렌더 입력 게이트(라운드 2 처방 1)", runRenderGateSmoke);
   runSection("라운드 2 승격 오라클(절단 고지 부재·생산자 인증)", runRound2DeviceSmoke);
   runSection("오염 채점 엔진 오라클(구현 9단계·순서 14번)", runContaminationGraderSmoke);
