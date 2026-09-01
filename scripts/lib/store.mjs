@@ -447,13 +447,59 @@ export function writeConfig(root, config) {
 // 약속하는데 그 코드가 살 자리가 없는' 형태(M-1과 같은 형태)를 없애기
 // 위해서다.
 //
-// **얕은 사본이다.** 커밋 레코드 객체 자체는 공유한다. 깊은 복사를 하면
-// 300커밋 원장에서 무의미한 복제 비용이 들고, 이 함수의 목적은 변조 방지가
-// 아니라 **제외 커밋을 컨텍스트에서 빼는 것** 하나다.
+// **더 이상 얕은 사본이 아니다(성능 콜드 리뷰 라운드 3 처방 2[A], 2026-09-01).**
+// 초판은 커밋 레코드 객체를 그대로 공유했다. 지금은 제외 커밋을 빼는 것에 더해
+// 아래 `PROJECTION_OMITTABLE_KEYS`의 다섯 키만 **값이 기본값일 때 조건부로**
+// 생략하므로 커밋·파일 레코드를 재조립한다. 그 밖의 키는 하나도 건드리지 않고,
+// 그 사실을 `(LP-22)` 레코드 온전성 단언이 관측한다.
+//
+// **왜 필드를 빼는가.** 300커밋 픽스처에서 투영이 207,160바이트이고 이는 스킬
+// 실행 산문 전체(64,687)의 3.2배다 — 컨텍스트를 지배하는 것은 산문이 아니라 이
+// 파일이다. 다섯 키 생략으로 **-18.4%**(실측). 근거와 등급은
+// `docs/devcareer-prep-plugin/perf_review.md` §1·§4에 있다.
 // ---------------------------------------------------------------------------
 
 /**
- * 원장에서 `excluded: true` 커밋을 제거한 얕은 사본을 돌려준다.
+ * 투영이 생략해도 되는 키의 **전부**. 여기 없는 키는 어떤 조건에서도 지우지 않는다.
+ *
+ * **이 상수가 화이트리스트인 이유.** 「기본값이면 생략」을 일반 규칙으로 구현하면
+ * `excluded: false`·`exclusionReason: null`이 그 표에 자연스럽게 들어간다. 그 순간
+ * `(LP-2)`의 「투영 결과에 excluded:true가 0건이다」가 구조적으로 항상 참이 되어
+ * **금지 방향 단언이 공허하게 PASS**한다 — 바이트를 줄이려다 관측을 없애는 형태다.
+ * 화이트리스트로 고정하면 그 확장이 사람 눈과 `(LP-23)`에 먼저 걸린다.
+ */
+export const PROJECTION_OMITTABLE_KEYS = Object.freeze({
+  commit: Object.freeze(["shortHash", "coAuthors"]),
+  fileChange: Object.freeze(["oldPath", "binary", "viaMerge"]),
+});
+
+/**
+ * `schemas/evidence.schema.json`의 `$defs.commit.required`·`$defs.fileChange.required`
+ * 사본. **완전성 게이트의 판정 기준**이다.
+ *
+ * 이 파일은 스키마를 읽지 않는다(라이브러리 계층에 fs 의존을 더하지 않는다).
+ * 그래서 사본이고, 사본은 드리프트한다 — `(LP-26)`이 스키마와 **양방향**으로
+ * 대조해 한쪽만 바뀌면 FAIL시킨다. 예외 5번의 `KNOWN_LAYERS`가 같은 형태다.
+ */
+export const PROJECTION_REQUIRED_KEYS = Object.freeze({
+  commit: Object.freeze([
+    "id", "hash", "shortHash", "authorEmail", "authorDate",
+    "parents", "isMerge", "coAuthors", "subject",
+    "insertions", "deletions", "files", "excluded", "exclusionReason",
+  ]),
+  fileChange: Object.freeze([
+    "path", "oldPath", "changeType", "insertions", "deletions", "binary", "viaMerge",
+  ]),
+});
+
+function hasAllKeys(obj, keys) {
+  if (obj === null || typeof obj !== "object") return false;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(obj, k));
+}
+
+/**
+ * 원장에서 `excluded: true` 커밋을 제거하고, 기본값을 담은 다섯 키를 조건부로
+ * 생략한 사본을 돌려준다.
  *
  * 각 템플릿 프롬프트 조립 지점은 원장 원본이 아니라 이 함수를 거친다.
  * `coverage`·`truncated` 등 공통 필드는 그대로 옮긴다 — 커버리지 고지가
@@ -466,13 +512,56 @@ export function writeConfig(root, config) {
  * 알 수 없는 값을 조용히 버리면 커버리지 수치와 실제 전달 건수가 어긋나
  * 그 불일치를 아무도 보지 못하게 된다.
  *
+ * **완전성 게이트 — 절대 규칙 6이 요구하는 것.** 생략은 그 레코드의 required 키가
+ * **전부 있을 때만** 한다. 이 게이트가 없으면 `binary`가 통째로 빠진 손상된 원장의
+ * 항목이 생략 후 정상 항목과 **바이트 동일**해져 「부재」와 「기본값」이 구별되지
+ * 않는다 — 이 레포가 반복해서 실측한 사고 형태 그대로다. 게이트가 있으면 손상된
+ * 레코드는 아무것도 생략되지 않아 **여전히 손상돼 보인다.** 정상 원장에서는 전건이
+ * 완전하므로 절감은 그대로다(300커밋 픽스처에서 게이트 유무가 바이트 동일, 실측).
+ *
+ * **`contentHash`는 그대로 옮기며 투영 본문의 해시가 아니다.** 초판부터 그랬다 —
+ * 제외 커밋을 빼는 순간 이미 본문과 어긋났고, 이 값은 **원장의 출처 표시**다.
+ *
  * @param {{commits?: Array<{excluded?: boolean}>}} evidence
- * @returns {object} 같은 형태의 얕은 사본(commits만 필터링됨)
+ * @returns {object} 제외 커밋이 빠지고 다섯 키가 조건부로 생략된 사본
  */
 export function projectLedgerForSkills(evidence) {
   const commits = Array.isArray(evidence?.commits) ? evidence.commits : [];
+  const kept = commits.filter((c) => c?.excluded !== true);
+
+  const projected = kept.map((commit) => {
+    if (!hasAllKeys(commit, PROJECTION_REQUIRED_KEYS.commit)) return commit;
+
+    const out = { ...commit };
+    // 파생 일치일 때만 지운다. `shortHash`가 `hash` 앞 12자라는 것은 수집기의
+    // 관례일 뿐 스키마가 강제하지 않는다(패턴이 `^[0-9a-f]{4,40}$`다). 무조건
+    // 지우면 그 관례가 깨진 원장에서 값이 소실되고 드리프트를 아무도 못 본다.
+    if (typeof out.hash === "string" && out.shortHash === out.hash.slice(0, 12)) {
+      delete out.shortHash;
+    }
+    if (Array.isArray(out.coAuthors) && out.coAuthors.length === 0) {
+      delete out.coAuthors;
+    }
+
+    if (Array.isArray(out.files)) {
+      out.files = out.files.map((file) => {
+        if (!hasAllKeys(file, PROJECTION_REQUIRED_KEYS.fileChange)) return file;
+        const f = { ...file };
+        if (f.oldPath === null) delete f.oldPath;
+        if (f.binary === false) delete f.binary;
+        if (f.viaMerge === false) delete f.viaMerge;
+        return f;
+      });
+    }
+    return out;
+  });
+
   return {
     ...evidence,
-    commits: commits.filter((c) => c?.excluded !== true),
+    // **생략 규약을 산출물 자신이 선언한다.** 프롬프트를 읽는 쪽에게 「키 부재는
+    // 그 기본값이지 미상이 아니다」를 알리는 유일한 기계 판독 경로다. 상수에서
+    // 파생하므로 하드코딩 사본이 생기지 않는다.
+    projectionOmittedKeys: PROJECTION_OMITTABLE_KEYS,
+    commits: projected,
   };
 }
