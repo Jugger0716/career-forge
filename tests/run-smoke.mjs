@@ -522,7 +522,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       관측(총량 가드 연산자 형태 축 + 슬라이스 A 내용 핀) 576 → 584.
   //       콜드 리뷰 라운드 2 처방 5·7의 (WC-7)~(WC-12)·(WA-34)~(WA-39)·(AC-1b)
   //       원장 대조와 상위 계층 참조 해소 584 → 597.
-  default: 597,
+  //       콜드 리뷰 라운드 2 §4-8의 (DS-1a)~(DS-1d)·(DS-2a)(DS-2b) 정본 문서 구조
+  //       무결성(절 통째 복제 + 문단 경계를 넘어 열린 코드스팬) 597 → 603.
+  default: 603,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4533,6 +4535,171 @@ function runIgnoredPathReferenceSmoke() {
     const ok = users.length >= 1;
     if (!ok) console.log(`    실제: '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 0건이다(spec.md 닻이 사라졌는가?)`);
     report(ok, `(DH-1c) 허용 방향: 승격된 '${PROMOTED_PREFIX}'를 참조하는 추적 파일이 1건 이상이고 위반이 아니다`);
+  }
+}
+
+/**
+ * 정본 문서 구조 무결성 가드(DS-1·DS-2) — 콜드 리뷰 라운드 2 §4-8.
+ *
+ * **왜 이 절이 있는가 — 사람 눈이 이 부류를 못 잡는다는 것이 실측됐다.** 처방 11 반영
+ * 커밋이 `cold_review_round2.md`에 새 절을 통째로 삽입하면서, **그 삽입 텍스트 안쪽에**
+ * 그 시점 파일 꼬리의 절 두 개(본문 + 헤딩)가 함께 끼어들어 문장 하나를 두 동강 냈다.
+ * 결과는 ① 같은 `## ` 헤딩이 두 벌 ② 백틱 코드스팬이 수십 줄에 걸쳐 열린 채 남음이었고,
+ * **커밋 셋·리뷰 두 회차·핸드오프 하나가 그것을 그대로 통과시켰다.** 게다가 뒤 회차의
+ * 정정이 「잘못 낀 사본」 쪽에만 붙어 두 사본이 회차마다 더 갈렸다.
+ *
+ * **이 가드가 없던 동안 lint는 이 파일을 실제로 읽고 있었다.** `checkCommandPrefixConsistency`가
+ * `docs/` 아래 `.md`를 전수 파싱한다 — 즉 「문서라서 게이트 밖」이어서 놓친 것이 아니라
+ * **읽으면서 구조를 안 봤기 때문**이다. 그 구별을 여기 적어 둔다.
+ *
+ * **이 절의 PASS가 뜻하는 것과 뜻하지 않는 것.** PASS는 「추적되는 정본 문서에서 같은 `## `
+ * 헤딩이 두 번 나오지 않고, 코드스팬이 문단 경계를 넘어 열린 채 남지 않는다」만 뜻한다.
+ * **문서 내용이 옳다는 뜻이 아니고, 절이 제자리에 있다는 뜻도 아니다** — 절을 통째로 잘못된
+ * 위치에 두되 중복시키지 않으면 이 가드는 침묵한다. 잡는 것은 **복제와 갈림**뿐이다.
+ */
+function scanMarkdownStructure(text) {
+  const lines = text.split("\n");
+  const headings = [];
+  const unclosed = [];
+  let softWrapped = 0;
+  let inFence = false;
+  let para = null;
+
+  // 문단(빈 줄로 구분되는 덩어리)이 끝나는 지점에서만 판정한다. **줄 경계에서 판정하지
+  // 않는 것이 설계의 핵심이다** — 이 문서군은 인라인 코드스팬이 소프트 줄바꿈으로 다음
+  // 줄에서 닫히는 서술 스타일을 광범위하게 쓰고, 줄 단위로 보면 그 정상 스타일이 전부
+  // 위반이 된다(실측: 그렇게 재면 아홉 파일에서 수백 줄이 잡힌다).
+  const closePara = () => {
+    if (para === null) return;
+    for (const [len, n] of para.counts) {
+      if (n % 2 === 1) unclosed.push({ from: para.start, to: para.lastLine, len });
+      else if (para.pending.has(len)) softWrapped += 1;
+    }
+    para = null;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const t = line.trim();
+    // 코드펜스 안은 통째로 건너뛴다 — 예시로 인쇄한 깨진 스팬을 위반으로 읽으면
+    // 이 사고를 **설명하는 문서 자신**이 FAIL한다.
+    if (/^`{3,}/.test(t)) {
+      closePara();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (t === "") {
+      closePara();
+      continue;
+    }
+    if (para === null) para = { start: i + 1, counts: new Map(), pending: new Set(), lastLine: i + 1 };
+    para.lastLine = i + 1;
+    if (t.startsWith("## ")) headings.push(t);
+    // 백틱 **런 길이별로** 센다. 길이가 다른 런은 서로 짝이 되지 않으므로(CommonMark),
+    // 전체 개수를 한 덩어리로 mod 2 하면 ``` `` `리터럴 백틱` `` ``` 관용구가 오탐이 된다.
+    for (const m of line.matchAll(/`+/g)) {
+      const len = m[0].length;
+      para.counts.set(len, (para.counts.get(len) ?? 0) + 1);
+    }
+    // 줄이 끝난 시점에 홀수로 남은 런 길이를 기억해 둔다. 문단이 끝날 때 그 길이가
+    // 짝수라면 **줄을 넘겨 닫힌 스팬**이 실재했다는 뜻이고, 그것이 (DS-2b)의 재료다.
+    for (const [len, n] of para.counts) if (n % 2 === 1) para.pending.add(len);
+  }
+  closePara();
+  return { headings, unclosed, softWrapped };
+}
+
+function runDocStructureIntegritySmoke() {
+  console.log("[정본 문서 구조 무결성] 절이 복제되거나 코드스팬이 열린 채 남으면 회차마다 갈린다");
+
+  // 스캔 집합은 **추적되는** 정본 문서로 고정한다. `git ls-files`로 잡는 이유는 새 클론에서
+  // 같은 집합이 나와야 하기 때문이다 — 도구 작업 디렉터리는 무시되므로 워킹 트리에서만
+  // 대상이 늘고 클론에서 0건이 되는 형태를 만들지 않는다(그 형태가 바로 DH-1의 원죄다).
+  const DOC_ROOT = "docs/devcareer-prep-plugin/";
+  const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", DOC_ROOT], { encoding: "utf8" });
+  const tracked = ls.status === 0 ? ls.stdout.trim().split("\n").filter(Boolean) : [];
+  const scanned = tracked.filter((f) => f.endsWith(".md"));
+
+  // 판독 실패를 **빈 문자열로 강등하지 않는다.** 강등하면 못 읽은 파일이 「중복 0건·미짝
+  // 0건」으로 집계되어 조용히 초록이 된다 — 이 레포가 DH-1d에서 이미 한 번 실측한 사고다.
+  const texts = new Map();
+  const readFailures = [];
+  for (const f of scanned) {
+    const { text, error } = readRepoTextSafe(f);
+    if (error !== null) readFailures.push(error);
+    else texts.set(f, text);
+  }
+
+  const results = new Map();
+  for (const [f, text] of texts) results.set(f, scanMarkdownStructure(text));
+
+  // ---- (DS-1a) 대상이 0건이 아닌가 ----
+  //      아래 두 금지 방향은 스캔 대상이 비면 **둘 다 공허하게 통과한다.** git이 없거나
+  //      `ls-files`가 실패해도 여기서 떨어진다 — 조용히 건너뛰지 않는다.
+  {
+    const ok = ls.status === 0 && scanned.length >= 8;
+    if (!ok) console.log(`    실제: git exit=${ls.status} 스캔 대상 ${scanned.length}건`);
+    report(ok, `(DS-1a) '${DOC_ROOT}' 아래 추적 .md가 8건 이상 실재한다(두 금지 방향이 공허해지지 않는 전제)`);
+  }
+
+  // ---- (DS-1b) 스캔 대상을 전부 판독했는가 ----
+  {
+    const ok = readFailures.length === 0;
+    if (!ok) console.log(`    실제: 판독 실패 ${JSON.stringify(readFailures)}`);
+    report(ok, `(DS-1b) 스캔 대상 ${scanned.length}건을 전부 판독했다(판독 실패를 빈 문자열로 강등하지 않는다)`);
+  }
+
+  // ---- (DS-1c) 금지 방향: 같은 `## ` 헤딩이 두 번 나오지 않는가 ----
+  //      `### ` 레벨로 내리지 않는다. 이 문서군은 회차 기록마다 같은 부제목(「남은 위험」
+  //      「이 처방이 닫지 못하는 것」 등)을 템플릿으로 반복하며, 그것은 손상이 아니라 관례다
+  //      (실측: `### `까지 내리면 정상 반복 다섯 건이 전부 오탐이 된다). 잡으려는 손상은
+  //      **절 통째 복제**이고 그것은 `## ` 레벨에서 완전히 드러난다.
+  {
+    const offenders = [];
+    for (const [f, r] of results) {
+      const seen = new Map();
+      for (const h of r.headings) seen.set(h, (seen.get(h) ?? 0) + 1);
+      for (const [key, n] of seen) if (n > 1) offenders.push(`${f} → ${JSON.stringify(key)} ×${n}`);
+    }
+    const ok = offenders.length === 0;
+    if (!ok) console.log(`    실제: 중복 헤딩 ${JSON.stringify(offenders)}`);
+    report(ok, "(DS-1c) 금지 방향: 추적 정본 문서 어디에도 같은 '## ' 헤딩이 두 번 나오지 않는다(절 통째 복제 차단)");
+  }
+
+  // ---- (DS-1d) 허용 방향: 헤딩을 실제로 인식하고 있는가 ----
+  //      금지 방향만 두면 **헤딩 파싱을 통째로 망가뜨려도 아무것도 깨지지 않는다** —
+  //      `headings`가 항상 비면 중복은 영원히 0건이고 (DS-1c)는 영원히 초록이다.
+  //      이 단언이 그 형태를 막는다.
+  {
+    const total = [...results.values()].reduce((n, r) => n + r.headings.length, 0);
+    const ok = total >= 50;
+    if (!ok) console.log(`    실제: 인식된 '## ' 헤딩 총 ${total}건(파서가 헤딩을 못 보고 있는가?)`);
+    report(ok, `(DS-1d) 허용 방향: 정상 헤딩 ${total}건을 인식하고도 중복으로 잡지 않는다(중복 검사가 공허하지 않다)`);
+  }
+
+  // ---- (DS-2a) 금지 방향: 코드스팬이 문단 경계를 넘어 열린 채 남지 않는가 ----
+  //      실제 손상은 스팬을 연 채 수십 줄이 끼어들었고, 그 사이에 빈 줄이 여럿 있었다.
+  //      문단 경계에서 홀수로 남은 런이 곧 「닫히지 않은 스팬」이다.
+  {
+    const offenders = [];
+    for (const [f, r] of results) {
+      for (const u of r.unclosed) offenders.push(`${f} → 문단 ${u.from}~${u.to} 백틱 길이 ${u.len}`);
+    }
+    const ok = offenders.length === 0;
+    if (!ok) console.log(`    실제: 문단 경계를 넘어 열린 스팬 ${JSON.stringify(offenders)}`);
+    report(ok, "(DS-2a) 금지 방향: 코드스팬이 문단 경계를 넘어 열린 채 남지 않는다(문장이 갈린 흔적 차단)");
+  }
+
+  // ---- (DS-2b) 허용 방향: 줄을 넘겨 닫히는 스팬은 통과시키는가 ----
+  //      금지 방향만 두면 **판정을 「빈 줄이 아니라 줄 경계에서」로 좁혀도 초록이 유지된다** —
+  //      그 순간 이 문서군의 정상 서술 스타일이 전부 위반이 되므로 반대 방향으로 무너진다.
+  //      실제로 줄을 넘겨 닫히는 스팬이 실재하고 그것이 위반으로 잡히지 않음을 함께 본다.
+  {
+    const total = [...results.values()].reduce((n, r) => n + r.softWrapped, 0);
+    const ok = total >= 3;
+    if (!ok) console.log(`    실제: 줄을 넘겨 닫힌 스팬 ${total}건(문단 경계 판정이 줄 경계로 좁혀졌는가?)`);
+    report(ok, `(DS-2b) 허용 방향: 소프트 줄바꿈으로 다음 줄에서 닫히는 스팬 ${total}건을 위반으로 잡지 않는다`);
   }
 }
 
@@ -10699,6 +10866,7 @@ function runCommonSections() {
   runSection("원장 투영 오라클(구현 7단계 (f)·게이트 E-3)", runLedgerProjectionOracleSmoke);
   runSection("프롬프트 계층 계약(구현 7단계 ③·게이트 E-3)", runSkillPromptContractSmoke);
   runSection("gitignore 경로 참조 가드(DH-1)", runIgnoredPathReferenceSmoke);
+  runSection("정본 문서 구조 무결성(DS-1·DS-2, 라운드 2 §4-8)", runDocStructureIntegritySmoke);
   runSection("소스 참조 형태 가드(A-37 재발 차단)", runSourceLineReferenceSmoke);
   runSection("절대 규칙 4·5 관측 오라클(라운드 2 처방 11)", runSliceRuleObservationSmoke);
   runSection("렌더 입력 게이트(라운드 2 처방 1)", runRenderGateSmoke);
