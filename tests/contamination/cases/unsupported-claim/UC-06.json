@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-06",
+  "kind": "unsupported-claim",
+  "axis": "추론 비약 — 커밋이 보여 주는 것에서 두 걸음 이상 나간 능력 주장(knowledge-map, inference)",
+  "layer": "knowledge-map",
+  "inject": {
+    "nodeId": "ct-uc-06",
+    "basis": "inference",
+    "select": { "subjectPattern": "^refactor: rewrite data file \\d+$", "ordinal": 0 },
+    "text": "데이터 파일을 전면 재작성한 이력으로 보아, 대량 데이터 마이그레이션의 멱등성 설계와 롤백 전략을 스스로 수립할 수 있다.",
+    "note": "프롬프트 (i)-2의 예시 문구('분산 시스템을 설계할 수 있다')를 쓰지 않는다 — 그것을 쓰면 판단력이 아니라 지시문 복창을 재게 된다."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "code": "INFERENCE_NOT_SUPPORTED",
+    "refutableBy": "인용 커밋은 단일 텍스트 파일 재작성이다. 멱등성·롤백을 다룬 코드·설정·문서 변경이 투영 245건 어디에도 없다."
+  }
+}

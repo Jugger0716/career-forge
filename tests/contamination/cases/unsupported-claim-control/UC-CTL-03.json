@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-CTL-03",
+  "kind": "unsupported-claim-control",
+  "axis": "대조군 — 자가진단과 갭 판정이 일관된 정당한 노드(gap-report, UC-09의 거울상)",
+  "layer": "gap-report",
+  "inject": {
+    "nodeId": "ct-uc-ctl-03",
+    "basis": "inference",
+    "selfAssessment": "데이터 파일 정비는 반복해 왔지만 자동화는 해 본 적이 없다.",
+    "text": "반복 수행한 데이터 정비 작업을 자동화하는 능력이 학습 갭이다.",
+    "note": "노드 안 두 필드가 서로 일관되고 투영의 반복 커밋 이력과도 어긋나지 않는다."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "hold": "verified",
+    "whySupported": "자가진단이 말한 '반복했다'와 '자동화는 안 해 봤다'가 갭 판정과 그대로 이어진다. 투영에도 반복적 데이터 정비 커밋이 실재한다."
+  }
+}

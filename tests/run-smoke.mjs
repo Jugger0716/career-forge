@@ -178,6 +178,11 @@ import {
   resolveSelector,
   gradeCitationCase,
   gradeSecretCase,
+  gradeClaimCase,
+  gradeControlCase,
+  summarizeControls,
+  factCheckRanIn,
+  CONTROL_OUTCOME,
   tally,
   evaluateGate,
 } from "./contamination/grade.mjs";
@@ -539,6 +544,10 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       합성 위반에 발화) 8 → 11. (CX-11)은 실측이 요구했다 — (CX-9)만 두면 그 필터를
   //       전면 허용으로 완화해도 깨끗한 트리에서 아무것도 깨지지 않았다.
   contamination: 11,
+  // LLM 축(UC 10건 + 대조군 3건). 신설이며 이력의 시작점이다 — 이 모드도
+  // `runCommonSections()`를 부르지 않고 자기 절 하나만 돈다.
+  // **이 모드는 `npm test`에 없다**(D6: 기계 3종만 넣는다).
+  "contamination-llm": 8,
 });
 
 function report(ok, label) {
@@ -10926,6 +10935,196 @@ function runCommonSections() {
  * 만들면 워킹 트리가 항상 더러워지고 새 클론 확인이 흐려진다. 경계는
  * `tests/contamination/README.md`가 정본이다.
  */
+/**
+ * 오염 스위트 LLM 축(`UC` 10건 + 음성 대조군) — AC-8, README §2-4·§8.
+ *
+ * **왜 기계 축과 다른 모드인가.** `(CX-7)`은 회차 간 산출물이 **바이트 동일**할 것을
+ * 요구하는데(기계 축 결정성) LLM 산출물은 회차마다 갈린다 — AC-8이 UC에 「3회 **최저값**
+ * 80%」와 「회차 편차 20%p 경고」를 둔 이유가 그것이다. 두 조항은 같은 회차 집합 위에서
+ * 동시에 참일 수 없어 버킷을 갈랐다(runs/llm 대 runs/machine).
+ *
+ * **대조군이 이 절의 핵심이다.** UC 비율만 보면 **전부 refuted하는 검사기가 100%를
+ * 얻는다** — 그것은 반증 능력이 아니라 무조건 거부이고, 비율로는 구별되지 않는다
+ * (README §9가 스스로 적어 둔 한계다). 대조군은 **분모 밖**이며 별도 단언으로 본다.
+ *
+ * **이 모드는 npm test에 없다**(D6). 사람이 스킬을 3회 돌려 runs/llm을 남겨야 돈다 —
+ * 회차가 없으면 FAIL이고, 그것이 정상이다(부재는 0%가 아니다).
+ */
+function runContaminationLlmSuite() {
+  console.log("[오염 스위트 LLM 축] UC 10건을 3회 산출물 위에서 채점하고 대조군으로 무조건 거부를 가른다");
+
+  const runsDir = path.join(REPO_ROOT, "tests", "contamination", "runs");
+  const llmDir = path.join(runsDir, "llm");
+  const casesRoot = path.join(REPO_ROOT, "tests", "contamination", "cases");
+
+  const readCases = (kind) => {
+    const dir = path.join(casesRoot, kind);
+    const defs = [];
+    const failures = [];
+    let names = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort();
+    } catch (e) {
+      failures.push(kind + ": 케이스 디렉터리 판독 실패(" + (e.code ?? e.message) + ")");
+      return { defs, failures };
+    }
+    for (const n of names) {
+      // 판독 실패를 빈 배열로 강등하지 않는다 — 그러면 케이스가 사라진 채 분모만 줄어든다.
+      try {
+        defs.push(JSON.parse(fs.readFileSync(path.join(dir, n), "utf8")));
+      } catch (e) {
+        failures.push(kind + "/" + n + ": " + e.message);
+      }
+    }
+    return { defs, failures };
+  };
+
+  const uc = readCases(CASE_KINDS.UNSUPPORTED_CLAIM);
+  const ctl = readCases(CASE_KINDS.UNSUPPORTED_CLAIM_CONTROL);
+  const shapeProblems = [
+    ...uc.defs.flatMap((d) => checkCaseShape(d, CASE_KINDS.UNSUPPORTED_CLAIM + "/" + (d?.caseId ?? "?"))),
+    ...ctl.defs.flatMap((d) => checkCaseShape(d, CASE_KINDS.UNSUPPORTED_CLAIM_CONTROL + "/" + (d?.caseId ?? "?"))),
+  ];
+
+  let runIds = [];
+  try {
+    runIds = fs.readdirSync(llmDir).filter((n) => fs.statSync(path.join(llmDir, n)).isDirectory()).sort();
+  } catch { /* (CL-2)가 잡는다 */ }
+
+  const LAYER_FILE = { career: "career.json", "knowledge-map": "knowledge-map.json", "gap-report": "gap-report.json" };
+  const perRun = [];
+  for (const runId of runIds) {
+    const root = path.join(llmDir, runId, ".devcareer");
+    const artifacts = new Map();
+    const readFailures = [];
+    for (const [layer, file] of Object.entries(LAYER_FILE)) {
+      const p = path.join(root, file);
+      if (!fs.existsSync(p)) continue;
+      try {
+        artifacts.set(layer, JSON.parse(fs.readFileSync(p, "utf8")));
+      } catch (e) {
+        readFailures.push(runId + "/" + file + ": " + e.message);
+      }
+    }
+    const nodeOf = (layer, nodeId) => {
+      const nodes = Array.isArray(artifacts.get(layer)?.nodes) ? artifacts.get(layer).nodes : [];
+      return nodes.find((n) => n?.id === nodeId);
+    };
+    const ranIn = (layer) => factCheckRanIn(artifacts.get(layer) ?? null);
+
+    const outcomes = uc.defs.map((d) => gradeClaimCase(d, nodeOf(d.layer, d?.inject?.nodeId), ranIn(d.layer)));
+    const controlOutcomes = ctl.defs.map((d) => gradeControlCase(d, nodeOf(d.layer, d?.inject?.nodeId), ranIn(d.layer)));
+    perRun.push({
+      runId,
+      readFailures,
+      layers: artifacts.size,
+      tally: tally(uc.defs, outcomes),
+      controls: summarizeControls(ctl.defs, controlOutcomes),
+      outcomes,
+      controlOutcomes,
+    });
+  }
+
+  // ---- (CL-1) 전제: 케이스가 실재하고 전부 판독됐는가 ----
+  //      케이스가 비면 아래 비율이 **분모 0으로 공허해진다.** 판독 실패를 빈 배열로
+  //      강등하지 않았으므로 여기서 시끄럽게 떨어진다.
+  {
+    const failures = [...uc.failures, ...ctl.failures];
+    const ok = uc.defs.length === 10 && ctl.defs.length >= 3 && failures.length === 0 && shapeProblems.length === 0;
+    if (!ok) console.log("    실제: UC " + uc.defs.length + "건 대조군 " + ctl.defs.length + "건 판독실패 " + JSON.stringify(failures) + " 형태위반 " + JSON.stringify(shapeProblems));
+    report(ok, "(CL-1) 전제: UC 케이스 10건과 대조군 " + ctl.defs.length + "건이 실재하고 전부 판독·형태 검사를 통과했다");
+  }
+
+  // ---- (CL-2) 전제: 회차가 실재하는가 ----
+  //      **미제출은 0%가 아니다.** 회차가 없으면 「탐지에 실패했다」가 아니라
+  //      「판정할 것이 없다」이며, README §3이 그 경우를 FAIL로 못 박았다.
+  {
+    const readFailures = perRun.flatMap((r) => r.readFailures);
+    const ok = runIds.length >= 3 && readFailures.length === 0 && perRun.every((r) => r.layers >= 1);
+    if (!ok) console.log("    실제: runs/llm 회차 " + runIds.length + "건(3회 필요) 판독실패 " + JSON.stringify(readFailures) + " 계층수 " + JSON.stringify(perRun.map((r) => r.layers)));
+    if (runIds.length === 0) console.log("    처방: 사람이 스킬을 3회 돌려 runs/llm/<run-id>/.devcareer/에 산출물을 남겨야 한다(README §5·§7). 이 FAIL은 「게이트가 깨졌다」가 아니라 「아직 재료가 없다」이다.");
+    report(ok, "(CL-2) 전제: runs/llm 아래 회차가 3건 이상 실재하고 산출물을 전부 판독했다(미제출은 0%가 아니다)");
+  }
+
+  // ---- (CL-3) 금지 방향: 3회 최저값이 수용선 80% 이상인가 ----
+  //      evaluateGate가 **최고값 경로를 갖지 않는다** — 입력이 회차 배열이고 판정은
+  //      최저값과 편차로만 이뤄진다. 재실행해 나온 최고값을 근거로 쓰는 길이 없다.
+  {
+    const ratios = perRun.map((r) => r.tally.ratio);
+    const gate = evaluateGate({ kind: CASE_KINDS.UNSUPPORTED_CLAIM, ratios });
+    const ok = gate.pass;
+    if (!ok) console.log("    실제: 회차 비율 " + JSON.stringify(ratios.map((x) => Number((x * 100).toFixed(1)))) + " 최저 " + (gate.min * 100).toFixed(1) + "% 편차 " + (gate.spread * 100).toFixed(1) + "%p — " + gate.reason);
+    if (gate.warning !== null) console.log("    경고: " + gate.warning);
+    report(ok, "(CL-3) 금지 방향: UC 3회 최저값이 수용선 80% 이상이다(최고값을 근거로 쓰는 경로가 없다)");
+  }
+
+  // ---- (CL-4) 금지 방향: 대조군이 강등되지 않았는가 ----
+  //      **이 단언이 「무조건 거부」를 가른다.** 없으면 전부 refuted하는 검사기가
+  //      (CL-3)에서 100%를 받고 통과한다 — README §9가 적은 한계를 여기서 닫는다.
+  {
+    const over = perRun.flatMap((r) => r.controlOutcomes.filter((o) => o.outcome === CONTROL_OUTCOME.OVER_REFUTED).map((o) => r.runId + "/" + o.caseId));
+    const ok = perRun.length > 0 && over.length === 0;
+    if (!ok) console.log("    실제: 근거 있는 주장이 강등된 건 " + JSON.stringify(over));
+    report(ok, "(CL-4) 금지 방향: 대조군이 한 건도 강등되지 않았다(무조건 거부와 반증 능력을 가른다)");
+  }
+
+  // ---- (CL-5) 허용 방향: 대조군이 실제로 판정 대상이었는가 ----
+  //      (CL-4)만 두면 **대조군이 통째로 INVALID여도 초록이다** — 강등이 0건이니까.
+  //      그러면 「무조건 거부를 잡는다」는 주장이 공허해진다.
+  {
+    const held = perRun.reduce((n, r) => n + r.controls.held, 0);
+    const need = perRun.length * ctl.defs.length;
+    const ok = need > 0 && held === need;
+    if (!ok) console.log("    실제: 유지된 대조군 " + held + "/" + need + "건 · 회차별 " + JSON.stringify(perRun.map((r) => r.controls)));
+    report(ok, "(CL-5) 허용 방향: 대조군 " + need + "건이 전부 판정을 거쳐 유지됐다(전부 INVALID인 대조군은 아무것도 가르지 않는다)");
+  }
+
+  // ---- (CL-6) 분모가 케이스 파일 개수로 고정되는가 ----
+  //      **분모를 「채점된 건수」로 바꾸는 것이 이 게이트를 무력화하는 가장 싼 방법이다**
+  //      (README §7). 산출물을 안 낸 회차가 100%를 받는다.
+  {
+    const bad = perRun.filter((r) => r.tally.denominator !== uc.defs.length).map((r) => r.runId + ": " + r.tally.denominator);
+    const ok = perRun.length > 0 && bad.length === 0;
+    if (!ok) console.log("    실제: 분모가 케이스 개수(" + uc.defs.length + ")와 다른 회차 " + JSON.stringify(bad));
+    report(ok, "(CL-6) 분모가 회차마다 케이스 파일 개수 " + uc.defs.length + "로 고정된다(채점된 건수로 바꾸지 않는다)");
+  }
+
+  // ---- (CL-7) 허용 방향: 10건의 축이 서로 다른가 ----
+  //      checkCaseShape는 axis **존재**만 본다. 열 건이 같은 문장을 쓰면 그것은
+  //      「같은 케이스의 10배」이고, 이 스위트가 재는 것은 하나뿐이 된다.
+  {
+    const axes = new Set(uc.defs.map((d) => d.axis));
+    const layers = new Set(uc.defs.map((d) => d.layer));
+    const careerCount = uc.defs.filter((d) => d.layer === "career").length;
+    // README §2-4: career 5건 + L2/L3 5건. 한 계층에 몰면 GapFactChecker를 한 번도 재지 않는다.
+    const ok = axes.size === uc.defs.length && layers.size >= 2 && careerCount === 5;
+    if (!ok) console.log("    실제: 고유 축 " + axes.size + "/" + uc.defs.length + " 계층 " + JSON.stringify([...layers]) + " career " + careerCount + "건");
+    report(ok, "(CL-7) 허용 방향: UC " + uc.defs.length + "건의 축이 전부 다르고 career 5건 + 다른 계층 5건으로 갈려 있다(README §2-4)");
+  }
+
+  // ---- (CL-8) 결과 기록에 네 수가 남는가 ----
+  //      비율만 적으면 사후 재계산이 불가능하다. 대조군 수치도 함께 남긴다 —
+  //      분모 밖이지만 기록 밖은 아니다.
+  {
+    const results = {
+      kind: CASE_KINDS.UNSUPPORTED_CLAIM,
+      runs: perRun.map((r) => ({ runId: r.runId, ...r.tally, controls: r.controls })),
+    };
+    const idx = process.argv.indexOf("--results");
+    if (idx !== -1 && process.argv[idx + 1]) {
+      fs.writeFileSync(process.argv[idx + 1], JSON.stringify(results, null, 2) + "\n", "utf8");
+      console.log("    결과 기록: " + process.argv[idx + 1]);
+    }
+    const shaped = results.runs.every((r) =>
+      Number.isInteger(r.denominator) && Number.isInteger(r.detected) && Number.isInteger(r.missed) && Number.isInteger(r.invalid) &&
+      Number.isInteger(r.controls.held) && Number.isInteger(r.controls.overRefuted)
+    );
+    const ok = shaped && results.runs.length === perRun.length && perRun.length > 0;
+    if (!ok) console.log("    실제: " + JSON.stringify(results.runs));
+    report(ok, "(CL-8) 결과 기록이 회차마다 분모·탐지·미탐지·무효와 대조군 수치를 담는다(비율만 적으면 사후 재계산이 불가능하다)");
+  }
+}
+
 function runContaminationSuite() {
   console.log("[오염 스위트] 기계 3종 30건을 회차 산출물 위에서 채점한다(구현 9단계·AC-8)");
 
@@ -11198,6 +11397,15 @@ async function main() {
   const negative = process.argv.includes("--negative");
   const golden = process.argv.includes("--golden");
   const contamination = process.argv.includes("--contamination");
+  const contaminationLlm = process.argv.includes("--contamination-llm");
+
+  // **--contamination-llm이 --contamination보다 먼저다.** 두 플래그가 접두사를 공유하므로
+  // `includes("--contamination")`은 LLM 플래그만 준 실행에서도 참이 된다 — 순서를 뒤집으면
+  // 사람이 LLM 모드를 부른 실행이 조용히 기계 모드로 돈다.
+  if (contaminationLlm) {
+    runSection("오염 스위트(LLM 축 UC)", runContaminationLlmSuite);
+    return finishMode("contamination-llm");
+  }
 
   if (contamination) {
     runSection("오염 스위트(기계 3종)", runContaminationSuite);

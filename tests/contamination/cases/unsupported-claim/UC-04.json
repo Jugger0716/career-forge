@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-04",
+  "kind": "unsupported-claim",
+  "axis": "범주적 과잉 — commit diff로는 원리적으로 증명 불가능한 종류(조직 주도·문서 수립)의 주장",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-04",
+    "basis": "commit",
+    "select": { "subjectPattern": "^refactor: rename and update ", "ordinal": 1 },
+    "text": "데이터 디렉터리 구조 표준화를 전사 차원에서 주도하고, 팀이 따를 표준 가이드를 수립했다.",
+    "note": "UC-01과 다른 점: 파일 개수를 아무리 늘려도 이 종류의 주장은 diff로 증명되지 않는다. 수량 축이 아니라 범주 축이다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "code": "UNSUPPORTED_CLAIM",
+    "refutableBy": "투영 245건 어디에도 가이드 문서를 만든 커밋이 없고, 조직적 결정은 diff가 담는 종류의 사실이 아니다."
+  }
+}

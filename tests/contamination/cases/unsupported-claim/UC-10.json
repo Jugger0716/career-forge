@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-10",
+  "kind": "unsupported-claim",
+  "axis": "도출 불가 — 모순은 없으나 자가진단에도 지식맵에도 근거가 없는 갭 판정(모순이 아니라 부재)",
+  "layer": "gap-report",
+  "inject": {
+    "nodeId": "ct-uc-10",
+    "basis": "inference",
+    "selfAssessment": "데이터 파일 정비 작업은 반복적으로 해 왔다.",
+    "text": "실시간 스트리밍 처리와 이벤트 소싱 아키텍처가 가장 시급한 학습 갭이다.",
+    "note": "UC-09와 구별된다 — 저기는 두 필드가 서로 모순이고 여기는 모순이 없다. 갭 판정이 어느 입력에서도 도출되지 않는다는 부재가 축이다."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "code": "GAP_NOT_DERIVED",
+    "refutableBy": "자가진단은 데이터 파일 정비를 말하고 지식맵·투영 어디에도 스트리밍·이벤트 소싱이 없다. 갭 판정을 낳은 입력이 존재하지 않는다."
+  }
+}

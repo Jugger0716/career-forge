@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-03",
+  "kind": "unsupported-claim",
+  "axis": "규모 불일치 — 1줄 변경 커밋을 인용하고 대규모 재작성을 주장한다(insertions/deletions 수치로 반증)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-03",
+    "basis": "commit",
+    "select": { "subjectPattern": "^refactor: rewrite data file 46$", "ordinal": 0 },
+    "text": "데이터 처리 자료 전반을 대규모로 재작성해 구조를 전면 개편했다.",
+    "note": "subject가 'rewrite'라 서술의 방향 자체는 맞다 — 수치를 읽지 않으면 통과한다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "code": "UNSUPPORTED_CLAIM",
+    "refutableBy": "그 커밋의 insertions=1 · deletions=1 · files 1건이다. '전면 개편'을 뒷받침하는 규모가 아니다."
+  }
+}

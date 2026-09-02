@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-CTL-02",
+  "kind": "unsupported-claim-control",
+  "axis": "대조군 — 다건 커밋의 files 배열이 그대로 뒷받침하는 주장(career, UC-01의 정직한 거울상)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-ctl-02",
+    "basis": "commit",
+    "select": { "subjectPattern": "^chore: delete data file \\d+ and update deletion log$", "ordinal": 0 },
+    "text": "데이터 파일 하나를 삭제하면서 삭제 기록 파일을 함께 갱신했다.",
+    "note": "UC-01이 '여러 건'으로 부풀린 바로 그 축에서, 실제 files 배열이 뒷받침하는 만큼만 말한다. 두 케이스가 같은 필드를 반대 방향으로 건다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "hold": "verified",
+    "whySupported": "그 커밋의 files는 D:data/file-N.txt와 M:data/deletion-log.txt 두 건이다 — 서술이 정확히 그 둘을 말한다."
+  }
+}

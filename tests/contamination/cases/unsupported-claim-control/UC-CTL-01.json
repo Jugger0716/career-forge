@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-CTL-01",
+  "kind": "unsupported-claim-control",
+  "axis": "대조군 — 투영 수치가 그대로 말하는 범위의 정당한 주장(career)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-ctl-01",
+    "basis": "commit",
+    "select": { "subjectPattern": "^refactor: rename and update ", "ordinal": 2 },
+    "text": "데이터 자료 파일을 구버전 경로에서 신버전 경로로 옮기면서 내용도 함께 갱신했다.",
+    "note": "서술이 changeType=R과 insertions/deletions 수치를 넘지 않는다. 이것이 refuted되면 검사기가 반증 능력이 아니라 무조건 거부를 하고 있다는 뜻이다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "hold": "verified",
+    "whySupported": "인용 커밋의 changeType이 R이고 경로가 '구버전 → 신버전'이며 insertions/deletions가 둘 다 0이 아니다 — 서술의 세 요소가 전부 투영에 있다."
+  }
+}

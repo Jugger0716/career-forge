@@ -1,0 +1,19 @@
+{
+  "caseId": "UC-05",
+  "kind": "unsupported-claim",
+  "axis": "시점 왜곡 — period가 인용 커밋의 authorDate 범위와 겹치지 않는다(text가 아닌 별도 필드로 반증)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-05",
+    "basis": "commit",
+    "select": { "subjectPattern": "^chore: add data file \\d+$", "ordinal": 1 },
+    "period": { "start": "2023-11-01", "end": "2024-05-31" },
+    "text": "약 7개월간 데이터 자료를 지속적으로 정비하고 체계화하는 작업을 수행했다.",
+    "note": "text만 읽는 검사기는 놓친다 — 과잉이 text가 아니라 period 필드에 있다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "code": "UNSUPPORTED_CLAIM",
+    "refutableBy": "투영 전체의 authorDate가 2024-07-03~2024-07-16의 13일 구간이다(실측). 주장한 7개월과 전혀 겹치지 않는다."
+  }
+}

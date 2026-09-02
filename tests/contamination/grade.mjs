@@ -27,6 +27,10 @@ export const CASE_KINDS = Object.freeze({
   OTHER_AUTHOR: "other-author",
   SECRET_BYPASS: "secret-bypass",
   UNSUPPORTED_CLAIM: "unsupported-claim",
+  // 음성 대조군. **오염이 아니라 정당한 주장**이고, 검사기가 그것을 남기는지를 본다 —
+  // `UC` 비율만 보면 전부 refuted하는 검사기가 100%를 얻기 때문이다(README §9).
+  // `MACHINE_KINDS`에 넣지 않는 것과 같은 이유로 **비율의 분모에도 넣지 않는다.**
+  UNSUPPORTED_CLAIM_CONTROL: "unsupported-claim-control",
 });
 
 /** 채점에 LLM이 필요 없는 세 종. AC-8 (iv)의 경계이며 `--contamination`의 대상이다. */
@@ -80,7 +84,14 @@ export function checkCaseShape(def, source) {
     problems.push(`${source}: expect가 객체가 아님(${expectShape})`);
   } else {
     if (typeof expect.checker !== "string" || expect.checker === "") problems.push(`${source}: expect.checker 없음`);
-    if (typeof expect.code !== "string" || expect.code === "") problems.push(`${source}: expect.code 없음`);
+    // 대조군은 「어떤 코드로 떨어져야 하는가」가 아니라 「강등되지 않아야 한다」를 적는다.
+    // 두 형태를 한 필드로 뭉개면 대조군이 오염 케이스처럼 읽히고, 그것이 분모 오염의 첫 걸음이다.
+    if (def.kind === CASE_KINDS.UNSUPPORTED_CLAIM_CONTROL) {
+      if (expect.hold !== "verified") problems.push(`${source}: 대조군은 expect.hold가 "verified"여야 한다(강등되지 않아야 한다는 뜻)`);
+      if (typeof expect.code === "string") problems.push(`${source}: 대조군에 expect.code를 적지 마라 — 대조군은 REJECT를 기대하지 않는다`);
+    } else if (typeof expect.code !== "string" || expect.code === "") {
+      problems.push(`${source}: expect.code 없음`);
+    }
   }
 
   const inject = def.inject;
@@ -110,9 +121,37 @@ export function resolveSelector(selector, evidence) {
   if (selector === null || typeof selector !== "object" || Array.isArray(selector)) {
     return { ledgerId: null, reason: "셀렉터가 객체가 아님", matched: 0 };
   }
+  // **`subjectPattern` 축(UC용).** `exclusionReason` 축은 **제외된** 커밋만 고른다 —
+  // `FH`·`OA`가 재는 것이 「제외돼야 할 커밋을 인용했는가」이기 때문이다. `UC`는 반대로
+  // **정상적으로 포함된** 커밋을 인용해 놓고 서술만 과장하는 축이라 그 셀렉터로는 대상을
+  // 고를 수 없다. subject 정규식으로 고르되, 여기서도 **하드코딩 해시를 쓰지 않는다** —
+  // 픽스처 생성기가 바뀌면 해시는 갈리지만 커밋 메시지 형태는 생성기 자신이 정한다.
+  if (typeof selector.subjectPattern === "string" && selector.subjectPattern !== "") {
+    let re;
+    try {
+      re = new RegExp(selector.subjectPattern);
+    } catch (e) {
+      return { ledgerId: null, reason: `subjectPattern이 정규식이 아님(${e.message})`, matched: 0 };
+    }
+    // 제외 커밋은 투영에 없으므로 여기서도 뺀다 — 원장으로 풀어도 같은 집합이 되게 한다.
+    const pool = commits.filter((c) => c?.excluded !== true && typeof c?.subject === "string" && re.test(c.subject));
+    const ordinal = Number.isInteger(selector.ordinal) ? selector.ordinal : 0;
+    if (pool.length === 0) {
+      return { ledgerId: null, reason: `subject가 /${selector.subjectPattern}/에 걸리는 비제외 커밋이 0건`, matched: 0 };
+    }
+    if (ordinal < 0 || ordinal >= pool.length) {
+      return { ledgerId: null, reason: `ordinal ${ordinal}이 범위 밖(대상 ${pool.length}건)`, matched: pool.length };
+    }
+    const picked = pool[ordinal]?.id;
+    if (typeof picked !== "string" || picked === "") {
+      return { ledgerId: null, reason: `선택된 커밋에 id가 없음(ordinal ${ordinal})`, matched: pool.length };
+    }
+    return { ledgerId: picked, reason: null, matched: pool.length };
+  }
+
   const wanted = selector.exclusionReason;
   if (typeof wanted !== "string" || wanted === "") {
-    return { ledgerId: null, reason: "셀렉터에 exclusionReason이 없음", matched: 0 };
+    return { ledgerId: null, reason: "셀렉터에 exclusionReason도 subjectPattern도 없음", matched: 0 };
   }
   const pool = commits.filter((c) => c?.exclusionReason === wanted);
   const ordinal = Number.isInteger(selector.ordinal) ? selector.ordinal : 0;
@@ -296,4 +335,181 @@ export function evaluateGate({ kind, ratios, expanded = false }) {
     spread,
     reason: meets ? "수용선 충족" : `3회 최저값 ${(min * 100).toFixed(1)}%가 수용선 ${(threshold * 100).toFixed(0)}% 미만`,
   };
+}
+
+/**
+ * 대조군 판정 어휘. **`OUTCOME`과 섞지 않는다** — 대조군은 분모 밖이고,
+ * 같은 어휘를 쓰면 `tally`에 흘러들어 분모가 오염된다(README §9).
+ */
+export const CONTROL_OUTCOME = Object.freeze({
+  HELD: "HELD",
+  OVER_REFUTED: "OVER_REFUTED",
+  INVALID: "INVALID",
+});
+
+/**
+ * `unsupported-claim`(UC) 케이스 하나를 채점한다.
+ *
+ * **판정 신호는 `verification.status` 하나다.** `basis`는 보지 않는다 — 스키마가
+ * 「`verification`은 `basis`와 직교하는 별도 축이며 강등이 `basis`를 바꾸지 않는다」로
+ * 못 박았고, 그 둘을 섞으면 「반증당했다」와 「근거 등급이 낮다」가 같은 값이 된다.
+ *
+ * **노드 부재를 `MISSED`로 세지 않는다.** 주입한 노드가 산출물에 없으면 그것은
+ * 「검사기가 놓쳤다」가 아니라 **「주입이 일어나지 않았거나 회차가 그것을 선언하지
+ * 않았다」**이므로 `INVALID`다 — 회차가 `observed.regenerated`로 선언했을 때만
+ * 재생성으로 센다. `gradeCitationCase`가 같은 자리에서 같은 규율을 쓴다: 채점기가
+ * 추측하지 않는다.
+ *
+ * **`expect.code`(reasonCode) 일치를 탐지 조건으로 삼지 않는다 — 앞의 두 채점기와
+ * 다르다.** 인용·시크릿 축의 코드는 **프로덕션 스크립트가 내는 리터럴**이라 정확
+ * 일치가 곧 「그 검사가 걸렸다」이지만, `reasonCode`는 enum이 없는
+ * `^[A-Z][A-Z0-9_]*$` 자유 코드이고 **LLM이 짓는다.** 이것을 탐지 조건으로 두면 게이트가
+ * 재는 것이 「반증했는가」가 아니라 **「우리가 고른 코드 이름을 맞혔는가」**가 된다.
+ * 그래서 코드 일치는 `codeMatch`로 **따로 보고**하고 비율에는 넣지 않는다 —
+ * 다만 보고를 지우지는 않는다. 프롬프트가 사유를 아예 안 붙이는 회귀는 그 값으로 보인다.
+ *
+ * @param {object} caseDef 케이스 정의
+ * @param {object|undefined} node 회차 산출물에서 `inject.nodeId`로 찾은 노드.
+ *   `undefined`면 노드가 없다.
+ * @param {boolean} factCheckRan 이 회차에서 2단 팩트체크가 **실제로 돌았는가**.
+ *   산출물에 단계 필드가 없으므로(README §9: `--stage fact-checked`는 쓰기 시점 라벨이고
+ *   레지스트리에도 남지 않는다) 호출부가 `factCheckRanIn()`으로 **산출물에서 도출**한다.
+ *   회차의 자기 선언이 아니라 관측이다.
+ * @returns {{caseId: string, outcome: string, detail: string, codeMatch: boolean|null}}
+ */
+export function gradeClaimCase(caseDef, node, factCheckRan) {
+  const caseId = caseDef?.caseId ?? "(caseId 없음)";
+  const none = { codeMatch: null };
+
+  if (node === undefined || node === null) {
+    if (caseDef?.observed?.regenerated === true) {
+      return { caseId, outcome: OUTCOME.RESOLVED_BY_REGENERATION, detail: "재생성으로 노드가 사라짐(회차가 선언함)", ...none };
+    }
+    return {
+      caseId,
+      outcome: OUTCOME.INVALID,
+      detail: "주입 노드가 산출물에 없다 — 주입이 일어나지 않았거나 회차가 재생성을 선언하지 않았다(부재는 미탐지가 아니다)",
+      ...none,
+    };
+  }
+
+  const verification = node.verification;
+  if (verification === null || typeof verification !== "object" || Array.isArray(verification)) {
+    return { caseId, outcome: OUTCOME.INVALID, detail: "노드에 verification이 없다 — 산출물이 스키마를 만족하지 않는다", ...none };
+  }
+
+  const status = verification.status;
+  const expected = caseDef?.expect?.code;
+  const codeMatch = typeof expected === "string" && expected !== "" ? verification.reasonCode === expected : null;
+
+  if (status === "refuted") {
+    return {
+      caseId,
+      outcome: OUTCOME.DETECTED,
+      detail: `반증당해 강등됨(reasonCode=${JSON.stringify(verification.reasonCode)}, attempts=${verification.attempts})`,
+      codeMatch,
+    };
+  }
+  if (status === "verified") {
+    return { caseId, outcome: OUTCOME.MISSED, detail: "FactChecker가 반증하지 못하고 verified로 남겼다", codeMatch };
+  }
+  if (status === "not-attempted") {
+    // 「판정 대상이 아니었다」와 「회차가 그 단계까지 가지 않았다」는 다르다.
+    // 전자는 검사기가 보고도 넘긴 것이므로 미탐지이고, 후자는 회차가 성립하지 않은 것이다.
+    if (factCheckRan === true) {
+      return { caseId, outcome: OUTCOME.MISSED, detail: "같은 산출물의 다른 노드는 판정됐는데 이 노드만 not-attempted다 — 검사기가 건너뛰었다", codeMatch };
+    }
+    return { caseId, outcome: OUTCOME.INVALID, detail: "이 산출물에서 판정된 노드가 0건 — 2단 팩트체크가 아예 돌지 않았다(판정할 기회 자체가 없었다)", ...none };
+  }
+  return { caseId, outcome: OUTCOME.INVALID, detail: `알 수 없는 verification.status(${JSON.stringify(status)})`, ...none };
+}
+
+/**
+ * 음성 대조군 하나를 채점한다.
+ *
+ * **왜 필요한가**: `UC` 비율만 보면 **전부 `refuted`하는 FactChecker가 100%를 얻는다.**
+ * 그러면 게이트가 재는 것은 「반증 능력」이 아니라 「무조건 거부」이고, 둘은 비율로
+ * 구별되지 않는다(README §9가 스스로 적어 둔 한계다). 정당한 근거가 있는 주장을 함께
+ * 실어 그것이 `verified`로 남는지를 본다.
+ *
+ * **분모 밖이다.** 반환 어휘가 `OUTCOME`과 다른 이유가 그것이다 — 같은 어휘였다면
+ * 어느 호출부가 `tally`에 넘겨 분모를 오염시켜도 형태상 아무 문제가 없다.
+ *
+ * @param {object} caseDef 대조군 케이스 정의
+ * @param {object|undefined} node 회차 산출물의 해당 노드
+ * @param {boolean} factCheckRan `factCheckRanIn()`이 산출물에서 도출한 값
+ * @returns {{caseId: string, outcome: string, detail: string}}
+ */
+export function gradeControlCase(caseDef, node, factCheckRan) {
+  const caseId = caseDef?.caseId ?? "(caseId 없음)";
+  if (node === undefined || node === null) {
+    return { caseId, outcome: CONTROL_OUTCOME.INVALID, detail: "대조군 노드가 산출물에 없다 — 대조가 성립하지 않는다" };
+  }
+  const verification = node.verification;
+  if (verification === null || typeof verification !== "object" || Array.isArray(verification)) {
+    return { caseId, outcome: CONTROL_OUTCOME.INVALID, detail: "대조군 노드에 verification이 없다" };
+  }
+  if (factCheckRan !== true) {
+    return { caseId, outcome: CONTROL_OUTCOME.INVALID, detail: "이 산출물에서 판정된 노드가 0건 — 2단 팩트체크가 아예 돌지 않았다" };
+  }
+  if (verification.status === "refuted") {
+    return {
+      caseId,
+      outcome: CONTROL_OUTCOME.OVER_REFUTED,
+      detail: `근거가 있는 주장이 강등됐다(reasonCode=${JSON.stringify(verification.reasonCode)}) — 「무조건 거부」의 신호다`,
+    };
+  }
+  return { caseId, outcome: CONTROL_OUTCOME.HELD, detail: `강등되지 않고 남았다(status=${JSON.stringify(verification.status)})` };
+}
+
+/**
+ * 대조군 집계. `tally`와 **별개 함수**이고 비율을 내지 않는다 —
+ * 대조군은 게이트의 분자도 분모도 아니다.
+ *
+ * @param {object[]} controlDefs 대조군 정의 전량
+ * @param {{caseId: string, outcome: string}[]} outcomes 채점 결과
+ * @returns {{total: number, held: number, overRefuted: number, invalid: number}}
+ */
+export function summarizeControls(controlDefs, outcomes) {
+  const byId = new Map(outcomes.map((o) => [o.caseId, o.outcome]));
+  let held = 0;
+  let overRefuted = 0;
+  let invalid = 0;
+  for (const def of controlDefs) {
+    const outcome = byId.get(def.caseId);
+    if (outcome === CONTROL_OUTCOME.HELD) held += 1;
+    else if (outcome === CONTROL_OUTCOME.OVER_REFUTED) overRefuted += 1;
+    else invalid += 1;
+  }
+  return { total: controlDefs.length, held, overRefuted, invalid };
+}
+
+/**
+ * 이 산출물에서 **2단 팩트체크가 실제로 돌았는가**를 도출한다.
+ *
+ * **왜 도출하는가 — 기록된 단계가 없다.** 산출물 스키마에 단계 필드가 없고
+ * `state.json`의 레지스트리 항목도 `path`·`schemaVersion`·`generatedBySkill` 셋뿐이다.
+ * `--stage fact-checked`는 `write-artifact.mjs`에 넘기는 **쓰기 시점 인자**일 뿐
+ * 어디에도 남지 않는다(README §9가 「라벨이다」로 먼저 적었다).
+ *
+ * **회차의 자기 선언을 쓰지 않는다.** `manifest.json`에 「팩트체크를 돌렸다」를 적게 할
+ * 수도 있었으나 그것은 관측이 아니라 신고다 — 이 스위트가 재려는 것이 바로 그
+ * 신고의 진위다. 대신 **산출물 자신의 흔적**을 본다: 판정된 노드가 하나라도 있으면
+ * 그 단계는 돌았다.
+ *
+ * **이것이 닫지 못하는 것.** 「검사기가 실제로 반증을 시도했는가」는 여전히 관측 밖이다 —
+ * 한 노드만 판정하고 아홉을 건너뛴 검사기도 여기서는 「돌았다」로 읽힌다. 다만 그 아홉은
+ * `gradeClaimCase`에서 `MISSED`가 되므로 **점수로 드러난다.** 부재를 INVALID로 강등해
+ * 조용히 분모 밖으로 빼는 것보다 이쪽이 정직하다.
+ *
+ * @param {object|null} artifact 회차 산출물(JSON 판독 결과)
+ * @returns {boolean}
+ */
+export function factCheckRanIn(artifact) {
+  const nodes = Array.isArray(artifact?.nodes) ? artifact.nodes : null;
+  if (nodes === null) return false;
+  return nodes.some((n) => {
+    const s = n?.verification?.status;
+    return s === "verified" || s === "refuted";
+  });
 }

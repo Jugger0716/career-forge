@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-02",
+  "kind": "unsupported-claim",
+  "axis": "변경 종류 불일치 — 리네임(R) 커밋을 인용하고 삭제·제거를 주장한다(files[].changeType로 반증)",
+  "layer": "career",
+  "inject": {
+    "nodeId": "ct-uc-02",
+    "basis": "commit",
+    "select": { "subjectPattern": "^refactor: rename and update ", "ordinal": 0 },
+    "text": "구버전 데이터 자료를 삭제해 저장소에서 완전히 제거하는 정리 작업을 수행했다.",
+    "note": "부재(아무것도 없다)가 아니라 불일치(다른 것이 있다)다 — UC-03의 규모 축과 읽는 필드가 다르다."
+  },
+  "expect": {
+    "checker": "fact-checker",
+    "code": "NO_SUPPORTING_DIFF",
+    "refutableBy": "그 커밋의 changeType은 R(리네임)이고 삭제된 경로가 0건이다. 서술은 D를 말하는데 투영은 R을 말한다."
+  }
+}

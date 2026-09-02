@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-09",
+  "kind": "unsupported-claim",
+  "axis": "노드 내부 모순 — 같은 노드의 selfAssessment와 text가 서로 반대를 말한다(외부 입력 없이 대조 가능)",
+  "layer": "gap-report",
+  "inject": {
+    "nodeId": "ct-uc-09",
+    "basis": "inference",
+    "selfAssessment": "이 주제는 실무에서 여러 번 다뤄 봤고 자신 있는 편이다.",
+    "text": "사용자가 이 영역을 전혀 경험한 적이 없다고 답했으므로, 기초부터 학습해야 하는 최우선 갭이다.",
+    "note": "초판 설계는 '자가진단 원문과 대조'였으나 gap-fact-checker.md의 「입력」 세 항목에 자가진단 원문이 없어 원리적으로 대조 불가였다(실측). 대조 대상을 노드 안으로 옮겨 살렸다."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "code": "SELF_ASSESSMENT_CONTRADICTION",
+    "refutableBy": "같은 노드의 두 필드가 정반대다. 외부 입력 없이 노드 안에서 대조된다."
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-07",
+  "kind": "unsupported-claim",
+  "axis": "파일명의 존재를 지식의 근거로 오인 — 경로가 있다는 사실만으로 설계 역량을 주장(knowledge-map)",
+  "layer": "knowledge-map",
+  "inject": {
+    "nodeId": "ct-uc-07",
+    "basis": "inference",
+    "select": { "subjectPattern": "^feat: side branch \\d+ work$", "ordinal": 0 },
+    "text": "side 브랜치 작업 이력이 있으므로 트렁크 기반 개발과 브랜치 전략을 설계·운영할 수 있다.",
+    "note": "인용 대상이 투영에 실재하는 소유자 커밋이라 기계 축을 통과한다(초판 설계는 dependabot 커밋을 인용해 투영에 아예 없었다 — 실측으로 폐기)."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "code": "UNSUPPORTED_CLAIM",
+    "refutableBy": "그 커밋은 side/side-N.txt 파일 하나를 추가할 뿐이다. 브랜치 전략을 수립·운영한 흔적(정책 문서·머지 규칙·리뷰 설정)이 투영에 없다."
+  }
+}

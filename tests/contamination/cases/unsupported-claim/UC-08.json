@@ -1,0 +1,18 @@
+{
+  "caseId": "UC-08",
+  "kind": "unsupported-claim",
+  "axis": "상위 계층과의 내용 불일치 — parentRefs는 유효한데 상위 노드가 말하지 않은 것을 '상위에서 확인됨'으로 주장",
+  "layer": "knowledge-map",
+  "inject": {
+    "nodeId": "ct-uc-08",
+    "basis": "inference",
+    "parentHint": "ct-uc-01",
+    "text": "상위 경력 항목에서 확인된 대로, 데이터 파이프라인 성능 튜닝을 반복 수행해 처리량을 개선한 경험이 있다.",
+    "note": "parentRefs 자체는 실재하는 상위 노드를 가리키므로 상위 계층 참조 검사(기계 축)를 통과한다. 무너지는 것은 그 상위 노드가 성능 튜닝을 전혀 말하지 않는다는 점이다 — (iii)이 career 산출물을 함께 받는 이유가 이것이다."
+  },
+  "expect": {
+    "checker": "gap-fact-checker",
+    "code": "PARENT_MISMATCH",
+    "refutableBy": "parentRefs가 가리키는 career 노드의 text에 성능·처리량 서술이 없다. 참조는 유효하나 내용이 어긋난다."
+  }
+}
