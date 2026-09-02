@@ -440,11 +440,15 @@ career 하나와 세 계층 전부로 본다). `(AC-54)`는 ④를 **한 칸만*
 1. **`locked`는 생성 출력이 담으면 안 되고 `origin`은 반대로 담아야 한다.** 기입 주체
    규약이 두 필드에 서로 다른 방향으로 걸려 있다(`LOCKED_SET_BY_TEMPLATE` /
    `ORIGIN_SET_BY_TEMPLATE`).
-2. **세 계층의 `coverage` 형태가 갈려 있다.** `career`는 원장의 `isShallowClone`을
-   허용하는데 `knowledge-map`·`gap-report`는 `additionalProperties` 위반으로 거부한다.
-   스키마 동형성 가드 `(SI-1)~(SI-4)`가 `externalUrl` 조건절만 보고 `coverage`는 보지
-   않는다. **이 갈림은 슬라이스 A 스키마의 문제라 고치지 않고 기록만 한다** — 빌더는
-   계층 스키마에서 허용 키를 읽어 맞춘다(하드코딩하면 드리프트를 한 번 더 복제한다).
+2. ~~**세 계층의 `coverage` 형태가 갈려 있다.**~~ — **이 서술은 거짓이었다(2026-09-02 정정).**
+   네 계층의 `$defs.coverage`를 대조하면 속성 집합(`analyzed`·`total`·`traversed`·`period`·
+   `exclusions`·`samplingMethod`)과 `additionalProperties: false`가 **완전히 동일하고,
+   `properties.coverage`가 넷 다 `#/$defs/coverage`를 가리킨다.** 넷 다 `isShallowClone`을
+   거부한다 — 그 필드는 `evidence.schema.json`에만 있다. **「`career`만 허용한다」는 갈림은
+   존재하지 않는다.** `(SI-1)~(SI-4)`가 `coverage`를 안 보는 것은 사실이지만 그것이 감추고
+   있던 갈림도 없다. 빌더가 계층 스키마에서 허용 키를 읽어 맞추는 구현은 그대로 옳고,
+   **바로 그 구현이 이 오류를 두 회차 동안 무해하게 덮고 있었다** — 동작이 옳아서 아무도
+   전제를 다시 재지 않았다.
 3. 세 계층이 `parentRefs`로 물려 있어(`minItems: 1`) **셋을 함께 실어야** `layerRefUnverifiable`이 0이 된다.
 
 ### 변이 5종 관측

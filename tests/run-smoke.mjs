@@ -5249,11 +5249,16 @@ function buildHonestRenderRoot() {
     const file = (commit?.files ?? [])[0];
     if (commit === undefined || file === undefined) { HONEST_ROOT_CACHE = null; return null; }
 
-    // **`coverage`를 계층 스키마에 맞춰 좁힌다.** 세 계층의 `$defs.coverage`가 서로
-    // 갈려 있다 — `career`는 원장의 `isShallowClone`을 허용하지만 `knowledge-map`·
-    // `gap-report`는 `additionalProperties` 위반으로 거부한다(실측). 계층별 허용 키를
-    // 스키마에서 읽어 맞춘다 — 여기서 키를 하드코딩하면 그 드리프트를 픽스처가 한 번 더
-    // 복제하게 된다. (이 갈림 자체는 슬라이스 A 스키마의 문제이며 여기서 고치지 않는다.)
+    // **`coverage`를 계층 스키마에 맞춰 좁힌다.** 원장의 `coverage`에는 산출물 계층이
+    // 받지 않는 키가 있다 — `isShallowClone`이 그것이고, 네 계층의 `$defs.coverage`는
+    // **전부 `additionalProperties: false`이며 그 키를 갖지 않는다.**
+    //
+    // **초판 주석은 「세 계층의 coverage가 서로 갈려 있다 — career만 isShallowClone을
+    // 허용한다」고 적었고 그것은 거짓이었다(2026-09-02 정정).** 네 스키마의 속성 집합과
+    // `$ref` 배선이 완전히 동일하다. 그 거짓이 두 회차를 버틴 이유가 아래 구현이다 —
+    // 스키마에서 허용 키를 읽어 맞추므로 **결과가 옳았고, 옳은 결과가 틀린 전제를 덮었다.**
+    // 그래서 하드코딩하지 않는다는 결론 자체는 그대로 유효하다: 키를 여기 박으면
+    // 스키마가 바뀔 때 픽스처가 조용히 갈린다.
     const coverageFor = (layer) => {
       const { json: sch } = readRepoJsonSafe(`schemas/${layer}.schema.json`);
       const allowed = sch?.$defs?.coverage?.properties;
