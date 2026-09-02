@@ -412,7 +412,7 @@ career 하나와 세 계층 전부로 본다). `(AC-54)`는 ④를 **한 칸만*
 
 ### 닫은 격차는 실측된 것이다
 
-추적되는 회차 산출물 `tests/contamination/runs/run-machine-01`에 대해:
+추적되는 회차 산출물 `tests/contamination/runs/machine/run-01`에 대해:
 
 | | 결과 |
 |---|---|

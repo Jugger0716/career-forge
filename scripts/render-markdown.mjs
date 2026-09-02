@@ -303,7 +303,7 @@ export function checkRenderInput(layer, instance) {
  * 판정도 없다.
  *
  * **이 게이트가 닫는 격차는 실측된 것이다.** 추적되는 회차 산출물
- * `tests/contamination/runs/run-machine-01`에 대해 `verify-evidence`는 exit 1과
+ * `tests/contamination/runs/machine/run-01`에 대해 `verify-evidence`는 exit 1과
  * 인용 위반 14건(career 단독)을 냈는데, 같은 `career.json`을 렌더하면 exit 0으로
  * 111줄짜리 사용자 문서가 나왔다. **검사기가 거부한 파일이 사용자 문서가 됐다.**
  *

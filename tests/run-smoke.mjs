@@ -534,7 +534,11 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   golden: 11,
   // 14번 (b)의 (CX-1)~(CX-8) 오염 스위트 실채점. 신설이며 이력의 시작점이다 —
   // 이 모드는 `runCommonSections()`를 부르지 않고 자기 절 하나만 돈다.
-  contamination: 8,
+  // 이력: 회차 버킷 분리(`runs/machine` · `runs/llm`)의 (CX-9)(금지: runs/ 직하에 회차
+  //       없음)·(CX-10)(허용: 채점 회차가 전부 버킷 아래)·(CX-11)(검출력: 판정기가
+  //       합성 위반에 발화) 8 → 11. (CX-11)은 실측이 요구했다 — (CX-9)만 두면 그 필터를
+  //       전면 허용으로 완화해도 깨끗한 트리에서 아무것도 깨지지 않았다.
+  contamination: 11,
 });
 
 function report(ok, label) {
@@ -5322,10 +5326,10 @@ function runRenderGateSmoke() {
   console.log("[렌더 입력 게이트] 부적합한 산출물은 사용자 표면에 닿지 않는다(라운드 2 처방 1)");
 
   // **오염 코퍼스에서 정직한 루트로 갈아탔다(라운드 2 처방 8).** 렌더가 인용 재검증을
-  // 다시 돌리게 되면서 `run-machine-01`은 이제 **정당하게 거부된다** — 그것이 이 게이트가
+  // 다시 돌리게 되면서 `runs/machine/run-01`은 이제 **정당하게 거부된다** — 그것이 이 게이트가
   // 닫으려는 상태다. 허용 방향을 관측하려면 실제 레포로 뒷받침되는 산출물이 있어야 한다.
   const HONEST = buildHonestRenderRoot();
-  const R = HONEST?.root ?? path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+  const R = HONEST?.root ?? path.join(REPO_ROOT, "tests", "contamination", "runs", "machine", "run-01", ".devcareer");
   const REPO_FOR_RENDER = HONEST?.repo ?? REPO_ROOT;
   const realPath = path.join(R, "career.json");
   let real = null;
@@ -5431,12 +5435,12 @@ function runRenderGateSmoke() {
   //      실행의 함수가 아니라 **피검 산출물의 함수**라, 위조자가 알아야 할 값이 위조 대상
   //      파일 안에 이미 인쇄돼 있기 때문이다. 그래서 「대조」를 **「재계산」**으로 읽는다.
   //
-  //      **닫는 격차는 실측된 것이다**: 추적되는 `run-machine-01`에 대해 verify-evidence는
+  //      **닫는 격차는 실측된 것이다**: 추적되는 `runs/machine/run-01`에 대해 verify-evidence는
   //      exit 1과 인용 위반을 냈는데 같은 `career.json`이 exit 0으로 111줄 사용자 문서가 됐다.
 
   // ---- (RV-6) 금지 방향: 검사기가 거부한 산출물은 렌더되지 않는다 ----
   {
-    const CR = path.join(REPO_ROOT, "tests", "contamination", "runs", "run-machine-01", ".devcareer");
+    const CR = path.join(REPO_ROOT, "tests", "contamination", "runs", "machine", "run-01", ".devcareer");
     let crEvidence = null;
     try { crEvidence = JSON.parse(fs.readFileSync(path.join(CR, "evidence.json"), "utf8")); } catch { /* 아래에서 전제 FAIL */ }
     const fx = crEvidence === null ? null : findFixtureRepoFor(crEvidence.sourceRepoHead);
@@ -10940,9 +10944,34 @@ function runContaminationSuite() {
     cases.set(kind, defs);
   }
 
+  // **회차는 종류별 버킷 아래에만 산다(2026-09-02, 사용자 결정).** 이 모드는
+  // `runs/machine/` 하나만 읽는다 — 초판은 `runs/` 직하의 **모든** 디렉터리를 기계 회차로
+  // 채점했고, 그 상태로 사람이 LLM 회차를 남기면 (CX-1)(잔여물 결손)·(CX-3)(위반 20건)·
+  // (CX-4)~(CX-6)(주입 0%)·(CX-7)(바이트 동일)이 **한꺼번에** 빨개진다.
+  //
+  // **(CX-7)이 이 분리의 진짜 이유다.** 그 단언은 회차 간 산출물 해시 집합 크기가 1일
+  // 것을 요구하는데, LLM 산출물은 회차마다 갈린다 — AC-8이 `UC`에 「3회 **최저값**」과
+  // 「회차 편차 경고」를 둔 이유가 그것이다. 즉 (CX-7)과 AC-8의 LLM 조항은 **같은 회차
+  // 집합 위에서 동시에 참일 수 없다.** 오늘까지 녹색이었던 것은 사람 회차가 아직 없었기
+  // 때문이지 배선이 옳아서가 아니다.
+  const MACHINE_BUCKET = "machine";
+  const KNOWN_BUCKETS = Object.freeze([MACHINE_BUCKET, "llm"]);
+  const machineDir = path.join(runsDir, MACHINE_BUCKET);
+  // 판정을 함수로 뽑는다 — (CX-9)가 실제 목록에, (CX-11)이 합성 목록에 같은 함수를 건다.
+  // 그러지 않으면 이 필터를 통째로 지워도 깨끗한 트리에서는 아무것도 깨지지 않는다(실측).
+  const straysOf = (entries) => entries.filter((n) => !KNOWN_BUCKETS.includes(n));
+
+  // `runs/` 직하에 무엇이 있는가는 (CX-9)가 본다. 여기서는 판정에 쓸 값만 모은다 —
+  // 판독 실패를 빈 배열로 강등하지 않는다(그러면 (CX-1)이 회차 0건으로 떨어진다).
+  let bucketEntries = [];
+  let bucketError = null;
+  try {
+    bucketEntries = fs.readdirSync(runsDir).filter((n) => fs.statSync(path.join(runsDir, n)).isDirectory()).sort();
+  } catch (e) { bucketError = `runs/ 판독 실패(${e.code ?? e.message})`; }
+
   let runIds = [];
   try {
-    runIds = fs.readdirSync(runsDir).filter((n) => fs.statSync(path.join(runsDir, n)).isDirectory()).sort();
+    runIds = fs.readdirSync(machineDir).filter((n) => fs.statSync(path.join(machineDir, n)).isDirectory()).sort();
   } catch { /* (CX-1)이 잡는다 */ }
 
   // 회차마다 프로덕션 CLI를 실제로 돌린다. 판독 실패를 빈 값으로 강등하지 않는다 —
@@ -10950,7 +10979,7 @@ function runContaminationSuite() {
   const perRun = [];
   const cliFailures = [];
   for (const runId of runIds) {
-    const root = path.join(runsDir, runId, ".devcareer");
+    const root = path.join(machineDir, runId, ".devcareer");
     const evPath = path.join(root, "evidence.json");
     let evidence = null;
     try { evidence = JSON.parse(fs.readFileSync(evPath, "utf8")); }
@@ -10983,7 +11012,7 @@ function runContaminationSuite() {
     // 시크릿 축은 케이스마다 산출물 파일 하나다 — CLI 한 번의 결과가 그 케이스의 판정이다.
     const scans = new Map();
     for (const c of cases.get(CASE_KINDS.SECRET_BYPASS)) {
-      const artifact = path.join(runsDir, runId, "secret", c.caseId, ".devcareer", `${c.layer}.json`);
+      const artifact = path.join(machineDir, runId, "secret", c.caseId, ".devcareer", `${c.layer}.json`);
       if (!fs.existsSync(artifact)) { scans.set(c.caseId, null); continue; }
       const r = spawnSync("node", [path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "--secret-scan", artifact], { cwd: REPO_ROOT, encoding: "utf8" });
       // 코드는 CLI 출력에서 뽑는다 — 이 파일이 코드를 소유하지 않는다((CT-3)와 같은 규율).
@@ -11054,7 +11083,7 @@ function runContaminationSuite() {
     const hashOf = (o) => crypto.createHash("sha256").update(JSON.stringify(o)).digest("hex");
     const artifactHashes = perRun.map((r) =>
       ["career", "knowledge-map", "gap-report"].map((l) => {
-        try { return hashOf(JSON.parse(fs.readFileSync(path.join(runsDir, r.runId, ".devcareer", `${l}.json`), "utf8"))); }
+        try { return hashOf(JSON.parse(fs.readFileSync(path.join(machineDir, r.runId, ".devcareer", `${l}.json`), "utf8"))); }
         catch { return "판독실패"; }
       }).join("/")
     );
@@ -11088,6 +11117,59 @@ function runContaminationSuite() {
     const ok = shaped && results.runs.length === perRun.length && perRun.length > 0;
     if (!ok) console.log(`    실제: ${JSON.stringify(results.byKind)}`);
     report(ok, "(CX-8) 결과 기록이 종·회차마다 분모·탐지·미탐지·무효 네 수를 담는다(비율만 적으면 사후 재계산이 불가능하다)");
+  }
+
+  // ---- (CX-9) 금지 방향: `runs/` 직하에 회차가 놓이지 않는가 ----
+  //      **이 단언이 막는 것은 사람의 손이다.** 사람이 LLM 회차 셋을 남길 때 `runs/`
+  //      직하에 놓으면, 버킷 배선을 해 둔 뒤에도 그 회차는 어느 모드에도 안 잡히고
+  //      **조용히 채점되지 않는다** — 부재가 0%가 아니라 「없는 일」이 되는 형태다.
+  //      기계 모드가 그것을 집어 삼키던 초판보다는 낫지만, 조용한 쪽이 더 나쁘다.
+  //
+  //      **버킷 이름을 여기 리터럴로 고정한다.** 접두사 규약(`run-llm-*`)으로 가르지
+  //      않은 것은 사용자 결정이며, 경계가 이름이 아니라 **위치**에 있어야 사람이
+  //      규약을 몰라도 틀릴 수 없기 때문이다.
+  {
+    const strays = straysOf(bucketEntries);
+    const ok = bucketError === null && strays.length === 0;
+    if (!ok) {
+      console.log(`    실제: ${bucketError ?? ""} 버킷 밖 항목 ${JSON.stringify(strays)}`);
+      console.log(`    처방: 회차는 ${JSON.stringify(KNOWN_BUCKETS)} 중 하나 아래에만 둔다. 기계 회차는 runs/machine/, 사람이 스킬을 돌려 만든 LLM 회차는 runs/llm/이다.`);
+    }
+    report(ok, `(CX-9) 금지 방향: runs/ 직하에는 알려진 버킷(${KNOWN_BUCKETS.join("·")})만 있고 회차 디렉터리가 직접 놓이지 않는다(어느 모드에도 안 잡히는 회차를 만들지 않는다)`);
+  }
+
+  // ---- (CX-10) 허용 방향: 버킷 아래의 회차를 실제로 집어 오는가 ----
+  //      금지 방향만 두면 **`machineDir` 경로를 아무 데나 가리키게 바꿔도 (CX-9)는
+  //      초록이다.** 그리고 (CX-1)은 회차 0건에서 FAIL하지만 「왜 0건인가」는 말하지
+  //      않는다 — 버킷을 잘못 짚었는지 회차를 안 남겼는지 구별되지 않는다.
+  //      이 단언이 그 구별을 만든다: 채점에 실제로 쓰인 회차가 전부 `runs/machine/`
+  //      아래에서 왔는지를 경로로 되짚는다.
+  {
+    const resolved = runIds.map((id) => path.join(machineDir, id));
+    const allUnderBucket = resolved.every((p) => fs.existsSync(path.join(p, ".devcareer")));
+    const ok = runIds.length >= 3 && allUnderBucket && bucketEntries.includes(MACHINE_BUCKET);
+    if (!ok) {
+      console.log(`    실제: 버킷 목록 ${JSON.stringify(bucketEntries)} / machine 회차 ${JSON.stringify(runIds)} / 잔여물 실재 ${allUnderBucket}`);
+    }
+    report(ok, `(CX-10) 허용 방향: 채점에 쓰인 회차 ${runIds.length}건이 전부 runs/${MACHINE_BUCKET}/ 아래에 실재한다(버킷을 잘못 짚어 0건이 된 것과 구별한다)`);
+  }
+
+  // ---- (CX-11) 검출력: 버킷 판정기가 실제로 발화하는가 ----
+  //      **이 단언은 실측이 요구해서 생겼다.** (CX-9)만 두고 격리 사본에서 그 필터를
+  //      `[]`로 완화해 봤더니 **12 PASS / 0 FAIL — 아무것도 깨지지 않았다.** 깨끗한
+  //      트리에서는 참값이 0건이라 「판정기를 지운 0건」과 「위반이 없어서 0건」이
+  //      구별되지 않는다. (SA-3)이 핀 대조기에 대해 세운 것과 같은 성격의 단언이다.
+  //
+  //      **닫지 못하는 것을 여기 적는다.** 이 단언은 `straysOf` **자체**가 죽으면 잡지만,
+  //      (CX-9)의 호출부만 `[]`로 바꾸는 변이는 여전히 못 잡는다 — 참값이 0인 트리에서
+  //      그 둘은 관측상 같다. 그 자리를 지키는 것은 단언 총량 가드뿐이며(절을 지우면
+  //      개수가 어긋난다), 그것이 이 축의 현재 상한이다.
+  {
+    const clean = straysOf([MACHINE_BUCKET, "llm"]);
+    const dirty = straysOf([MACHINE_BUCKET, "run-llm-01", "llm", "run-99"]);
+    const ok = clean.length === 0 && dirty.length === 2 && dirty.includes("run-llm-01") && dirty.includes("run-99");
+    if (!ok) console.log(`    실제: 합성 정상 입력 → ${JSON.stringify(clean)} / 합성 위반 입력 → ${JSON.stringify(dirty)}`);
+    report(ok, "(CX-11) 검출력: 버킷 판정기가 합성 위반 2건을 정확히 2건으로 집어내고 정상 입력에서는 0건을 낸다(판정기를 지운 0건과 구별한다)");
   }
 }
 
