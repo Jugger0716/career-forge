@@ -7,7 +7,7 @@
 | Slice | Goal | In scope | AC ids | Depends on | Command |
 |---|---|---|---|---|---|
 | `slice-a-deterministic-foundation` | 결정적 기반 — 명명·라이선스 정본, JSON Schema 세트, validate-plugin.mjs(Layer 1 하네스), 결정적 픽스처 생성기, collect-git-facts.mjs(L0 수집기), verify-evidence.mjs(인용 무결성). LLM이 전혀 개입하지 않는 순수 스크립트·스키마 계층이며 단독으로 기계 검증 가능하다. | 구현 단계 1~6 · `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `package.json`, `LICENSE`, `README.md`, `.gitattributes`, … 외 23개 | AC-1, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-11, AC-14, AC-15, AC-17, AC-18, AC-19, AC-21 | — | `/harness "slice-a-deterministic-foundation" --output-dir docs/devcareer-prep-plugin` |
-| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 표에 적힌 건만 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/devcareer-prep-plugin` |
+| `slice-b-p0-skill-layer` | P0 스킬 계층 — /devcareer-prep:career-from-git(범위 확정 대화·CareerWriter·2단 FactChecker·편집 병합), /devcareer-prep:skill-gap(자가진단 한정), 오염 주입 테스트, Phase 1 도그푸딩. 슬라이스 1의 스크립트를 소비만 하고 수정하지 않는다 — 단 아래 '슬라이스 A 파일 수정 예외' 표에 적힌 건만 명시적으로 허용한다. | 구현 단계 7~10 · `skills/career-from-git/SKILL.md`, `skills/career-from-git/templates/career-writer.md`, `skills/career-from-git/templates/fact-checker.md`, `scripts/render-markdown.mjs`, `scripts/lib/store.mjs`, `skills/skill-gap/SKILL.md`, **`tests/run-smoke.mjs`**(귀속 확정 2026-09-02, 아래 문단), … 외 11개 | AC-8, AC-9, AC-11, AC-12, AC-13, AC-14, AC-16, AC-18, AC-19, AC-20, AC-21, AC-22 | `slice-a-deterministic-foundation` | `/harness "slice-b-p0-skill-layer" --output-dir docs/devcareer-prep-plugin` |
 | `slice-c-extension-and-release` | 확장·공개 — /devcareer-prep:prep-plan(Phase 3), README·아키텍처 다이어그램·예제·한계 고지, 오픈소스 공개 준비. 앞 두 슬라이스가 "쓸 만해"진 뒤에만 착수한다. | 구현 단계 11~12 · `skills/prep-plan/SKILL.md`, `skills/prep-plan/templates/curriculum-designer.md`, `schemas/plan.schema.json`, `README.md`, `examples/`, `docs/devcareer-prep-plugin/`, … 외 1개 | AC-14, AC-18, AC-19 | `slice-b-p0-skill-layer` | `/harness "slice-c-extension-and-release" --output-dir docs/devcareer-prep-plugin` |
 
 ## 슬라이스 A 파일 수정 예외 (slice-b-p0-skill-layer)
@@ -173,6 +173,53 @@
 > 자격이다. 그리고 처방 10을 반영할 때는 `cold_review_round2.md` §4-7이 기록한 **두 번째
 > fail-open 축**(`LANG_CHECK_SCHEMA_MISSING`이 `warning`이라 스키마 파일 삭제가 조용히
 > 통과한다)을 같은 회차에 함께 닫아라 — 같은 함수이고 같은 예외 행을 쓴다.
+
+> **`tests/run-smoke.mjs`의 슬라이스 귀속 확정 (2026-09-02, 사용자 결정).**
+> **슬라이스 B의 공유 자산이다.** 위 `In scope` 열에 명시했다. 이 항목은 **세 회차 연속으로
+> 「사용자 확정이 필요하다」로만 이월돼 왔고**, 그동안 슬라이스 B가 계속 단언을 추가했다 —
+> 결정이 없는 채로 사실이 쌓이는 형태였다.
+>
+> **실측 근거**(귀속을 추정이 아니라 관측으로 정한다): 생성 커밋 `1ad78d7`이 슬라이스 A 완료
+> 커밋 `97675e7`보다 **이르지만**, 전체 58커밋 중 **54건이 슬라이스 A 완료 이후 수정**이고,
+> 그래서 「수정 이력 0건」 조건을 못 채워 `PINNED_SLICE_A_FILES` 16건 **밖**에 있다. 즉
+> 이 파일은 슬라이스 A가 만들었으나 **슬라이스 B가 키워 온 파일**이며, 핀도 예외 표도
+> 그 사실을 담을 자리가 없었다.
+>
+> **왜 예외 표가 아니라 `In scope`인가.** 예외 표는 「슬라이스 A 파일을 한정적으로 고치는」
+> 자리다. 이 파일을 거기 올리면 지금까지의 54커밋이 전부 예외 없는 수정이었다는 뜻이 되고,
+> 예외 표가 사실상 전면 허용으로 바뀐다 — T4 잔여 14건 이연 결정이 무너뜨리지 않으려 한
+> 바로 그 형태다. `In scope`는 반대로 **소유를 선언**하므로 과거 54커밋과 앞으로의 추가가
+> 같은 근거 위에 선다.
+>
+> **이 확정이 닫는 것과 닫지 못하는 것.** `(SA-4)`는 `In scope` 열을 정본으로 쓰므로 이제
+> 이 파일에 대해 말할 수 있게 된다. 다만 **핀 밖 슬라이스 A 파일 11건은 여전히 무관측**이며
+> 이 확정은 그 잔여 위험을 건드리지 않는다 — 그중 하나가 `scripts/collect-git-facts.mjs`이고,
+> 그것이 아래 성능 처방 5의 이연 근거다.
+
+> **성능 처방 4·5의 처리 회차 확정 (2026-09-02, 사용자 결정).**
+> **둘 다 슬라이스 C로 이연한다.** `perf_review.md` §4 표의 처방 4(`budget` 바이트 상한)와
+> 처방 5(`collectGitFacts` 결과 캐시)이며, 같은 표의 「슬라이스 A」 열이 **둘 다 「아니오」로
+> 잘못 적혀 있어** 두 회차가 이 셀을 근거로 「예외 없이 착수 가능」으로 읽었다. 그 셀은
+> 같은 날 정정했다.
+>
+> | # | 사는 파일 | 슬라이스 A 완료 후 수정 | 내용 핀 16건 | 게이트가 잡는가 |
+> |---|---|---|---|---|
+> | 4 | `schemas/config.schema.json` | **0건** | **포함** | `(SA-2)`가 **반드시 FAIL**시킨다 |
+> | 5 | `scripts/collect-git-facts.mjs` | 2건 | **밖** | **아무것도 FAIL 안 한다 — 조용한 위반** |
+>
+> **둘의 성격이 다르고 조용한 쪽이 더 나쁘다.** 처방 4는 손대는 순간 게이트가 빨개져
+> 예외 표를 거치게 만든다. 처방 5는 핀 밖이라 규칙 5를 어겨도 아무 단언도 울지 않는다.
+> 그리고 캐시를 슬라이스 B 쪽으로 피하려 해도 갈 곳이 `fixtures/` 핀 대상이거나
+> `tests/run-smoke.mjs`뿐이다 — **처방 5는 규칙 5가 걸리지 않는 집이 없다.**
+>
+> **이연 근거는 비용이 아니라 일관성이다.** 규칙 5는 「그 항목이 회차 작업을 실제로 막을
+> 때만」 예외를 허용하는데 **성능 개선은 막지 않는다.** 이 표는 같은 형태를 이미 세 번
+> 판정했다 — T4 잔여 14건, 성능 처방 1(**-95.9%**), 라운드 2 잔여 4건(그중 셋이 비용 S).
+> 네 번째에서 반대로 가면 그 셋을 지탱한 문장이 무너진다.
+>
+> **슬라이스 C 착수 시 이 문단이 그 작업 목록의 입력이다.** 반영 시 처방 4는 예외 표에
+> 행을 추가하고 **핀 해시도 함께 고쳐야 한다**(`(SA-2)`가 잡는다). 처방 5는 게이트가 잡지
+> 않으므로 **예외 표 행 추가가 유일한 관측 장치다** — 적지 않으면 아무도 모른다.
 
 > **이미 발생한 슬라이스 A 수정(기록).** 슬라이스 B 착수 전 게이트 작업에서 `schemas/`(evidence·
 > career·knowledge-map·gap-report), `scripts/lib/schema-validate.mjs`, `scripts/lib/lang-lint.mjs`,
