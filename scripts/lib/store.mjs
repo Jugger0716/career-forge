@@ -498,7 +498,7 @@ export function writeConfig(root, config) {
  * 화이트리스트로 고정하면 그 확장이 사람 눈과 `(LP-23)`에 먼저 걸린다.
  */
 export const PROJECTION_OMITTABLE_KEYS = Object.freeze({
-  commit: Object.freeze(["shortHash", "coAuthors"]),
+  commit: Object.freeze(["shortHash", "coAuthors", "excluded", "exclusionReason"]),
   fileChange: Object.freeze(["oldPath", "binary", "viaMerge"]),
 });
 
@@ -570,6 +570,23 @@ export function projectLedgerForSkills(evidence) {
     }
     if (Array.isArray(out.coAuthors) && out.coAuthors.length === 0) {
       delete out.coAuthors;
+    }
+    // **제외 판정은 이 함수가 이미 집행했다(성능 처방 6).** 남은 커밋은 전부
+    // `excluded !== true`이므로 `excluded: false`·`exclusionReason: null`은 전건
+    // 동일한 상수이고, 그것을 300건 실어 보내는 것이 순수 낭비다(-6.6% 실측).
+    //
+    // **기본값일 때만 지운다 — 여기가 핵심이다.** `excluded`가 `false`가 아닌
+    // 다른 값(예: 문자열 `"no"`)이면 남긴다. 위 `!== true` 상보 규칙이 그런 커밋을
+    // **포함**시키므로, 지워 버리면 「알 수 없는 값이 통과했다」는 사실이 사라진다.
+    //
+    // **이 생략이 `(LP-2)`를 공허하게 만들지 않는다** — 그 단언은 2026-09-03에
+    // 필드가 아니라 **정체성**(원장의 제외 id가 투영에 있는가)으로 재설계됐다.
+    // 순서가 반대였다면 이 삭제가 프라이버시 경계 검사를 조용히 껐을 것이다.
+    if (out.excluded === false) {
+      delete out.excluded;
+    }
+    if (out.exclusionReason === null) {
+      delete out.exclusionReason;
     }
 
     if (Array.isArray(out.files)) {

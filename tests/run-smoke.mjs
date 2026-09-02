@@ -476,7 +476,7 @@ let passed = 0;
 let abortedSections = 0;
 
 /**
- * 모드별 단언 수의 정본. **최종 가드 2건은 제외한 수다.**
+ * 모드별 단언 수의 정본. **최종 가드 3건은 제외한 수다.**
  *
  * 가드가 자기 자신을 세면 순환이 된다(세는 시점에 아직 보고되지 않았다). 그래서 기준을
  * 가드 앞으로 잡고, 「결과:」 줄의 수는 **여기 적힌 값 + 2**가 된다.
@@ -529,7 +529,9 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       원장 대조와 상위 계층 참조 해소 584 → 597.
   //       콜드 리뷰 라운드 2 §4-8의 (DS-1a)~(DS-1d)·(DS-2a)(DS-2b) 정본 문서 구조
   //       무결성(절 통째 복제 + 문단 경계를 넘어 열린 코드스팬) 597 → 603.
-  default: 603,
+  //       성능 처방 6의 (LP-29)(LP-30) excluded·exclusionReason 생략의 금지/허용 쌍
+  //       603 → 605. 나머지 다섯 키는 처음부터 이 쌍을 갖고 있었다.
+  default: 605,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -550,7 +552,26 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   "contamination-llm": 8,
 });
 
+/**
+ * 한 실행에서 **실제로 발화한** 라벨 코드의 횟수. `(SA-5)`의 재료다.
+ *
+ * **왜 소스 스캔이 아니라 발화 기록인가 — 실측이 그렇게 시켰다(2026-09-03).**
+ * 초판 `(SA-5)`는 소스에서 `report()` 라벨을 긁어 중복을 셌는데, 그러면 같은 절의
+ * if/else에서 조기 이탈 분기와 본 단언이 같은 라벨을 쓰는 **정당한 관례**(`RV-6`·
+ * `RV-7`·`RV-8`·`WA-9`·`WA-10`·`WA-11` 여섯 건)가 전부 오탐이 된다. 그것을 피하려고
+ * 「두 함수에 걸쳤는가」로 좁혔더니 이번에는 **내가 실제로 낸 사고를 못 잡았다** —
+ * 충돌한 두 단언이 같은 함수 안에 있었기 때문이다(격리 사본 M5 실측: 라벨 종수가
+ * 212 → 211로 줄었는데도 통과).
+ *
+ * 실제 불변식은 소스가 아니라 실행에 있다: **한 실행에서 같은 라벨이 두 번 발화하지
+ * 않는다.** if/else는 하나만 발화하므로 통과하고, 서로 다른 두 단언이 같은 번호를
+ * 쓰면 둘 다 발화해 잡힌다. 소스 형태를 추측하지 않고 일어난 일을 센다.
+ */
+const firedLabels = new Map();
+
 function report(ok, label) {
+  const m = /^\(([A-Z]{1,6}-\d+[a-z]?)\)/.exec(label);
+  if (m !== null) firedLabels.set(m[1], (firedLabels.get(m[1]) ?? 0) + 1);
   if (ok) {
     passed += 1;
     console.log(`  PASS  ${label}`);
@@ -3617,10 +3638,26 @@ function runLedgerProjectionOracleSmoke() {
     // 단언했는데, 그러면 "전량 통과" 변이(M18)와 "전량 버림" 변이(M19)가
     // **둘 다** 이 단언과 (LP-3)을 동시에 깨서 방향 분리가 성립하지 않았다
     // — 실측이다. 건수 보고는 (LP-4)의 CLI 경로가 본다.
+    //
+    // **판정을 필드가 아니라 정체성으로 바꿨다(성능 처방 6, 2026-09-03).**
+    // 초판은 투영 결과의 `c.excluded === true`를 봤다. 그 형태는 투영이 그 필드를
+    // **싣고 있을 때만** 성립한다 — `excluded: false`를 생략하는 순간 `leaked`가
+    // 영원히 빈 배열이 되어 이 단언이 **공허하게 PASS**한다. `(LP-23)`이 그 확장을
+    // 상수 층에서 막고 있던 이유가 그것이고, 그래서 처방 6이 「`(LP-2)` 재설계가
+    // 선행」이라 적혀 있었다.
+    //
+    // 원장에서 제외 id 집합을 만들어 **투영에 그 id가 있는지**를 본다. 이 형태는
+    // 투영이 필드를 싣든 말든 성립하고, 「필드를 지워 검사를 무력화한다」는 경로
+    // 자체가 사라진다 — 재설계는 완화가 아니라 강화다.
     const { projected } = projectWithReport(ledger);
-    const leaked = projected.commits.filter((c) => c.excluded === true);
-    if (leaked.length > 0) console.log(`    실제: 누출 ${leaked.length}건`);
-    report(leaked.length === 0, "(LP-2) 금지 방향: 투영 결과에 excluded:true 커밋이 0건이다(§6 프라이버시 경계)");
+    const excludedIds = new Set(
+      (Array.isArray(ledger?.commits) ? ledger.commits : []).filter((c) => c?.excluded === true).map((c) => c?.id)
+    );
+    const leaked = projected.commits.filter((c) => excludedIds.has(c?.id));
+    // 전제를 같은 단언 안에 둔다: 제외 대상이 0건이면 이 금지 방향은 공허하다.
+    const ok = excludedIds.size >= 1 && leaked.length === 0;
+    if (!ok) console.log(`    실제: 원장의 제외 커밋 ${excludedIds.size}건 / 투영 누출 ${leaked.length}건`);
+    report(ok, "(LP-2) 금지 방향: 원장이 제외한 커밋의 id가 투영에 0건이다(§6 프라이버시 경계 — 필드가 아니라 정체성으로 본다)");
   }
 
   // ---- (LP-3) 허용 방향: 제외가 아닌 커밋은 전부 남는가 ----
@@ -3714,6 +3751,15 @@ function runLedgerProjectionOracleSmoke() {
         }),
         // ⓕ **커밋이 불완전**(coAuthors 키 자체가 없다) — 커밋 레벨 게이트
         (() => { const c = commit({ id: "commit:f", hash: "0".repeat(40), shortHash: "0".repeat(12), files: [file({})] }); delete c.coAuthors; return c; })(),
+        // ⓖ **excluded가 기본값이 아니다.** `!== true`의 상보 규칙이 이 커밋을 **포함**시키므로
+        //    투영에 남는데, 그 값을 무조건 지우면 「알 수 없는 값이 통과했다」는 사실이 사라진다.
+        //    (LP-29)(LP-30)이 그 쌍을 본다 — 성능 처방 6이 더한 두 키에도 나머지 다섯과
+        //    같은 금지/허용 쌍을 세운다.
+        commit({
+          id: "commit:g", hash: "9".repeat(40), shortHash: "9".repeat(12),
+          excluded: "no", exclusionReason: "사유 미상",
+          files: [file({})],
+        }),
       ],
     };
   })();
@@ -3819,15 +3865,41 @@ function runLedgerProjectionOracleSmoke() {
       report(ok, "(LP-22) 허용 방향: 화이트리스트 밖의 키는 하나도 사라지거나 변하지 않는다(재조립이 레코드를 갉아먹는 형태 방어)");
     }
 
-    // ---- (LP-23) 화이트리스트 리터럴 드리프트 가드 ----
-    //      excluded/exclusionReason이 이 집합에 들어오는 순간 (LP-2)가 공허해진다.
-    //      그 확장을 상수 층에서 먼저 잡는다 — 동작이 바뀌기 전에 걸린다.
+    // excluded / exclusionReason — 금지/허용 (성능 처방 6, 2026-09-03)
+    //   이 쌍이 없던 동안 「기본값 조건을 지우고 무조건 삭제」 변이가 **605 PASS로
+    //   통과했다**(실측). 픽스처에 기본값 아닌 값을 가진 커밋이 없어 참값이 0이었기
+    //   때문이다 — 나머지 다섯 키는 처음부터 이 쌍을 갖고 있었고 두 키만 비어 있었다.
     {
-      const expected = { commit: ["shortHash", "coAuthors"], fileChange: ["oldPath", "binary", "viaMerge"] };
+      const ok = !has(byId("commit:a"), "excluded") && !has(byId("commit:a"), "exclusionReason");
+      if (!ok) console.log(`    실제: ${JSON.stringify(byId("commit:a"))}`);
+      report(ok, "(LP-29) 금지 방향: excluded:false·exclusionReason:null인 커밋에서는 두 키가 투영에 없다(제외 판정은 투영이 이미 집행했다)");
+    }
+    {
+      const c = byId("commit:g");
+      const ok = has(c, "excluded") && c.excluded === "no" && has(c, "exclusionReason") && c.exclusionReason === "사유 미상";
+      if (!ok) console.log(`    실제: ${JSON.stringify(c)}`);
+      report(ok, "(LP-30) 허용 방향: 기본값이 아닌 excluded·exclusionReason은 값 그대로 남는다(무조건 생략이면 「알 수 없는 값이 통과했다」가 소실된다)");
+    }
+
+    // ---- (LP-23) 화이트리스트 리터럴 드리프트 가드 ----
+    //      **이 단언의 근거가 2026-09-03에 바뀌었다(성능 처방 6).** 초판은
+    //      「excluded/exclusionReason이 이 집합에 들어오는 순간 (LP-2)가 공허해진다」로
+    //      그 둘을 금지했다. 그 진술은 (LP-2)가 투영의 필드 값을 읽던 동안 참이었고,
+    //      같은 날 (LP-2)가 **정체성 판정**(원장의 제외 id가 투영에 있는가)으로
+    //      재설계되면서 거짓이 됐다 — 이제 그 두 키를 생략해도 (LP-2)는 그대로 발화한다.
+    //
+    //      **그래서 이 단언의 역할이 「이 두 키를 막는다」에서 「목록이 조용히 자라지
+    //      않는다」로 좁혀졌다.** `id`가 들어오면 여전히 FAIL이다(그것이 들어오면
+    //      (LP-3)의 대조 키가 사라져 「전량 버림」 변이가 통과한다).
+    {
+      const expected = {
+        commit: ["shortHash", "coAuthors", "excluded", "exclusionReason"],
+        fileChange: ["oldPath", "binary", "viaMerge"],
+      };
       const actual = { commit: [...PROJECTION_OMITTABLE_KEYS.commit], fileChange: [...PROJECTION_OMITTABLE_KEYS.fileChange] };
       const ok = JSON.stringify(actual) === JSON.stringify(expected);
       if (!ok) console.log(`    실제: ${JSON.stringify(actual)}`);
-      report(ok, "(LP-23) 전제: 생략 허용 키는 정확히 다섯이다(excluded/exclusionReason/id가 들어오면 FAIL — (LP-2)(LP-3)이 공허해지는 경로)");
+      report(ok, "(LP-23) 전제: 생략 허용 키는 정확히 일곱이다(id가 들어오면 FAIL — (LP-3)의 대조 키가 사라지는 경로)");
     }
 
     // ---- (LP-24) 생략 규약이 산출물 자신에 선언되는가 ----
@@ -9663,7 +9735,27 @@ function finishMode(mode) {
         : "단언이 늘었다. 의도한 추가라면 EXPECTED_ASSERTIONS_BEFORE_GUARDS를 함께 고쳐라.")
     );
   }
-  report(observed === expected, `스위트 가드: 단언 총량 ${expected}건(모드 ${mode}, 가드 2건 제외)`);
+  report(observed === expected, `스위트 가드: 단언 총량 ${expected}건(모드 ${mode}, 가드 3건 제외)`);
+
+  // **라벨 유일성 가드 — 근거는 사고다(2026-09-03).** 성능 처방 6을 반영하며 새 단언에
+  // `(LP-28)`을 붙였는데 그 번호를 처방 3의 들여쓰기 단언이 이미 쓰고 있었고, **다섯
+  // 게이트가 전부 초록이었다.** 총량 가드는 개수만 세고 이름은 보지 않으며 `(LN-4)`는
+  // `scripts/`가 인용한 라벨의 해소만 본다 — 유일성을 보는 장치가 0건이었다.
+  //
+  // **여기 두는 이유는 완전성이다.** 이 판정은 모든 절이 끝난 뒤에만 옳고, 절 안에
+  // 두면 그 뒤에 발화하는 라벨을 못 본다. 그래서 가드이고, 그래서 총량에서 제외된다.
+  //
+  // **닫지 못하는 것**: 한 실행에서 발화하지 않는 경로의 중복은 보지 못한다 — 모드가
+  // 다르면 라벨 집합도 다르므로 `--golden`에서만 발화하는 라벨끼리의 충돌은 그 모드를
+  // 돌려야 보인다. 다섯 게이트를 다 돌리면 전 경로가 덮이지만 그것은 절차이지 장치가 아니다.
+  {
+    const dupes = [...firedLabels].filter(([, n]) => n > 1).map(([k, n]) => `${k}×${n}`);
+    if (dupes.length > 0) {
+      console.log(`    실제: 한 실행에서 두 번 이상 발화한 라벨 ${JSON.stringify(dupes)}`);
+      console.log("    처방: 새 단언에 번호를 붙이기 전에 그 접두사의 최대 번호를 확인하라. 같은 절 if/else의 조기 이탈처럼 **하나만 발화하는** 중복은 여기 걸리지 않는다 — 걸렸다면 서로 다른 두 단언이 같은 이름을 쓰고 있다는 뜻이다.");
+    }
+    report(dupes.length === 0, `스위트 가드: 발화한 라벨 ${firedLabels.size}종이 전부 한 번씩만 발화했다(모드 ${mode})`);
+  }
 
   console.log(`\n결과: ${passed} PASS / ${failed} FAIL`);
   process.exit(failed === 0 ? 0 : 1);
