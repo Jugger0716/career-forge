@@ -531,7 +531,12 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       무결성(절 통째 복제 + 문단 경계를 넘어 열린 코드스팬) 597 → 603.
   //       성능 처방 6의 (LP-29)(LP-30) excluded·exclusionReason 생략의 금지/허용 쌍
   //       603 → 605. 나머지 다섯 키는 처음부터 이 쌍을 갖고 있었다.
-  default: 605,
+  //       도그푸딩 1회차 프롬프트 결함 ①②의 (SP-6d)(판정 템플릿이 자기가 밟는 거부
+  //       코드를 이름으로 담는다 — 닻은 하드코딩이 아니라 실제 발화)·(SP-6e)(템플릿의
+  //       JSON 예시가 자기 단계의 쓰기 경계를 통과한다) 605 → 607.
+  //       **(SP-6e)는 그 결함 둘을 잡지 못한다** — 당시 두 예시는 이미 유효했고 틀린
+  //       것은 산문이었다. 인접한 다른 구멍을 닫는 축이며, 둘을 같은 것으로 적지 마라.
+  default: 607,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -4251,6 +4256,111 @@ function runSkillPromptContractSmoke() {
     const ok = writers.length >= 1 && checkers.length >= 1 && badWriter.length === 0 && badChecker.length === 0;
     if (!ok) console.log(`    실제: 생성(${writers.length})에서 '--stage ${STAGE_DRAFT}' 누락 ${JSON.stringify(badWriter)} / 판정(${checkers.length})에서 '--stage ${STAGE_FACT_CHECKED}' 누락 ${JSON.stringify(badChecker)}`);
     report(ok, `(SP-6c) 두 역할이 각자 쓰기 경계에 들어가는 단계(--stage ${STAGE_DRAFT} / --stage ${STAGE_FACT_CHECKED})를 명시한다(허용 방향 — 닻은 AUTHORSHIP_STAGES)`);
+  }
+
+  // ---- (SP-6d) 판정 템플릿이 자기가 밟는 거부 코드를 이름으로 담는가 ----
+  //      **도그푸딩 1회차가 만든 단언이다(2026-09-04).** 두 판정 템플릿의 지시가
+  //      쓰기 경계의 불변식과 정면으로 모순했다 — `attempts`는 하한을 말하지 않아
+  //      첫 회차에 `verified` 전건이 거부됐고(실측 21건), `locked`는 「적지 마라」로만
+  //      적혀 「입력 산출물에 있어도 빼라」가 빠져 전 노드가 거부됐다(실측 25건).
+  //      **둘 다 지시를 정확히 따를수록 거부당하는 구조였고, 그 자리를 보는 장치가
+  //      0건이었다** — 게이트는 산출물을 잡았지 프롬프트를 잡지 못했다.
+  //
+  //      **닻을 소스가 아니라 발화에서 얻는다.** 코드 문자열을 이 파일에 하드코딩하면
+  //      `artifact-contract.mjs`가 코드를 개명할 때 이 단언은 초록인 채 템플릿만
+  //      낡는다. 그래서 두 위반을 **실제로 발화시켜** 코드를 뽑는다 — 개명하면
+  //      뽑히는 값이 따라 바뀌고, 템플릿을 고칠 때까지 FAIL한다.
+  //
+  //      **이 단언의 한계를 감추지 않는다.** 코드 이름이 적혀 있다는 것이 규칙을
+  //      옳게 적었다는 뜻은 아니다. 등급으로는 `source-scan`이고, 「지시가 불변식과
+  //      모순하지 않는가」를 실제로 재는 것은 `UC` 축(`--contamination-llm`)뿐이다.
+  //      여기서 닫는 것은 **그 절이 조용히 사라지거나 약해지는 것**이다.
+  {
+    const probeLayer = VERIFICATION_LAYERS[0];
+    const probe = (extra) => ({
+      id: "sp6d:probe", basis: "insufficient", evidence: [],
+      origin: "generated", text: "SP-6d 프로브 노드", ...extra,
+    });
+    const codesFrom = (node) =>
+      checkAuthorshipContract(probeLayer, { nodes: [node] }, { stage: STAGE_FACT_CHECKED }).map((v) => v.code);
+    const lockedCodes = codesFrom(probe({
+      locked: false, verification: { status: "verified", attempts: 1, reasonCode: null },
+    }));
+    const attemptCodes = codesFrom(probe({
+      verification: { status: "verified", attempts: 0, reasonCode: null },
+    }));
+    const required = [...new Set([...lockedCodes, ...attemptCodes])].sort();
+
+    // **검출력 전제.** 프로브가 하나도 발화하지 않으면 `required`가 비고 아래 금지
+    // 방향이 「요구할 코드가 없어서」 공허하게 통과한다 — 참값 0 트리에서 「검사기를
+    // 지운 0건」과 「위반이 없어서 0건」이 구별되지 않는 형태이며, 이 회차에 세 번 만났다.
+    const probesFired = lockedCodes.length >= 1 && attemptCodes.length >= 1;
+    const checkers = allTemplates.filter((p) => roleOf(p) === "checker");
+    const missing = checkers
+      .map((p) => [rel(p), required.filter((c) => !read(p).includes(c))])
+      .filter(([, m]) => m.length >= 1);
+    const ok = probesFired && checkers.length >= 1 && missing.length === 0;
+    if (!ok) {
+      console.log(`    실제: 프로브 발화 ${JSON.stringify({ locked: lockedCodes, attempts: attemptCodes })} / 판정 템플릿 ${checkers.length}건 중 코드 누락 ${JSON.stringify(missing)}`);
+    }
+    report(ok, `(SP-6d) 판정 역할 템플릿 **전부**가 자기가 밟는 거부 코드(${required.join("·")})를 이름으로 담는다(닻은 하드코딩이 아니라 실제 발화)`);
+  }
+
+  // ---- (SP-6e) 각 템플릿의 JSON 예시가 자기 단계의 쓰기 경계를 실제로 통과하는가 ----
+  //      **SP 계열이 소스 스캔이라는 한계를 넘는 두 번째 축이다**((SP-10)이 첫 번째).
+  //      위 넷은 「문구가 있는가」까지만 보는데, 템플릿에서 실제로 복사되는 것은
+  //      산문이 아니라 **예시 JSON**이다. 예시가 불변식과 모순하면 지시를 정확히
+  //      따른 출력이 거부되고, 그 모순은 어떤 문구 스캔에도 걸리지 않는다.
+  //
+  //      **이 축이 도그푸딩 1회차의 결함 둘을 잡지 못한다는 것을 적어 둔다** —
+  //      그때 두 예시는 이미 유효했고(`refuted`/2, `locked` 없음) 틀린 것은 산문
+  //      쪽이었다. 그러므로 이것은 그 결함의 재발 방지가 아니라 **인접한 다른 구멍**을
+  //      닫는 축이며, 둘을 같은 것으로 적으면 다음 회차가 오독한다.
+  //
+  //      **계층을 하나로 고정해도 되는 이유**: 이 판정이 보는 축(`locked` 존재,
+  //      단계별 `verification` 존재, `verified` + `attempts` 0)은 전부 계층 무관이고
+  //      `VERIFICATION_LAYERS` 소속 여부만 갈린다 — 다섯 템플릿이 전부 그 소속이다.
+  {
+    const probeLayer = VERIFICATION_LAYERS[0];
+    const stageOfRole = { writer: STAGE_DRAFT, checker: STAGE_FACT_CHECKED };
+    const exampleOf = (p) => {
+      const m = /^```json\r?\n([\s\S]*?)^```/m.exec(read(p));
+      if (m === null) return { error: "json 예시 블록 없음" };
+      try {
+        return { node: JSON.parse(m[1]) };
+      } catch (e) {
+        return { error: `파싱 실패: ${e.message}` };
+      }
+    };
+    const bad = [];
+    for (const p of allTemplates) {
+      const stage = stageOfRole[roleOf(p)];
+      // 역할 미선언은 (SP-6a)의 몫이다 — 여기서 겹쳐 고발하지 않고 건너뛴다.
+      // 그 경우 (SP-6a)가 이미 FAIL하므로 초록이 조용히 남지 않는다.
+      if (stage === undefined) continue;
+      const { node, error } = exampleOf(p);
+      if (error !== undefined) { bad.push([rel(p), error]); continue; }
+      const viol = checkAuthorshipContract(probeLayer, { nodes: [node] }, { stage }).map((v) => v.code);
+      if (viol.length >= 1) bad.push([rel(p), viol.join(",")]);
+    }
+
+    // **검출력 전제.** 같은 경로에 합성 위반을 넣으면 실제로 잡히는가 — 없으면
+    // 「예시가 전부 착해서 0건」과 「판정을 하지 않아서 0건」이 구별되지 않는다.
+    //
+    // **프로브에 `origin: "generated"`가 반드시 있어야 한다.** 없으면 어떤 변이를
+    // 넣든 `ORIGIN_SET_BY_TEMPLATE`가 대신 발화해 「잡혔다」가 되고, 정작 이 축이
+    // 보려는 두 검사(단계별 금지 필드)를 지워도 프로브는 초록으로 남는다 —
+    // 초안에서 실제로 그랬다. 그래서 개수가 아니라 **코드 이름**으로 판정한다.
+    const codesOf = (node, stage) =>
+      checkAuthorshipContract(probeLayer, { nodes: [node] }, { stage }).map((v) => v.code);
+    const base = { id: "sp6e:probe", origin: "generated" };
+    const probeCaught =
+      codesOf({ ...base, locked: false }, STAGE_DRAFT).includes("LOCKED_SET_BY_TEMPLATE") &&
+      codesOf({ ...base, verification: { status: "verified", attempts: 0, reasonCode: null } }, STAGE_FACT_CHECKED)
+        .includes("VERIFIED_WITHOUT_ATTEMPT");
+    const ok = probeCaught && allTemplates.length >= 1 && bad.length === 0;
+    if (!ok) console.log(`    실제: 검출력 프로브=${probeCaught} / 예시가 경계를 통과하지 못한 템플릿 ${JSON.stringify(bad)}`);
+    report(ok, "(SP-6e) 모든 템플릿의 JSON 예시가 **자기 역할의 단계**에서 쓰기 경계 위반 0건이다(문구가 아니라 복사되는 물건을 본다)");
   }
 
   // ---- (SP-7) 각 템플릿이 의도 모델 티어를 명시하는가(전역 규약) ----
