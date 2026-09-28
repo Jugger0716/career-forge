@@ -52,7 +52,7 @@ import crypto from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runValidation, runLangCheck, runSchemaCheck, runSecretScan } from "../scripts/validate-plugin.mjs";
-import { scanForSecrets, collectEmailFormatPaths, isSingleEmail } from "../scripts/lib/secret-scan.mjs";
+import { scanForSecrets, collectEmailFormatPaths, isSingleEmail, walkStringValues } from "../scripts/lib/secret-scan.mjs";
 import { walk, listFilesByExt } from "../scripts/lib/fs-walk.mjs";
 import { validateInstance } from "../scripts/lib/schema-validate.mjs";
 import {
@@ -86,7 +86,7 @@ import {
 } from "../scripts/write-artifact.mjs";
 import { CONFIG_SCHEMA_VERSION } from "../scripts/write-config.mjs";
 import { KNOWN_SKILLS, NON_SKILL_PRODUCERS, KNOWN_ARTIFACT_PRODUCERS } from "../scripts/lib/artifact-contract.mjs";
-import { checkRenderInput } from "../scripts/render-markdown.mjs";
+import { checkRenderInput, checkRenderVerification, checkRenderSecrets } from "../scripts/render-markdown.mjs";
 import { CONFIG_FILE_NAME } from "../scripts/lib/store.mjs";
 import {
   computeRepoKeyForPath,
@@ -536,7 +536,16 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       JSON 예시가 자기 단계의 쓰기 경계를 통과한다) 605 → 607.
   //       **(SP-6e)는 그 결함 둘을 잡지 못한다** — 당시 두 예시는 이미 유효했고 틀린
   //       것은 산문이었다. 인접한 다른 구멍을 닫는 축이며, 둘을 같은 것으로 적지 마라.
-  default: 607,
+  //       도그푸딩 1회차 결함 ④(렌더가 마스킹 축을 재검증하지 않음)의 (RV-9)(금지: 9단계가
+  //       거부한 산출물은 렌더되지 않는다)·(RV-10)(허용: 발화하는 이메일 면제가 유지된다)·
+  //       (RV-11)(동치: 9단계와 렌더가 SB 코퍼스에서 같은 판정)·(RV-12)(금지: 거부 메시지에
+  //       원문이 없다) 607 → 611. (GP-4)는 모드 목록을 런타임 키에서 파생하도록 바꿨고
+  //       라벨 수는 그대로다.
+  //       같은 회차 적대적 리뷰가 제안한 변이 여섯이 초판을 실제로 통과해 보강했다 —
+  //       (RV-13)(동시 보고: 인용이 깨진 산출물의 유출도 [SECRET]으로 보고) 신설 611 → 612.
+  //       (RV-4)·(RV-9)·(RV-11)·(RV-12)는 라벨을 유지한 채 대상을 넓혔다(마스킹 판독 실패 ·
+  //       세 계층 CLI · 합성 2건과 스캐너 정의 패턴 전량 · 160자 절단 분기).
+  default: 612,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -5237,13 +5246,21 @@ function runSliceRuleObservationSmoke() {
   //      계산식으로 바꾸면 비교는 정확 일치인 채로 **항상 참**이 된다. 리터럴 강제 +
   //      런타임 대조를 함께 두는 이유는 소스만 보면 「적힌 값」과 「쓰이는 값」이
   //      갈릴 수 있기 때문이다.
+  //
+  //      **모드 목록을 하드코딩하지 않는다(2026-09-28).** 초판은 네 모드를 손으로 적었고,
+  //      `contamination-llm`이 신설될 때 목록이 따라오지 않아 그 모드의 정본 값이 이 관측
+  //      **밖**에 있었다 — (SP-6) 초판이 템플릿 파일명을 하드코딩해 새 대상을 조용히 놓친 것과
+  //      같은 형태다. 런타임 객체의 키가 정본이고, 따옴표 키(`"contamination-llm"`)도 같은
+  //      규칙으로 읽는다.
   {
-    const modes = ["default", "negative", "golden", "contamination"];
+    const modes = Object.keys(EXPECTED_ASSERTIONS_BEFORE_GUARDS);
     const problems = [];
+    if (modes.length === 0) problems.push("정본 상수에 모드가 0개다(이 단언이 공허해진다)");
     if (constBlock === null) problems.push("상수 블록 미추출");
     else {
       for (const mode of modes) {
-        const m = constBlock.match(new RegExp(`\\n\\s*${mode}:\\s*(\\d+),`));
+        const esc = mode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const m = constBlock.match(new RegExp(`\\n\\s*(?:${esc}|"${esc}"):\\s*(\\d+),`));
         if (m === null) { problems.push(`${mode}: 정수 리터럴이 아니다`); continue; }
         if (Number(m[1]) !== EXPECTED_ASSERTIONS_BEFORE_GUARDS[mode]) {
           problems.push(`${mode}: 소스 리터럴 ${m[1]} 대 런타임 ${EXPECTED_ASSERTIONS_BEFORE_GUARDS[mode]}`);
@@ -5409,7 +5426,52 @@ function runSliceRuleObservationSmoke() {
  */
 let HONEST_ROOT_CACHE;
 function buildHonestRenderRoot() {
-  if (HONEST_ROOT_CACHE !== undefined) return HONEST_ROOT_CACHE;
+  if (HONEST_ROOT_CACHE === undefined) HONEST_ROOT_CACHE = buildRenderRootWith(HONEST_TEXTS);
+  return HONEST_ROOT_CACHE;
+}
+
+const HONEST_TEXTS = Object.freeze({
+  career: "픽스처 레포의 초기 커밋으로 README를 작성했다.",
+  "knowledge-map": "저장소 문서를 스스로 작성해 본 경험이 있다.",
+  "gap-report": "문서화 경험은 있으나 규모가 작다.",
+});
+
+/**
+ * **유출이 섞인 정직한 루트** — 결함 ④의 관측 재료(`(RV-9)`·`(RV-12)`·`(RV-13)`).
+ *
+ * 정직한 루트와 **본문만 다르다**: 세 계층 노드 `text` 각각에 AWS 액세스 키 예시값을 넣는다.
+ * 그래서 이 루트는 스키마·`contentHash`·인용 재검증을 **전부 통과**하고, 렌더를 막을 수 있는
+ * 축이 마스킹 재검사 하나뿐이다 — 그 고유성이 없으면 (RV-9)는 다른 게이트 덕에 초록이 된다.
+ *
+ * **세 계층 전부에 넣는 이유**: career 하나만 두면 「CLI가 career에만 마스킹 재검사를 배선한다」는
+ * 퇴행이 (RV-9)를 통과한다 — 적대적 리뷰가 제안한 변이 W7이 보강 전 단언을 실제로 통과했다.
+ *
+ * **본문을 160자 넘게 채우는 이유**: `scanForSecrets`의 발췌는 160자에서 잘리는 분기가 따로 있고,
+ * 그 분기가 마스킹본이 아니라 원문을 자르면 키가 거부 메시지로 샌다. 짧은 본문만 쓰면 그 분기가
+ * 관측 밖이다(변이 W6). 키는 **앞쪽**에 둔다 — 원문을 앞에서부터 자르는 퇴행이 키를 포함하도록.
+ * 두 성질(마스킹 후 길이 > 160, 원문에서 키 위치 < 160)은 `(RV-12)`가 전제로 직접 계산한다.
+ *
+ * **쓰기 경계가 시크릿을 보지 않으므로 이 루트는 정상 경로로 만들어진다**(`write-artifact.mjs`는
+ * `scanForSecrets`를 부르지 않는다 — 마스킹 축은 `--secret-scan` 단계와 렌더에만 있다). 즉
+ * 도그푸딩 1회차가 밟은 상태 그대로다: 기록은 성공했고, `--secret-scan`만 FAIL이다.
+ *
+ * 예시값은 AWS 문서의 공개 예시 키이며 결함 ③(40자 연속 오탐)과 무관한 패턴을 골랐다 —
+ * 오탐 계열로 만들면 스캐너 수정(슬라이스 C) 때 이 단언의 의미가 함께 흔들린다.
+ */
+const LEAK_PAYLOAD = "AKIAIOSFODNN7EXAMPLE";
+const LEAK_FILLER =
+  " 이 문장은 거부 메시지의 발췌가 160자에서 잘리는 분기를 타도록 본문을 길게 만드는 채움이며, " +
+  "키는 앞쪽에 있어 원문을 앞에서부터 자르는 퇴행이 생기면 그대로 드러난다. 채움 문장은 여기서 끝난다.";
+const LEAKING_TEXTS = Object.freeze(Object.fromEntries(
+  Object.entries(HONEST_TEXTS).map(([layer, base]) => [layer, `${base} 배포 키 ${LEAK_PAYLOAD}를 설정 파일에 남겼다.${LEAK_FILLER}`])
+));
+let LEAKING_ROOT_CACHE;
+function buildLeakingRenderRoot() {
+  if (LEAKING_ROOT_CACHE === undefined) LEAKING_ROOT_CACHE = buildRenderRootWith(LEAKING_TEXTS);
+  return LEAKING_ROOT_CACHE;
+}
+
+function buildRenderRootWith(texts) {
   const FIXED_AT = "2026-09-01T00:00:00Z";
   try {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-honest-"));
@@ -5424,7 +5486,7 @@ function buildHonestRenderRoot() {
     );
 
     const collected = run("collect-git-facts.mjs", ["--repo", repo, "--identity", OWNER_EMAIL, "--out", root]);
-    if (collected.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+    if (collected.status !== 0) return null;
 
     const cfgIn = path.join(tmp, "config-in.json");
     fs.writeFileSync(cfgIn, JSON.stringify({
@@ -5437,12 +5499,12 @@ function buildHonestRenderRoot() {
       snippetQuoting: false,
     }), "utf8");
     const cfg = run("write-config.mjs", ["--in", cfgIn, "--root", root, "--updated-at", FIXED_AT]);
-    if (cfg.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+    if (cfg.status !== 0) return null;
 
     const ev = JSON.parse(fs.readFileSync(path.join(root, "evidence.json"), "utf8"));
     const commit = (ev.commits ?? []).find((c) => c.excluded !== true);
     const file = (commit?.files ?? [])[0];
-    if (commit === undefined || file === undefined) { HONEST_ROOT_CACHE = null; return null; }
+    if (commit === undefined || file === undefined) return null;
 
     // **`coverage`를 계층 스키마에 맞춰 좁힌다.** 원장의 `coverage`에는 산출물 계층이
     // 받지 않는 키가 있다 — `isShallowClone`이 그것이고, 네 계층의 `$defs.coverage`는
@@ -5483,32 +5545,30 @@ function buildHonestRenderRoot() {
       id: careerIds[0], basis: "commit", evidence: cite,
       verification: { status: "verified", attempts: 1, reasonCode: null },
       origin: "generated",
-      text: "픽스처 레포의 초기 커밋으로 README를 작성했다.",
+      text: texts.career,
     }]);
-    if (w1.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+    if (w1.status !== 0) return null;
 
     const kmIds = ["km:h01"];
     const w2 = write("knowledge-map", [{
       id: kmIds[0], basis: "inference", evidence: cite, parentRefs: careerIds,
       verification: { status: "verified", attempts: 1, reasonCode: null },
       origin: "generated", topic: "문서화",
-      text: "저장소 문서를 스스로 작성해 본 경험이 있다.",
+      text: texts["knowledge-map"],
     }]);
-    if (w2.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+    if (w2.status !== 0) return null;
 
     const w3 = write("gap-report", [{
       id: "gap:h01", basis: "inference", evidence: cite, parentRefs: kmIds,
       verification: { status: "verified", attempts: 1, reasonCode: null },
       origin: "generated", topic: "문서화",
-      text: "문서화 경험은 있으나 규모가 작다.",
+      text: texts["gap-report"],
       selfAssessment: "자가진단 원문 — 정직한 루트 픽스처.",
     }]);
-    if (w3.status !== 0) { HONEST_ROOT_CACHE = null; return null; }
+    if (w3.status !== 0) return null;
 
-    HONEST_ROOT_CACHE = { root, repo, careerIds, kmIds };
-    return HONEST_ROOT_CACHE;
+    return { root, repo, careerIds, kmIds };
   } catch {
-    HONEST_ROOT_CACHE = null;
     return null;
   }
 }
@@ -5613,11 +5673,16 @@ function runRenderGateSmoke() {
   //      판독 실패를 통과로 강등하면 **이 게이트를 없애는 가장 쉬운 방법이 스키마 파일을
   //      지우는 것**이 된다(절대 규칙 6). 모듈을 직접 불러 미지 계층으로 확인한다 —
   //      스키마 파일을 실제로 지우면 다른 절 전부가 함께 무너져 관측이 흐려진다.
+  //      **마스킹 재검사도 같은 규율을 진다(2026-09-28).** `checkRenderSecrets`가 스키마를 못 읽었을
+  //      때 `[]`를 돌려주면 「면제 정보가 없으니 넘긴다」가 되어 검사가 통째로 빠진다 — 적대적
+  //      리뷰의 변이 W3이 보강 전 단언을 전부 통과했다. 같은 성질이므로 같은 단언에 싣는다.
   {
     const problems = checkRenderInput("no-such-layer", real ?? {});
-    const ok = Array.isArray(problems) && problems.length >= 1 && problems[0].includes("계층 스키마");
-    if (!ok) console.log(`    실제: ${JSON.stringify(problems)}`);
-    report(ok, "(RV-4) 금지 방향: 계층 스키마를 읽지 못하면 위반으로 돌려준다(판독 실패를 검사 생략으로 강등 금지)");
+    const secretProblems = checkRenderSecrets("no-such-layer", real ?? {});
+    const ok = Array.isArray(problems) && problems.length >= 1 && problems[0].includes("계층 스키마") &&
+      Array.isArray(secretProblems) && secretProblems.length >= 1 && secretProblems[0].includes("계층 스키마");
+    if (!ok) console.log(`    실제: 입력게이트=${JSON.stringify(problems)} 마스킹=${JSON.stringify(secretProblems)}`);
+    report(ok, "(RV-4) 금지 방향: 계층 스키마를 읽지 못하면 입력 게이트와 마스킹 재검사가 둘 다 위반으로 돌려준다(판독 실패를 검사 생략으로 강등 금지)");
   }
 
   // ---- (RV-6)~(RV-8) 인용 재검증 게이트 — 라운드 2 처방 8 ----
@@ -5689,6 +5754,216 @@ function runRenderGateSmoke() {
       const ok = bare.status === 2 && noRepo.status === 2;
       if (!ok) console.log(`    실제: 둘다없음=${bare.status} repo없음=${noRepo.status}`);
       report(ok, "(RV-8) 금지 방향: --root·--repo 중 하나라도 없으면 exit 2다(부재를 검사 생략으로 강등 금지)");
+    }
+  }
+
+  // ---- (RV-9)~(RV-13) 마스킹 재검사 — 도그푸딩 1회차 결함 ④ ----
+  //      **닫는 격차는 실측된 것이다**: `--secret-scan`이 exit 1인 상태에서 렌더가 exit 0이었고
+  //      걸린 문자열이 `knowledge-map.md`에 그대로 실렸다. 렌더가 재실행하던 것은 인용 축
+  //      하나였고, 두 SKILL.md의 「앞 단계의 인용 검증을 다시 돌린다」에 마스킹 축은 없었다.
+  //
+  //      **이 절은 적대적 리뷰로 한 번 보강됐다.** 초판 넷((RV-9)~(RV-12))을 세운 뒤 리뷰가
+  //      제안한 변이 여섯이 **실제로** 초판을 통과했다(W1 email 단독 위반을 렌더만 거름 · W2 렌더가
+  //      `nodes`만 스캔 · W3 스키마 판독 실패를 검사 생략으로 · W4 인용이 깨지면 마스킹을 건너뜀 ·
+  //      W6 긴 발췌를 원문에서 자름 · W7 CLI가 career에만 배선). 각 단언의 주석이 어느 변이를
+  //      닫는지 적는다.
+  const LEAK = buildLeakingRenderRoot();
+  const LAYERS3 = ["career", "knowledge-map", "gap-report"];
+  const rv9Outs = [];
+  const renderAt = (layer, root, repo, outPath) => spawnSync("node", [
+    path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", layer,
+    "--in", path.join(root, `${layer}.json`), "--root", root, "--repo", repo,
+    ...(outPath ? ["--out", outPath] : []),
+  ], { cwd: REPO_ROOT, encoding: "utf8" });
+
+  // ---- (RV-9) 금지 방향: `--secret-scan`이 거부한 산출물은 렌더되지 않는다 — 세 계층 전부 ----
+  //      전제 둘을 같은 단언에 싣는다. (a) 9단계 명령이 **실제로 exit 1**이다 — 도그푸딩이
+  //      밟은 상태의 재현이며, 이것이 없으면 「유출이 없어서 렌더가 막히지 않았다」와 구별되지
+  //      않는다. (b) **인용 재검증은 통과한다** — 이 루트를 막을 수 있는 축이 마스킹 하나뿐이라는
+  //      고유성이다. 그리고 출력에 `[VERIFY]`가 **없어야** 한다 — 막은 것이 어느 게이트인지를
+  //      판정에 넣는다. **세 계층을 CLI로 각각 돌린다** — 함수 단위 동치((RV-11))는 `main()`의
+  //      배선을 보지 않으므로, 한 계층에만 배선하는 퇴행(W7)은 여기서만 잡힌다.
+  {
+    if (LEAK === null) {
+      report(false, "(RV-9) 전제: 유출이 섞인 정직한 루트를 만들지 못했다");
+    } else {
+      const bad = [];
+      for (const layer of LAYERS3) {
+        const inPath = path.join(LEAK.root, `${layer}.json`);
+        const step = spawnSync("node", [
+          path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "--secret-scan", inPath,
+        ], { cwd: REPO_ROOT, encoding: "utf8" });
+        const verifyClean = checkRenderVerification({ layer, inPath, root: LEAK.root, repoPath: LEAK.repo });
+        const outPath = path.join(os.tmpdir(), `devcareer-rv9-${layer}-${crypto.randomBytes(6).toString("hex")}.md`);
+        const r = renderAt(layer, LEAK.root, LEAK.repo, outPath);
+        const out = (r.stdout ?? "") + (r.stderr ?? "");
+        rv9Outs.push(out);
+        const wrote = fs.existsSync(outPath);
+        const premises = step.status === 1 && verifyClean.length === 0;
+        const ok = premises && r.status === 1 && !wrote &&
+          out.includes("[SECRET]") && out.includes("aws-access-key") && !out.includes("[VERIFY]");
+        if (!ok) bad.push(`${layer}: 9단계 exit=${step.status} 재검증위반=${verifyClean.length} 렌더 exit=${r.status} 파일생성=${wrote} 출력=${JSON.stringify(out.slice(0, 120))}`);
+      }
+      const ok = bad.length === 0;
+      if (!ok) console.log(`    실제: ${JSON.stringify(bad)}`);
+      report(ok, "(RV-9) 금지 방향: --secret-scan이 exit 1인 산출물은 인용 재검증을 통과해도 세 계층 전부 exit 1이고 마크다운이 생기지 않는다(결함 ④ — 마스킹 축의 재실행)");
+    }
+  }
+
+  // ---- (RV-10) 허용 방향: 이메일 자리의 이메일은 렌더를 막지 않는다 — 면제가 실제로 쓰인다 ----
+  //      금지 방향만 두면 **전부 거부**해도 초록이다. 그런데 허용 방향도 공허할 수 있다 —
+  //      정직한 산출물에 `email` 패턴이 발화하는 문자열이 없으면 「면제가 옳게 동작한다」와
+  //      「면제할 것이 없다」가 구별되지 않는다(참값 0 트리). 그래서 **발화 전제**를 함께 본다:
+  //      세 계층 각각에 `redactSecrets`가 `email`로 잡는 문자열이 실제로 있어야 한다.
+  //      (RV-3)은 CLI 종단으로 같은 허용 방향을 보지만 그 발화 전제를 보지 않는다.
+  {
+    if (HONEST === null) {
+      report(false, "(RV-10) 전제: 정직한 루트가 없어 관측할 수 없다");
+    } else {
+      const rows = [];
+      for (const layer of LAYERS3) {
+        let inst = null;
+        try { inst = JSON.parse(fs.readFileSync(path.join(HONEST.root, `${layer}.json`), "utf8")); } catch { /* 아래에서 FAIL */ }
+        let emailHits = 0;
+        if (inst !== null) {
+          walkStringValues(inst, ({ value }) => {
+            if (redactSecrets(value).hits.some((h) => h.name === "email")) emailHits += 1;
+          });
+        }
+        rows.push({ layer, read: inst !== null, emailHits, problems: inst === null ? ["판독 실패"] : checkRenderSecrets(layer, inst) });
+      }
+      const exercised = rows.every((x) => x.read && x.emailHits >= 1);
+      const clean = rows.every((x) => x.problems.length === 0);
+      const ok = exercised && clean;
+      if (!ok) console.log(`    실제: ${JSON.stringify(rows.map((x) => ({ layer: x.layer, email: x.emailHits, problems: x.problems.slice(0, 2) })))}`);
+      report(ok, "(RV-10) 허용 방향: email 패턴이 실제로 발화하는 이메일 자리를 가진 정직한 세 계층을 마스킹 재검사가 통과시킨다(면제가 공허하지 않다)");
+    }
+  }
+
+  // ---- (RV-11) 동치: 9단계 검사기와 렌더 재검사가 같은 코퍼스에서 같은 판정을 낸다 ----
+  //      두 호출자가 같은 함수를 부른다는 것은 **오늘의 사실**이지 불변식이 아니다. 렌더 쪽이
+  //      패턴을 거르거나 스키마를 달리 고르거나 스캔 범위를 좁히는 순간 「9단계는 막는데 렌더는
+  //      통과시키는」 조합이 다시 생기고, 금지 방향 한 건((RV-9), AWS 키 하나)으로는 그것이 보이지
+  //      않는다. 그래서 코퍼스를 두 경로에 넣어 (필드 경로, 패턴) 집합이 일치하는지 본다. 9단계
+  //      쪽은 SKILL.md가 적은 **그 명령**을 실제로 실행한다.
+  //
+  //      **코퍼스는 셋이다.** ① SB 케이스 10건(케이스 파일이 정본) ② 오염 회차 본 산출물 세 계층
+  //      (PASS 대조군 포함) ③ **합성 두 건** — `nodes` 밖(`sourceRepoHead`)의 시크릿(W2: 렌더가
+  //      `nodes`만 스캔하는 퇴행)과 자유 서술의 이메일(W1: `email` 단독 위반을 렌더만 거르는 퇴행).
+  //      ①②만으로는 위반이 전부 `nodes` 아래에 있고 `email` 패턴이 한 번도 발화하지 않아 두
+  //      퇴행이 초판을 통과했다.
+  //
+  //      **「모든 패턴이 관측됐다」의 기준을 스캐너 자신에서 읽는다.** `redact.mjs`는 패턴 목록을
+  //      내보내지 않고 슬라이스 A·핀 대상이라 export를 더할 수도 없으므로, 그 파일의 `name:`
+  //      리터럴을 판독해 기대 집합으로 쓴다. 스캐너에 패턴이 늘면(결함 ③ 수정 때 그럴 수 있다)
+  //      이 코퍼스가 따라오기 전까지 FAIL한다 — 새 패턴에 대한 두 경로의 동치가 관측 밖으로
+  //      조용히 빠지지 않게 하는 의도된 마찰이다. 판정이 한쪽으로만 쏠리면 일치가 공허해지므로
+  //      **두 판정이 모두 나타나는 것**도 전제로 둔다.
+  {
+    const RUN = path.join(REPO_ROOT, "tests", "contamination", "runs", "machine", "run-01");
+    const sbDir = path.join(REPO_ROOT, "tests", "contamination", "cases", "secret-bypass");
+    const corpus = [];
+    let synthCount = 0;
+    let runCount = 0;
+    let caseFiles = [];
+    try { caseFiles = fs.readdirSync(sbDir).filter((f) => f.endsWith(".json")).sort(); } catch { /* 아래에서 FAIL */ }
+    for (const f of caseFiles) {
+      const c = JSON.parse(fs.readFileSync(path.join(sbDir, f), "utf8"));
+      corpus.push({ id: c.caseId, layer: c.layer, file: path.join(RUN, "secret", c.caseId, STATE_DIR_NAME, `${c.layer}.json`) });
+    }
+    for (const layer of LAYERS3) {
+      corpus.push({ id: `run-01/${layer}`, layer, file: path.join(RUN, STATE_DIR_NAME, `${layer}.json`) });
+      runCount += 1;
+    }
+    // 합성 두 건 — 정직한 career 산출물을 복제해 한 필드씩 바꾼다. 9단계 CLI는 파일명에서 계층을
+    // 읽으므로(`runSecretScan`) 임시 디렉터리에 `career.json`이라는 이름으로 둔다.
+    let honestCareer = null;
+    try { honestCareer = HONEST === null ? null : JSON.parse(fs.readFileSync(path.join(HONEST.root, "career.json"), "utf8")); } catch { /* 아래에서 FAIL */ }
+    if (honestCareer !== null) {
+      const synth = [
+        ["synth/outside-nodes", { ...honestCareer, sourceRepoHead: LEAK_PAYLOAD }],
+        ["synth/email-in-text", { ...honestCareer, nodes: honestCareer.nodes.map((n, i) => (i === 0 ? { ...n, text: `${n.text} 연락처 leak.person@example.com` } : n)) }],
+      ];
+      for (const [id, inst] of synth) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-rv11-"));
+        const file = path.join(dir, "career.json");
+        fs.writeFileSync(file, JSON.stringify(inst), "utf8");
+        corpus.push({ id, layer: "career", file });
+        synthCount += 1;
+      }
+    }
+    const redactText = readRepoTextSafe("scripts/lib/redact.mjs").text ?? "";
+    const definedPatterns = [...redactText.matchAll(/\{\s*name:\s*"([a-z0-9-]+)",\s*re:/g)].map((m) => m[1]);
+
+    const tuples = (lines) => lines
+      .map((l) => /필드 '([^']+)'에 시크릿 패턴 \[([^\]]*)\]/.exec(l))
+      .filter((m) => m !== null)
+      .map((m) => `${m[1]}::${m[2]}`)
+      .sort();
+    const mismatches = [];
+    const seenPatterns = new Set();
+    let fails = 0;
+    let passes = 0;
+    for (const x of corpus) {
+      if (!fs.existsSync(x.file)) { mismatches.push(`${x.id}: 산출물 없음`); continue; }
+      const step = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "--secret-scan", x.file,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const stepLines = ((step.stdout ?? "") + (step.stderr ?? "")).split("\n").filter((l) => l.includes("ARTIFACT_SECRET_LEAK"));
+      const renderLines = checkRenderSecrets(x.layer, JSON.parse(fs.readFileSync(x.file, "utf8")));
+      const a = tuples(stepLines);
+      const b = tuples(renderLines);
+      const stepFail = step.status === 1;
+      const renderFail = renderLines.length > 0;
+      if (stepFail) fails += 1; else passes += 1;
+      for (const t of a) for (const p of t.split("::")[1].split(", ")) seenPatterns.add(p);
+      if (stepFail !== renderFail || JSON.stringify(a) !== JSON.stringify(b) || renderLines.length !== b.length) {
+        mismatches.push(`${x.id}: 9단계=${stepFail ? "FAIL" : "PASS"}${JSON.stringify(a)} 렌더=${renderFail ? "FAIL" : "PASS"}${JSON.stringify(b)}`);
+      }
+    }
+    const missingPatterns = definedPatterns.filter((p) => !seenPatterns.has(p));
+    const nonVacuous = caseFiles.length >= 1 && honestCareer !== null && definedPatterns.length >= 1 &&
+      fails >= 1 && passes >= 1 && missingPatterns.length === 0;
+    const ok = nonVacuous && mismatches.length === 0;
+    if (!ok) {
+      console.log(`    실제: 코퍼스 ${corpus.length}건(FAIL ${fails} / PASS ${passes}) 스캐너 정의 패턴 ${JSON.stringify(definedPatterns)} ` +
+        `미관측 ${JSON.stringify(missingPatterns)} 불일치 ${JSON.stringify(mismatches.slice(0, 4))}`);
+    }
+    report(ok, `(RV-11) 동치: 9단계 --secret-scan과 렌더 재검사가 코퍼스 ${corpus.length}건(SB ${caseFiles.length} + 회차 본 산출물 ${runCount} + 합성 ${synthCount})에서 판정·필드·패턴까지 일치하고 스캐너의 패턴 ${definedPatterns.length}종을 전부 관측한다`);
+  }
+
+  // ---- (RV-12) 금지 방향: 거부 메시지가 원문 시크릿을 싣지 않는다 ----
+  //      유출을 막는 게이트가 거부 메시지로 원문을 찍으면 CI 로그·터미널 기록이 **두 번째 유출
+  //      경로**가 된다(`secret-scan.mjs` 머리말). 「원문이 없다」만 보면 메시지 자체가 없어도
+  //      초록이므로, 마스킹된 토큰이 **있다**는 것을 함께 본다. 그리고 **발췌가 160자에서 잘리는
+  //      분기를 실제로 탔다**는 것을 전제로 계산한다 — 마스킹 후 길이 > 160, 원문에서 키 위치 < 160.
+  //      짧은 본문만 쓰면 그 분기에서 원문을 자르는 퇴행(W6)이 관측 밖이다.
+  {
+    const longBranch = Object.values(LEAKING_TEXTS).every((t) => redactSecrets(t).text.length > 160 && t.indexOf(LEAK_PAYLOAD) < 160);
+    const outsOk = rv9Outs.length === LAYERS3.length &&
+      rv9Outs.every((o) => o.includes("[SECRET]") && o.includes("[REDACTED:") && !o.includes(LEAK_PAYLOAD));
+    const ok = longBranch && outsOk;
+    if (!ok) console.log(`    실제: 긴발췌분기전제=${longBranch} 출력 ${rv9Outs.length}건 원문노출=${rv9Outs.map((o) => o.includes(LEAK_PAYLOAD))} 마스킹토큰=${rv9Outs.map((o) => o.includes("[REDACTED:"))}`);
+    report(ok, "(RV-12) 금지 방향: 마스킹 재검사의 거부 메시지는 원문 없이 마스킹된 발췌만 싣는다 — 160자 절단 분기 포함(거부 메시지가 두 번째 유출 경로가 되지 않는다)");
+  }
+
+  // ---- (RV-13) 동시 보고: 인용이 깨진 산출물에 섞인 유출도 보고된다 ----
+  //      렌더는 두 검사를 **둘 다 돌리고 함께 보고한다**(`main()` 주석). 그 약속이 관측되지 않으면
+  //      「인용이 이미 FAIL이면 마스킹은 건너뛴다」는 최적화(W4)가 초판을 통과한다 — 안전 성질
+  //      (마크다운 미생성)은 그대로라 다른 단언이 울리지 않기 때문이다. 그러면 사용자는 인용을
+  //      고친 뒤에야 유출을 알게 된다. 유출 루트를 **엉뚱한 레포**로 렌더해 인용 재검증을 깨고,
+  //      두 접두사가 한 출력에 함께 나오는지 본다.
+  {
+    if (LEAK === null) {
+      report(false, "(RV-13) 전제: 유출이 섞인 정직한 루트를 만들지 못했다");
+    } else {
+      const outPath = path.join(os.tmpdir(), `devcareer-rv13-${crypto.randomBytes(6).toString("hex")}.md`);
+      const r = renderAt("career", LEAK.root, REPO_ROOT, outPath);
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      const wrote = fs.existsSync(outPath);
+      const ok = r.status === 1 && !wrote && out.includes("[VERIFY]") && out.includes("[SECRET]") && !out.includes(LEAK_PAYLOAD);
+      if (!ok) console.log(`    실제: exit=${r.status} 파일생성=${wrote} VERIFY=${out.includes("[VERIFY]")} SECRET=${out.includes("[SECRET]")}`);
+      report(ok, "(RV-13) 동시 보고: 인용 재검증이 FAIL인 산출물에 섞인 유출도 [SECRET]으로 함께 보고되고 마크다운은 생기지 않는다(한쪽에서 끊지 않는다)");
     }
   }
 }

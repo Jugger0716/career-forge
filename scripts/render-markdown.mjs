@@ -45,7 +45,12 @@
 //     --root·--repo: **둘 다 필수**다. 렌더 직전 인용 검증을 다시 돌리는 데 쓴다.
 //     --out 생략 시 stdout으로 출력한다.
 //
-// 종료 코드: 0 = 렌더 성공 / 1 = 게이트 거부(스키마·해시·재검증) / 2 = 입력
+// **렌더 직전에 다시 도는 검사는 둘이다 — 인용 재검증과 마스킹 재검사.** 두 SKILL.md가
+// 렌더 앞에 두는 두 검사 단계(인용 검증 · `--secret-scan`)를 **그 자리에서 다시 계산**한다.
+// 마스킹 축이 빠져 있던 동안에는 `--secret-scan`이 FAIL(exit 1)인 산출물이 exit 0으로
+// 렌더돼 그 문자열이 사용자 문서에 그대로 실렸다 — 도그푸딩 1회차가 실측한 결함 ④다.
+//
+// 종료 코드: 0 = 렌더 성공 / 1 = 게이트 거부(스키마·해시·재검증·마스킹) / 2 = 입력
 // 오류(파일 부재·JSON 파싱 실패·미지원 계층·필수 인자 누락). verify-evidence.mjs의
 // "입력 오류는 결론을 낼 수 없음 계열"(콜드 리뷰 A-32) 규약을 그대로 따른다.
 
@@ -56,6 +61,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { validateInstance } from "./lib/schema-validate.mjs";
 import { computeArtifactContentHash } from "./lib/artifact-contract.mjs";
 import { verifyEvidence, KNOWN_LAYERS } from "./verify-evidence.mjs";
+import { scanForSecrets } from "./lib/secret-scan.mjs";
 
 import {
   badgeForNode,
@@ -406,6 +412,48 @@ export function checkRenderVerification({ layer, inPath, root, repoPath }) {
   return problems;
 }
 
+/**
+ * 렌더 직전 **마스킹 검사를 다시 돌린다** — 도그푸딩 1회차 결함 ④.
+ *
+ * **처방 8의 논거가 이 축에 그대로 적용된다.** 인용 축은 재실행으로 닫혔는데 마스킹 축은
+ * 영수증조차 없었다 — `--secret-scan` 단계를 건너뛰거나 그 FAIL을 무시해도 사용자가 읽는
+ * 마크다운은 그대로 나왔다(실측: 그 단계가 exit 1인 상태에서 렌더가 exit 0이었고, 걸린
+ * 문자열이 `knowledge-map.md`에 실렸다). 그때는 오탐이라 무해했지만 진짜 유출이었어도 같은
+ * 경로로 실렸다.
+ *
+ * **같은 검사를 같은 스키마로 돌린다.** 패턴도 면제 규칙도 새로 만들지 않고
+ * `scanForSecrets`를 그대로 부른다 — `validate-plugin.mjs --secret-scan`과 판정이 갈리는 순간
+ * 「9단계는 막는데 렌더는 통과시키는」 조합이 다시 생긴다. 스키마도 `--secret-scan`과 같은
+ * `schemas/<layer>.schema.json`이다(`format: "email"` 면제가 여기서 온다). 두 호출자의 판정이
+ * 같은 코퍼스에서 일치하는지는 `(RV-11)`이 관측한다.
+ *
+ * **원문 텍스트를 스캔하지 않는다.** 산출물 JSON을 문자열째로 훑으면 스키마가 이메일 자리로
+ * 선언한 필드에서 `email` 패턴이 반드시 발화해 정상 산출물이 전부 거부된다 — 그러면 남는
+ * 선택지는 이 게이트를 끄는 것뿐이다(`secret-scan.mjs` 머리말이 같은 이유로 그 설계를 버렸다).
+ *
+ * **메시지에 원문을 싣지 않는다.** `excerpt`는 `scanForSecrets`가 이미 마스킹한 텍스트다 —
+ * 원문을 담으면 거부 메시지가 CI 로그·터미널 기록으로 새는 두 번째 유출 경로가 된다
+ * (`(RV-12)`가 관측한다).
+ *
+ * **판독 실패를 「검사 생략」으로 강등하지 않는다(절대 규칙 6).** 스키마를 못 읽으면 면제
+ * 정보 없이 스캔할 수도, 조용히 통과시킬 수도 없다 — 그것이 곧 위반이다.
+ *
+ * @param {string} layer
+ * @param {unknown} instance
+ * @returns {string[]} 위반 사유. 빈 배열이면 적합.
+ */
+export function checkRenderSecrets(layer, instance) {
+  const { schema, error } = loadLayerSchema(layer);
+  if (error !== null) return [error];
+  let found;
+  try {
+    found = scanForSecrets(schema, instance);
+  } catch (e) {
+    return [`마스킹 재검사를 실행하지 못했습니다: ${e.message}`];
+  }
+  return found.map((v) => `필드 '${v.path}'에 시크릿 패턴 [${v.patterns.join(", ")}] 발견: "${v.excerpt}"`);
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const opts = { layer: null, inPath: null, outPath: null, root: null, repoPath: null };
@@ -467,16 +515,35 @@ function main() {
   // 이 게이트는 「그것이 **지금** 검사기를 통과하는지」를 묶는다. 순서를 뒤집지
   // 않는 이유는 스키마·해시 축이 먼저 발화해야 (RV-1)(RV-2)의 고유 관측점이
   // 유지되기 때문이다.
+  //
+  // **마스킹 재검사(결함 ④)는 재검증과 함께 돌리고 함께 보고한다 — 한쪽에서 끊지 않는다.**
+  // 순서를 정해 앞 게이트에서 끊으면 두 축이 서로의 관측점을 가린다: 오염 코퍼스
+  // `runs/machine/run-01/career.json`은 인용 재검증에 FAIL하는 **동시에** 가짜 해시 두 건이
+  // `aws-secret-key` 패턴에 걸린다(결함 ③ 계열 오탐). 마스킹을 앞에 두면 `(RV-6)`이 보는
+  // `[VERIFY]`가 사라지고, 뒤에 두면 인용이 깨진 산출물에 섞인 진짜 유출이 보고되지 않는다.
+  // 둘 다 순수 판정이고 어느 쪽이 걸려도 마크다운은 만들어지지 않는다 — 그 안전 성질은
+  // 순서와 무관하므로 사용자에게 **전부** 보여 준다.
   const verifyProblems = checkRenderVerification({
     layer: opts.layer, inPath: opts.inPath, root: opts.root, repoPath: opts.repoPath,
   });
-  if (verifyProblems.length > 0) {
+  const secretProblems = checkRenderSecrets(opts.layer, instance);
+  if (verifyProblems.length > 0 || secretProblems.length > 0) {
     for (const p of verifyProblems) console.error(`[VERIFY] ${p}`);
-    console.error(
-      "[render-markdown] 인용 재검증을 통과하지 못한 산출물은 렌더하지 않습니다. " +
-      "「검증했다」와 「검증했다고 말했다」를 구별하는 유일한 수단이 이 재실행입니다 — " +
-      "기록된 판정을 믿지 않고 그 자리에서 다시 계산합니다."
-    );
+    for (const p of secretProblems) console.error(`[SECRET] ${p}`);
+    if (verifyProblems.length > 0) {
+      console.error(
+        "[render-markdown] 인용 재검증을 통과하지 못한 산출물은 렌더하지 않습니다. " +
+        "「검증했다」와 「검증했다고 말했다」를 구별하는 유일한 수단이 이 재실행입니다 — " +
+        "기록된 판정을 믿지 않고 그 자리에서 다시 계산합니다."
+      );
+    }
+    if (secretProblems.length > 0) {
+      console.error(
+        "[render-markdown] 시크릿 패턴이 남은 산출물은 렌더하지 않습니다. 마크다운은 사용자가 " +
+        "읽고 옮기는 유일한 표면이라, 앞 단계의 마스킹 검사가 FAIL이었거나 건너뛰어졌어도 " +
+        "여기서 다시 계산합니다. 산출물을 고쳐 scripts/write-artifact.mjs로 다시 기록하십시오."
+      );
+    }
     process.exit(1);
   }
 
