@@ -51,8 +51,17 @@
 // 렌더돼 그 문자열이 사용자 문서에 그대로 실렸다 — 도그푸딩 1회차가 실측한 결함 ④다.
 //
 // 종료 코드: 0 = 렌더 성공 / 1 = 게이트 거부(스키마·해시·재검증·마스킹) / 2 = 입력
-// 오류(파일 부재·JSON 파싱 실패·미지원 계층·필수 인자 누락). verify-evidence.mjs의
-// "입력 오류는 결론을 낼 수 없음 계열"(콜드 리뷰 A-32) 규약을 그대로 따른다.
+// 오류(파일 부재·JSON 파싱 실패·미지원 계층·필수 인자 누락·`--out`이 `--in`이거나 `.json`).
+// verify-evidence.mjs의 "입력 오류는 결론을 낼 수 없음 계열"(콜드 리뷰 A-32) 규약을 그대로 따른다.
+//
+// **거부되면 `--out` 자리의 이전 렌더 결과를 무효 표식으로 바꾼다(2026-09-29, 사용자 결정).**
+// 게이트가 거부하면 새 마크다운은 만들어지지 않지만, 그 자리에 **이전에 성공한 렌더**가 남아 있으면
+// 사용자는 그것을 지금 산출물의 문서로 읽는다 — 거부된 산출물을 뒷받침하지 않는 문서가 최신처럼
+// 남는 것이다. 지우지 않고 덮어쓰는 이유: 파일을 지우면 사용자가 그 `.md`에 손으로 더한 것까지
+// 함께 사라진다. 무효 표식에는 원문도 발췌도 싣지 않는다. 이전 파일이 없으면 아무것도 만들지 않는다.
+//
+// **`--out`이 `--in`과 같거나 `.json`이면 거부한다(exit 2).** 그러면 게이트를 통과한 뒤 정본
+// JSON을 마크다운으로 덮어쓴다 — 정본이 사라지고 이후 모든 검사가 파싱 실패로 무너진다.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -454,6 +463,34 @@ export function checkRenderSecrets(layer, instance) {
   return found.map((v) => `필드 '${v.path}'에 시크릿 패턴 [${v.patterns.join(", ")}] 발견: "${v.excerpt}"`);
 }
 
+/**
+ * 게이트 거부 시 `--out` 자리에 **이미 있는** 이전 렌더 결과를 무효 표식으로 바꾼다.
+ * 없으면 아무것도 만들지 않는다 — 거부된 렌더가 새 파일을 남기지 않는다는 성질((RV-9))을 지킨다.
+ * 표식에는 거부된 축 이름만 싣고 산출물의 어떤 값도 싣지 않는다.
+ *
+ * @param {string|null} outPath
+ * @param {string} layer
+ * @param {string[]} axes 거부한 게이트의 접두사 이름(예: ["VERIFY", "SECRET"])
+ */
+function invalidateStaleOutput(outPath, layer, axes) {
+  if (!outPath) return;
+  try {
+    if (!fs.statSync(outPath).isFile()) return;
+  } catch {
+    return; // 이전 파일이 없다 — 만들지 않는다.
+  }
+  const notice =
+    "# 이 문서는 더 이상 유효하지 않습니다\n\n" +
+    `렌더 게이트가 \`${layer}.json\`을 거부했습니다(${axes.join(" · ")}). 이 자리에 있던 이전 렌더 결과는\n` +
+    "지금 산출물을 뒷받침하지 않으므로 지웠습니다. 거부 사유는 렌더 명령의 오류 출력에 있습니다.\n";
+  try {
+    fs.writeFileSync(outPath, notice, "utf8");
+    console.error(`[render-markdown] 이전 렌더 결과를 무효 표식으로 바꿨습니다: ${outPath}`);
+  } catch (e) {
+    console.error(`[경고] 이전 렌더 결과를 무효화하지 못했습니다: ${outPath} (${e.code ?? e.message})`);
+  }
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const opts = { layer: null, inPath: null, outPath: null, root: null, repoPath: null };
@@ -489,6 +526,17 @@ function main() {
     process.exit(2);
   }
 
+  if (opts.outPath) {
+    const sameAsIn = path.resolve(opts.outPath) === path.resolve(opts.inPath);
+    if (sameAsIn || /\.json$/i.test(opts.outPath)) {
+      console.error(
+        `[INPUT_ERROR] --out이 ${sameAsIn ? "--in과 같은 파일" : "JSON 파일"}입니다 — 마크다운은 .md로 쓰십시오. ` +
+        "정본 JSON을 마크다운으로 덮어쓰지 않습니다."
+      );
+      process.exit(2);
+    }
+  }
+
   const instance = readJsonOrExit(opts.inPath);
 
   // **입력 게이트(콜드 리뷰 라운드 2 처방 1).** 이 검사가 붙기 전 이 CLI는 아무 JSON이나
@@ -508,6 +556,7 @@ function main() {
       "검증을 통과하지 않은 JSON을 렌더하면 사용자가 읽는 유일한 표면이 근거 없는 주장을 " +
       "「검증 완료」로 제시하게 됩니다. 산출물은 scripts/write-artifact.mjs로 기록하십시오."
     );
+    invalidateStaleOutput(opts.outPath, opts.layer, ["SCHEMA"]);
     process.exit(1);
   }
 
@@ -544,6 +593,10 @@ function main() {
         "여기서 다시 계산합니다. 산출물을 고쳐 scripts/write-artifact.mjs로 다시 기록하십시오."
       );
     }
+    invalidateStaleOutput(opts.outPath, opts.layer, [
+      ...(verifyProblems.length > 0 ? ["VERIFY"] : []),
+      ...(secretProblems.length > 0 ? ["SECRET"] : []),
+    ]);
     process.exit(1);
   }
 

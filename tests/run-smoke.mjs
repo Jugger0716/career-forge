@@ -549,7 +549,12 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       (RV-15)(보고 완전성)·(RV-16)(origin 무관)·(RV-17)(INCONCLUSIVE 거부)·(SP-6f)(예시가 병합 후
   //       노드 스키마를 통과) 612 → 617. (RV-9)·(RV-13)·(SP-6b)·(SP-6e)·(AC-55)는 라벨을 유지한 채
   //       대상을 넓혔다(stdout 경로 · 상세 · 주석 밖 본문 · 모든 json 블록 · basis enum 전량).
-  default: 617,
+  //       3라운드(새 제안 20건, 생존 16건)의 이번 세션 몫 9건과 렌더 동작 버그 둘을 막는 (RV-18)(패턴별
+  //       CLI 종단)·(RV-19)(긴 값·코드 펜스)·(RV-20)(거부 시 이전 .md 무효화)·(RV-21)(--out이 --in·.json이면
+  //       거부)·(SP-12)(SKILL.md 마스킹 단계 문구) 617 → 622. (RV-9)·(RV-14)·(SP-6d)·(SP-6f)·이메일
+  //       드리프트는 라벨을 유지한 채 대상을 넓혔다(빈 디렉터리 · 선택 필드와 둘째 노드 · 병합 불변식 둘 ·
+  //       선언된 대상 계층 · 경계값 둘).
+  default: 622,
   // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
@@ -1449,6 +1454,10 @@ function runSecretScanOracleSmoke() {
       "a@b.c",
       "two words@example.com",
       "no-at-sign.example.com",
+      // 3라운드: `@`가 둘 이상 · 공백 아닌 구분자로 이은 두 주소. 이 둘이 없으면 술어를 `\S`로
+      // 「단순화」하는 퇴행(T14)이 여섯 경계값 전부에서 스키마와 일치해 통과했다.
+      "a@b@example.com",
+      "dev@example.com,ops@example.com",
     ];
     const schemaVerdicts = samples.map((s) => {
       const errs = validateInstance({ type: "string", format: "email" }, s, {}, "$");
@@ -4318,19 +4327,34 @@ function runSkillPromptContractSmoke() {
     const attemptCodes = codesFrom(probe({
       verification: { status: "verified", attempts: 0, reasonCode: null },
     }));
-    const required = [...new Set([...lockedCodes, ...attemptCodes])].sort();
+    // **판정 템플릿이 밟는 불변식은 넷이다(3라운드).** 초판은 쓰기 경계의 기입 주체 계약 둘만
+    // 발화시켰고, 병합이 집행하는 둘(판정받은 문장을 고침 · 반증된 노드를 뺌)은 프로브 밖이었다 —
+    // 「넓은 주장은 좁혀 쓰고 verified로」라는 개정(T08)이 VERIFIED_CLAIM_REWRITTEN과 모순한 채 통과했다.
+    const prevNode = { id: "sp6d:m", basis: "insufficient", evidence: [], origin: "generated", locked: false,
+      text: "원문 주장.", verification: { status: "not-attempted", attempts: 0, reasonCode: null } };
+    const mergeCodes = (prevNodes, draftNodes) =>
+      (mergeArtifact(probeLayer, { nodes: prevNodes }, { nodes: draftNodes }, { stage: STAGE_FACT_CHECKED }).violations ?? [])
+        .map((v) => v.code);
+    const judged = (text) => ({ id: "sp6d:m", basis: "insufficient", evidence: [], origin: "generated", text,
+      verification: { status: "verified", attempts: 1, reasonCode: null } });
+    const rewriteCodes = mergeCodes([prevNode], [judged("고친 주장.")]);
+    const dropCodes = mergeCodes(
+      [{ ...prevNode, verification: { status: "refuted", attempts: 2, reasonCode: "UNSUPPORTED_CLAIM" } }, { ...prevNode, id: "sp6d:keep" }],
+      [{ ...judged("원문 주장."), id: "sp6d:keep" }],
+    );
+    const required = [...new Set([...lockedCodes, ...attemptCodes, ...rewriteCodes, ...dropCodes])].sort();
 
     // **검출력 전제.** 프로브가 하나도 발화하지 않으면 `required`가 비고 아래 금지
     // 방향이 「요구할 코드가 없어서」 공허하게 통과한다 — 참값 0 트리에서 「검사기를
     // 지운 0건」과 「위반이 없어서 0건」이 구별되지 않는 형태이며, 이 회차에 세 번 만났다.
-    const probesFired = lockedCodes.length >= 1 && attemptCodes.length >= 1;
+    const probesFired = lockedCodes.length >= 1 && attemptCodes.length >= 1 && rewriteCodes.length >= 1 && dropCodes.length >= 1;
     const checkers = allTemplates.filter((p) => roleOf(p) === "checker");
     const missing = checkers
       .map((p) => [rel(p), required.filter((c) => !read(p).includes(c))])
       .filter(([, m]) => m.length >= 1);
     const ok = probesFired && checkers.length >= 1 && missing.length === 0;
     if (!ok) {
-      console.log(`    실제: 프로브 발화 ${JSON.stringify({ locked: lockedCodes, attempts: attemptCodes })} / 판정 템플릿 ${checkers.length}건 중 코드 누락 ${JSON.stringify(missing)}`);
+      console.log(`    실제: 프로브 발화 ${JSON.stringify({ locked: lockedCodes, attempts: attemptCodes, rewrite: rewriteCodes, drop: dropCodes })} / 판정 템플릿 ${checkers.length}건 중 코드 누락 ${JSON.stringify(missing)}`);
     }
     report(ok, `(SP-6d) 판정 역할 템플릿 **전부**가 자기가 밟는 거부 코드(${required.join("·")})를 이름으로 담는다(닻은 하드코딩이 아니라 실제 발화)`);
   }
@@ -4393,38 +4417,78 @@ function runSkillPromptContractSmoke() {
     report(ok, "(SP-6e) 모든 템플릿의 **모든** JSON 예시가 자기 역할의 단계에서 쓰기 경계 위반 0건이다(문구가 아니라 복사되는 물건을 본다)");
   }
 
-  // ---- (SP-6f) 예시는 병합을 거치면 노드 스키마를 통과한다 ----
+  // ---- (SP-6f) 예시는 병합을 거치면 **자기 계층의** 노드 스키마를 통과한다 ----
   //      (SP-6e)는 예시를 쓰기 경계의 **기입 주체 계약**에만 넣는다. 그런데 스키마 조건절
-  //      (`refuted ⇒ attempts const 2` 등)은 그 계약 밖이라, 「첫 시도에 무너뜨렸으니 1이 맞다」며
-  //      예시를 `refuted`/1로 「정정」하는 퇴행이 통과했다 — 15fa4fb가 바로 그 형태를 결함으로 적었다.
+  //      (`refuted ⇒ attempts const 2`, gap-report의 `selfAssessment` required 등)은 그 계약 밖이다.
   //      판정: 예시에 **병합이 채우는 필드**(`locked: false`, 없으면 `verification` 미판정값)를 더해
-  //      세 계층 노드 정의 중 **하나 이상**을 통과해야 한다. 계층을 예시에서 추측하지 않고 셋 모두에
-  //      대어 본다 — 하나라도 통과하면 그 예시는 어느 계층에서는 유효한 모양이다.
-  //      검출력 전제: 알려진 위반(`refuted`/1)을 같은 경로에 넣으면 셋 모두에서 떨어져야 한다.
+  //      템플릿이 **선언한 대상 계층**의 노드 정의를 통과해야 한다.
+  //
+  //      **초판은 세 계층 중 아무 하나만 통과하면 됐다 — 틀렸다(3라운드).** gap-analyzer 예시에서
+  //      `selfAssessment`를 빼는 퇴행(T09)이 gapNode에서는 떨어지는데 knowledgeNode에서 통과해 초록이었다.
+  //      계층을 예시에서 추측하지 않고 템플릿의 `대상 계층:` 선언에서 읽는다(없거나 미지 계층이면 FAIL).
+  //      노드 정의 이름도 하드코딩하지 않고 스키마에서 `…Node` 정의 하나를 찾는다.
+  //      검출력 전제: 알려진 위반(`refuted`/1)이 career에서 떨어지고 `refuted`/2는 통과한다.
   {
-    const NODE_DEFS = [["career", "careerNode"], ["knowledge-map", "knowledgeNode"], ["gap-report", "gapNode"]]
-      .map(([layer, def]) => ({ layer, def, schema: readRepoJsonSafe(`schemas/${layer}.schema.json`).json }));
-    const defsOk = NODE_DEFS.every((d) => d.schema?.$defs?.[d.def] !== undefined);
+    const nodeDefOf = (layer) => {
+      const schema = readRepoJsonSafe(`schemas/${layer}.schema.json`).json;
+      const keys = Object.keys(schema?.$defs ?? {}).filter((k) => /Node$/.test(k));
+      return keys.length === 1 ? { schema, def: keys[0] } : null;
+    };
     const merged = (node) => ({
       ...node,
       locked: false,
       ...(node.verification === undefined ? { verification: { status: "not-attempted", attempts: 0, reasonCode: null } } : {}),
     });
-    const passesSome = (node) => NODE_DEFS.some((d) =>
-      d.schema !== null && validateInstance({ $ref: `#/$defs/${d.def}` }, merged(node), d.schema).length === 0);
-    const examples = [];
+    const passesIn = (node, layers) => layers.some((layer) => {
+      const d = nodeDefOf(layer);
+      return d !== null && validateInstance({ $ref: `#/$defs/${d.def}` }, merged(node), d.schema).length === 0;
+    });
+    const declaredOf = (p) => {
+      const m = /대상 계층:\s*([a-z-]+(?:\s*·\s*[a-z-]+)*)/.exec(read(p));
+      return m === null ? [] : m[1].split("·").map((s) => s.trim());
+    };
+    const bad = [];
+    let examples = 0;
     for (const p of allTemplates) {
+      const layers = declaredOf(p);
+      if (layers.length === 0 || layers.some((l) => !VERIFICATION_LAYERS.includes(l) || nodeDefOf(l) === null)) {
+        bad.push(`${rel(p)}: 대상 계층 선언 없음·미지 ${JSON.stringify(layers)}`);
+        continue;
+      }
       for (const m of read(p).matchAll(/^```json\r?\n([\s\S]*?)^```/gm)) {
-        try { examples.push([rel(p), JSON.parse(m[1])]); } catch { examples.push([rel(p), null]); }
+        examples += 1;
+        let node = null;
+        try { node = JSON.parse(m[1]); } catch { /* 아래에서 FAIL */ }
+        if (node === null || !passesIn(node, layers)) bad.push(`${rel(p)}: 예시가 ${layers.join("·")} 노드 정의를 통과하지 못한다`);
       }
     }
-    const bad = examples.filter(([, n]) => n === null || !passesSome(n)).map(([f]) => f);
     const probe = { id: "car:001", basis: "commit", evidence: [{ ledgerId: "commit:x" }], origin: "generated", text: "프로브.",
       verification: { status: "refuted", attempts: 1, reasonCode: "UNSUPPORTED_CLAIM" } };
-    const probeRejected = !passesSome(probe) && passesSome({ ...probe, verification: { ...probe.verification, attempts: 2 } });
-    const ok = defsOk && probeRejected && examples.length >= allTemplates.length && bad.length === 0;
-    if (!ok) console.log(`    실제: 노드정의=${defsOk} 검출력프로브=${probeRejected} 예시 ${examples.length}개 스키마불통 ${JSON.stringify(bad)}`);
-    report(ok, "(SP-6f) 템플릿의 모든 JSON 예시는 병합이 채우는 필드를 더하면 세 계층 노드 정의 중 하나를 통과한다(예시를 그대로 따른 출력이 스키마에 막히지 않는다)");
+    const probeRejected = !passesIn(probe, ["career"]) &&
+      passesIn({ ...probe, verification: { ...probe.verification, attempts: 2 } }, ["career"]);
+    const ok = probeRejected && examples >= allTemplates.length && bad.length === 0;
+    if (!ok) console.log(`    실제: 검출력프로브=${probeRejected} 예시 ${examples}개 ${JSON.stringify(bad)}`);
+    report(ok, "(SP-6f) 템플릿의 모든 JSON 예시는 병합이 채우는 필드를 더하면 그 템플릿이 선언한 대상 계층의 노드 정의를 통과한다(예시를 그대로 따른 출력이 스키마에 막히지 않는다)");
+  }
+
+  // ---- (SP-12) 두 SKILL.md의 마스킹 검사 단계가 멈춤 지시와 원문 금지를 담는다 ----
+  //      2026-09-28에 이 단계에 「exit 1이면 보고하고 멈춘다 — 원문은 옮기지 마라」를 적었는데 그 문장을
+  //      보는 장치가 없었다. 「오탐인지 사용자가 판단하게 걸린 값을 산출물에서 읽어 보여 준다」로 바꾸는
+  //      퇴행(T06)이 통과했다 — 렌더의 (RV-12)가 막은 두 번째 유출 경로를 산문이 지시로 연다.
+  //      **등급은 `source-scan`이다.** 문구가 있는지만 보며, 문구를 둔 채 뜻을 바꾸는 퇴행은 보지 못한다
+  //      ((SP-6d)의 선언된 한계와 같다). 닫는 것은 그 문장이 조용히 사라지는 것이다.
+  {
+    const skills = promptFiles.filter((p) => /[\\/]skills[\\/][^\\/]+[\\/]SKILL\.md$/.test(p));
+    const bad = [];
+    for (const p of skills) {
+      const m = /^### [^\n]*마스킹[^\n]*\n([\s\S]*?)(?=^#{2,3} )/m.exec(read(p));
+      if (m === null) { bad.push(`${rel(p)}: 마스킹 검사 단계 없음`); continue; }
+      const miss = ["--secret-scan", "멈춘다", "원문은", "옮기지 마라"].filter((w) => !m[1].includes(w));
+      if (miss.length > 0) bad.push(`${rel(p)}: ${miss.join(", ")} 없음`);
+    }
+    const ok = skills.length === KNOWN_SKILLS.length && skills.length >= 1 && bad.length === 0;
+    if (!ok) console.log(`    실제: SKILL.md ${skills.length}건(기대 ${KNOWN_SKILLS.length}) ${JSON.stringify(bad)}`);
+    report(ok, "(SP-12) 모든 SKILL.md의 마스킹 검사 단계가 --secret-scan 명령 · 멈춤 지시 · 원문 금지 문구를 담는다(source-scan)");
   }
 
   // ---- (SP-7) 각 템플릿이 의도 모델 티어를 명시하는가(전역 규약) ----
@@ -5849,11 +5913,15 @@ function runRenderGateSmoke() {
           path.join(REPO_ROOT, "scripts", "validate-plugin.mjs"), "--secret-scan", inPath,
         ], { cwd: REPO_ROOT, encoding: "utf8" });
         const verifyClean = checkRenderVerification({ layer, inPath, root: LEAK.root, repoPath: LEAK.repo });
-        const outPath = path.join(os.tmpdir(), `devcareer-rv9-${layer}-${crypto.randomBytes(6).toString("hex")}.md`);
+        // **빈 디렉터리에 --out을 둔다(3라운드).** --out 경로 하나만 보면, 게이트 앞에서 임시 파일을
+        // 먼저 쓰고 거부될 때 치우지 않는 퇴행이 원문 담긴 `.partial`을 남긴 채 통과했다(T04).
+        // 거부된 렌더는 그 디렉터리에 **아무 파일도** 남기지 않아야 한다.
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), `devcareer-rv9-${layer}-`));
+        const outPath = path.join(outDir, `${layer}.md`);
         const r = renderAt(layer, LEAK.root, LEAK.repo, outPath);
         const out = (r.stdout ?? "") + (r.stderr ?? "");
         rv9Outs.push(out);
-        const wrote = fs.existsSync(outPath);
+        const wrote = fs.readdirSync(outDir).length > 0;
         // **`--out` 없는 stdout 경로도 본다(2라운드).** 「파일이 남지 않는 미리보기이니 검사하지
         // 않는다」는 퇴행은 `--out` 경로만 보는 단언을 통과하는데, 그 경로에서는 원문이 터미널과
         // 대화 기록으로 곧장 나간다 — 두 번째 유출 경로 그 자체다.
@@ -6078,6 +6146,49 @@ function runRenderGateSmoke() {
     return c;
   };
 
+  // **재료의 모양을 넓힌다(3라운드).** 정직한 산출물은 계층마다 노드 하나에 선택 필드가 없다 —
+  // 그래서 「두 번째 노드부터」「`externalUrl`(format: uri) 자리」「career의 `skills`·`period`」 같은
+  // 잎이 한 번도 오염되지 않았고, `format: uri` 자리에서만 면제하는 퇴행(T16)이 통과했다. 노드
+  // 정의가 선언한 **선택 속성을 스키마에서 읽어** 채우고 노드를 하나 더 붙인다(하드코딩하지 않는다).
+  const sampleFor = (sch, schema, depth = 0) => {
+    if (sch === undefined || sch === null || depth > 4) return undefined;
+    if (typeof sch.$ref === "string") {
+      const key = sch.$ref.replace(/^#\/\$defs\//, "");
+      return sampleFor(schema?.$defs?.[key], schema, depth + 1);
+    }
+    const type = Array.isArray(sch.type) ? sch.type.find((t) => t !== "null") : sch.type;
+    if (type === "string") return sch.format === "uri" ? "https://example.com/doc" : sch.format === "date" ? "2026-01-01" : "값";
+    if (type === "array") {
+      const item = sampleFor(sch.items, schema, depth + 1);
+      return item === undefined ? undefined : [item];
+    }
+    if (type === "object" && sch.properties) {
+      const out = {};
+      for (const [k, v] of Object.entries(sch.properties)) {
+        const s = sampleFor(v, schema, depth + 1);
+        if (s !== undefined) out[k] = s;
+      }
+      return out;
+    }
+    return undefined;
+  };
+  const enrichedOf = (layer) => {
+    const inst = honestOf(layer);
+    const schema = readRepoJsonSafe(`schemas/${layer}.schema.json`).json;
+    const defKeys = Object.keys(schema?.$defs ?? {}).filter((k) => /Node$/.test(k));
+    if (inst === null || defKeys.length !== 1 || !Array.isArray(inst.nodes) || inst.nodes.length === 0) return null;
+    const def = schema.$defs[defKeys[0]];
+    const req = new Set(def.required ?? []);
+    const n0 = inst.nodes[0];
+    for (const [k, v] of Object.entries(def.properties ?? {})) {
+      if (req.has(k) || n0[k] !== undefined) continue;
+      const s = sampleFor(v, schema);
+      if (s !== undefined) n0[k] = s;
+    }
+    inst.nodes.push({ ...structuredClone(n0), id: `${n0.id}-2` });
+    return inst;
+  };
+
   // ---- (RV-14) 잎 전수 오염: 모든 문자열 잎 × 모든 패턴을 하나씩 넣으면 정확히 한 건이 잡힌다 ----
   //      정직한 세 계층의 문자열 잎 **전부**에 패턴 표본을 하나씩 덧붙여, 렌더 재검사가 매번 정확히
   //      한 건을 그 패턴으로 잡는지 본다. 정직한 원본은 0건이어야 한다(그래야 「한 건」이 그 잎의
@@ -6094,13 +6205,17 @@ function runRenderGateSmoke() {
       const inertSamples = [...LEAF_SAMPLES].filter(([p, s]) => !redactSecrets(s).hits.some((h) => h.name === p)).map(([p]) => p);
       let checked = 0;
       let maxDepth = 0;
+      let sawUri = false;
+      let sawSecondNode = false;
       for (const layer of LAYERS3) {
-        const inst = honestOf(layer);
+        const inst = enrichedOf(layer);
         if (inst === null) { problems.push(`${layer}: 판독 실패`); continue; }
         const base = checkRenderSecrets(layer, inst);
         if (base.length !== 0) { problems.push(`${layer}: 정직한 원본이 이미 ${base.length}건`); continue; }
         for (const { tokens } of leavesOf(inst)) {
           maxDepth = Math.max(maxDepth, tokens.length);
+          if (tokens.includes("externalUrl")) sawUri = true;
+          if (tokens[0] === "nodes" && tokens[1] === 1) sawSecondNode = true;
           for (const [pat, sample] of LEAF_SAMPLES) {
             const got = checkRenderSecrets(layer, poison(inst, tokens, sample));
             checked += 1;
@@ -6111,12 +6226,12 @@ function runRenderGateSmoke() {
         }
       }
       const ok = DEFINED_PATTERNS.length >= 1 && missingSamples.length === 0 && inertSamples.length === 0 &&
-        maxDepth >= 5 && checked >= 1 && problems.length === 0;
+        maxDepth >= 5 && sawUri && sawSecondNode && checked >= 1 && problems.length === 0;
       if (!ok) {
         console.log(`    실제: 정의 패턴 ${JSON.stringify(DEFINED_PATTERNS)} 표본없음 ${JSON.stringify(missingSamples)} ` +
-          `발화안함 ${JSON.stringify(inertSamples)} 최대깊이 ${maxDepth} 검사 ${checked}건 실패 ${problems.length}건 ${JSON.stringify(problems.slice(0, 3))}`);
+          `발화안함 ${JSON.stringify(inertSamples)} 최대깊이 ${maxDepth} uri잎=${sawUri} 둘째노드=${sawSecondNode} 검사 ${checked}건 실패 ${problems.length}건 ${JSON.stringify(problems.slice(0, 3))}`);
       }
-      report(ok, `(RV-14) 잎 전수 오염: 정직한 세 계층의 문자열 잎 전부 × 스캐너 패턴 ${DEFINED_PATTERNS.length}종을 하나씩 덧붙이면 렌더 재검사가 매번 정확히 한 건을 그 패턴으로 잡는다(공유 스캐너 퇴행은 동치로 안 보인다)`);
+      report(ok, `(RV-14) 잎 전수 오염: 정직한 세 계층(선택 필드와 둘째 노드를 스키마에서 채운)의 문자열 잎 전부 × 스캐너 패턴 ${DEFINED_PATTERNS.length}종을 하나씩 덧붙이면 렌더 재검사가 매번 정확히 한 건을 그 패턴으로 잡는다(공유 스캐너 퇴행은 동치로 안 보인다)`);
     }
   }
 
@@ -6180,6 +6295,139 @@ function runRenderGateSmoke() {
       const ok = r.status === 1 && !wrote && out.includes("[VERIFY]") && out.includes("INCONCLUSIVE");
       if (!ok) console.log(`    실제: exit=${r.status} 파일생성=${wrote} 출력=${JSON.stringify(out.slice(0, 200))}`);
       report(ok, "(RV-17) 금지 방향: --repo가 git 레포가 아니어서 인용 재검증이 INCONCLUSIVE면 exit 1이고 마크다운이 생기지 않는다(도구 오류를 경고로 강등 금지)");
+    }
+  }
+  // ---- (RV-18)~(RV-21) 3라운드 보강 — 패턴별 종단 · 값의 모양 · 거부 뒤의 --out ----
+
+  // ---- (RV-18) 패턴별 CLI 종단: 스캐너의 모든 패턴이 「그 계층의 유일한 위반」일 때 렌더가 거부한다 ----
+  //      CLI 종단 단언((RV-9)·(RV-12)·(RV-13))의 유출은 AWS 액세스 키 한 종류뿐이었다. 그래서 `main()`이
+  //      특정 패턴 **단독** 위반만 경고로 강등하는 퇴행(T19 — 결함 ③ 압박 아래 가장 싼 대응)이 통과했다.
+  //      패턴 표본을 계층 수만큼씩 묶어 세 계층 본문에 하나씩 넣은 루트를 만들고(루트 수는 스캐너 패턴
+  //      수에서 파생), 각 계층을 CLI로 렌더해 거부 · 패턴 이름 · 원문 부재를 본다. 전제: 각 표본이 **제
+  //      패턴 하나만** 발화시킨다 — 그래야 그 계층의 위반이 그 패턴 단독이다.
+  {
+    const pats = DEFINED_PATTERNS.filter((p) => LEAF_SAMPLES.has(p));
+    const notSole = pats.filter((p) => {
+      const names = [...new Set(redactSecrets(`설정 발췌: ${LEAF_SAMPLES.get(p)}`).hits.map((h) => h.name))];
+      return !(names.length === 1 && names[0] === p);
+    });
+    const groups = [];
+    for (let i = 0; i < pats.length; i += LAYERS3.length) groups.push(pats.slice(i, i + LAYERS3.length));
+    const bad = [];
+    const covered = new Set();
+    for (const g of groups) {
+      const texts = Object.fromEntries(LAYERS3.map((layer, i) => [
+        layer, g[i] === undefined ? HONEST_TEXTS[layer] : `${HONEST_TEXTS[layer]} 설정 발췌: ${LEAF_SAMPLES.get(g[i])}`,
+      ]));
+      const built = buildRenderRootWith(texts);
+      if (built === null) { bad.push(`루트 생성 실패 ${JSON.stringify(g)}`); continue; }
+      LAYERS3.forEach((layer, i) => {
+        const pat = g[i];
+        if (pat === undefined) return;
+        const r = renderAt(layer, built.root, built.repo, null);
+        const out = (r.stdout ?? "") + (r.stderr ?? "");
+        const sample = LEAF_SAMPLES.get(pat);
+        if (r.status === 1 && out.includes("[SECRET]") && out.includes(pat) && !out.includes(sample)) covered.add(pat);
+        else bad.push(`${layer}×${pat}: exit=${r.status} 패턴명=${out.includes(pat)} 원문노출=${out.includes(sample)}`);
+      });
+    }
+    const missing = DEFINED_PATTERNS.filter((p) => !covered.has(p));
+    const ok = DEFINED_PATTERNS.length >= 1 && notSole.length === 0 && missing.length === 0 && bad.length === 0;
+    if (!ok) console.log(`    실제: 단독아닌표본 ${JSON.stringify(notSole)} 미관측 ${JSON.stringify(missing)} 실패 ${JSON.stringify(bad.slice(0, 4))}`);
+    report(ok, `(RV-18) 패턴별 CLI 종단: 스캐너 패턴 ${DEFINED_PATTERNS.length}종 각각이 그 계층의 유일한 위반일 때 렌더가 exit 1로 거부하고 패턴 이름을 대며 원문을 싣지 않는다`);
+  }
+
+  // ---- (RV-19) 값의 모양: 긴 값의 뒤쪽 · 여러 줄 코드 펜스 안의 유출도 잡힌다 ----
+  //      재료의 문자열이 전부 250자 미만이고 한 줄이었다. 그래서 「앞 4096자만 스캔한다」(T17, 측정
+  //      없는 성능 최적화)와 「코드 펜스 안은 예시이니 건너뛴다」(T18, 오탐 줄이기)가 통과했다 —
+  //      `snippetQuoting`이 있는 제품이라 코드 인용이야말로 시크릿이 나타나는 자리다.
+  {
+    const bad = [];
+    let checked = 0;
+    for (const layer of LAYERS3) {
+      const inst = HONEST === null ? null : honestOf(layer);
+      if (inst === null) { bad.push(`${layer}: 재료 없음`); continue; }
+      for (const [pat, sample] of LEAF_SAMPLES) {
+        const variants = [
+          ["긴 값(5000자 뒤)", `${"가".repeat(5000)} ${sample}`],
+          ["코드 펜스", `${inst.nodes[0].text}\n\n\`\`\`sh\nexport LEAKED=${sample}\n\`\`\`\n`],
+        ];
+        for (const [kind, text] of variants) {
+          const v = structuredClone(inst);
+          v.nodes[0].text = text;
+          const got = checkRenderSecrets(layer, v);
+          checked += 1;
+          if (got.length !== 1 || !got[0].includes(pat)) bad.push(`${layer}×${pat}×${kind} → ${got.length}건`);
+        }
+      }
+    }
+    const ok = checked >= 1 && bad.length === 0;
+    if (!ok) console.log(`    실제: 검사 ${checked}건 실패 ${JSON.stringify(bad.slice(0, 4))}`);
+    report(ok, "(RV-19) 값의 모양: 5000자 뒤에 있거나 여러 줄 코드 펜스 안에 있는 유출도 모든 패턴에서 렌더 재검사가 잡는다");
+  }
+
+  // ---- (RV-20) 거부되면 --out 자리의 이전 렌더 결과를 무효 표식으로 바꾼다 ----
+  //      **동작 버그 수정의 관측이다(2026-09-29, 사용자 결정 「거부 표식으로 덮어쓴다」).** 게이트가
+  //      거부해도 이전에 성공한 `.md`가 그 자리에 남아 사용자가 그것을 지금 산출물의 문서로 읽었다.
+  //      세 갈래를 본다: 마스킹 거부 · 스키마(해시) 거부에서 이전 내용이 사라지고 표식이 남는다, 그리고
+  //      **통과할 때는 표식이 아니라 새 렌더가 쓰인다**(무효화를 무조건 거는 퇴행 차단).
+  {
+    const STALE = "이전-렌더-표지-7f3a";
+    const staleFile = (name) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-rv20-"));
+      const p = path.join(dir, name);
+      fs.writeFileSync(p, `# 이전 렌더\n\n${STALE}\n`, "utf8");
+      return { dir, p };
+    };
+    const results = [];
+    if (LEAK !== null) {
+      const { dir, p } = staleFile("career.md");
+      const r = renderAt("career", LEAK.root, LEAK.repo, p);
+      const body = fs.readFileSync(p, "utf8");
+      results.push(["마스킹 거부", r.status === 1 && !body.includes(STALE) && body.includes("더 이상 유효하지 않습니다") &&
+        body.includes("SECRET") && !body.includes(LEAK_PAYLOAD) && fs.readdirSync(dir).length === 1]);
+    } else results.push(["마스킹 거부", false]);
+    if (HONEST !== null) {
+      const tampered = { ...honestOf("career"), contentHash: "0".repeat(64) };
+      const inPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-rv20in-")), "career.json");
+      fs.writeFileSync(inPath, JSON.stringify(tampered), "utf8");
+      const { p } = staleFile("career.md");
+      const r = spawnSync("node", [
+        path.join(REPO_ROOT, "scripts", "render-markdown.mjs"), "--layer", "career", "--in", inPath,
+        "--root", HONEST.root, "--repo", HONEST.repo, "--out", p,
+      ], { cwd: REPO_ROOT, encoding: "utf8" });
+      const body = fs.readFileSync(p, "utf8");
+      results.push(["스키마 거부", r.status === 1 && !body.includes(STALE) && body.includes("더 이상 유효하지 않습니다") && body.includes("SCHEMA")]);
+      const ok2 = staleFile("career.md");
+      const s = renderAt("career", HONEST.root, HONEST.repo, ok2.p);
+      const fresh = fs.readFileSync(ok2.p, "utf8");
+      results.push(["통과 시 새 렌더", s.status === 0 && !fresh.includes(STALE) && !fresh.includes("더 이상 유효하지 않습니다") &&
+        fresh.includes(HONEST_TEXTS.career)]);
+    } else results.push(["스키마 거부", false], ["통과 시 새 렌더", false]);
+    const ok = results.every(([, v]) => v);
+    if (!ok) console.log(`    실제: ${JSON.stringify(results)}`);
+    report(ok, "(RV-20) 거부되면 --out 자리의 이전 렌더를 무효 표식으로 바꾸고(마스킹·스키마 거부 모두, 원문 없이) 통과하면 새 렌더를 쓴다");
+  }
+
+  // ---- (RV-21) --out이 --in과 같거나 .json이면 exit 2이고 정본을 건드리지 않는다 ----
+  //      **동작 버그 수정의 관측이다.** 그 경우 게이트를 통과한 뒤 정본 JSON이 마크다운으로 덮어써졌다.
+  {
+    if (HONEST === null) {
+      report(false, "(RV-21) 전제: 정직한 루트가 없어 관측할 수 없다");
+    } else {
+      // **루트 사본에서 돈다.** 보호가 빠진 퇴행에서는 이 렌더가 정본 JSON을 마크다운으로 덮어쓰는데,
+      // 공유 중인 정직한 루트에서 돌면 그 오염이 뒤의 단언((RM-7))까지 연쇄로 무너뜨렸다(변이 U2 실측).
+      const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-rv21root-")), STATE_DIR_NAME);
+      fs.cpSync(HONEST.root, root, { recursive: true });
+      const inPath = path.join(root, "career.json");
+      const before = crypto.createHash("sha256").update(fs.readFileSync(inPath)).digest("hex");
+      const same = renderAt("career", root, HONEST.repo, inPath);
+      const after = crypto.createHash("sha256").update(fs.readFileSync(inPath)).digest("hex");
+      const jsonOut = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "devcareer-rv21-")), "career-copy.json");
+      const other = renderAt("career", root, HONEST.repo, jsonOut);
+      const ok = same.status === 2 && before === after && other.status === 2 && !fs.existsSync(jsonOut);
+      if (!ok) console.log(`    실제: 같은파일 exit=${same.status} 정본보존=${before === after} / .json exit=${other.status} 생성=${fs.existsSync(jsonOut)}`);
+      report(ok, "(RV-21) --out이 --in과 같은 파일이거나 .json이면 exit 2이고 정본 JSON은 바이트 그대로다(정본을 마크다운으로 덮어쓰지 않는다)");
     }
   }
 }
