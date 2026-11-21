@@ -455,7 +455,7 @@ export function checkAuthorshipContract(layer, instance, { stage } = {}) {
  * 노드 순서: draft 순서를 그대로 두고, draft에 없던 `locked` 생존자를 prev
  * 순서로 뒤에 붙인다. 순서를 섞으면 재실행 diff가 무의미해진다.
  *
- * **`prevDerived` — 노드별 출처 기록(2026-08-25, 순서 10번 / f029375 Minor 12).**
+ * **`prevDerived` — 노드별 출처 기록(2026-08-25, 순서 10번 / 2de8fb4 Minor 12).**
  * `merged.nodes`와 **같은 순서·같은 길이**의 배열을 함께 돌려준다. 각 원소는
  * `{ whole: boolean, fields: string[] }`이며, `whole`이면 그 노드 **전체**가 prev에서
  * 왔고(규칙 1의 두 경로), 아니면 `fields`가 draft 노드 위에 얹힌 **prev 유래 필드**의
@@ -732,7 +732,7 @@ export function mergeArtifact(layer, prev, draft, { stage } = {}) {
 
 /**
  * 스키마 오류를 **prev 유래**와 **draft를 고쳐 해소되는 것**으로 가른다
- * (순서 10번 / f029375 Minor 12).
+ * (순서 10번 / 2de8fb4 Minor 12).
  *
  * **왜 필요한가.** 쓰기 직전 자기 검증은 병합 결과를 보므로, 위반이 이전 산출물에서
  * 온 내용일 수 있다. 그때 exit 1(「출력을 고쳐 다시 부른다」)을 내면 호출자는 draft를

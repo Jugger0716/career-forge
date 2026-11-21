@@ -59,7 +59,7 @@
 
 ## 8. 라이선스 · 배포 대상 (사용자 확정 — SPEC의 미확정 항목 해소)
 
-- **라이선스: MIT로 확정**. `LICENSE` 파일이 이미 레포 루트에 존재한다 (GitHub 생성분, 커밋 `31e603d`).
+- **라이선스: MIT로 확정**. `LICENSE` 파일이 이미 레포 루트에 존재한다 (GitHub 생성분, 커밋 `fd02c0e`).
   → SPEC의 "MIT 또는 Apache-2.0" 미확정 상태는 **해소됨**. README / `plugin.json` / 문서의 라이선스 표기는
     전부 MIT로 일치시켜야 하며, Apache-2.0을 전제한 설계는 하지 않는다.
 - **원격 레포: `https://github.com/Jugger0716/career-forge.git` (public)**.

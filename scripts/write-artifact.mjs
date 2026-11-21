@@ -60,7 +60,7 @@
 //     (PREV_ARTIFACT_LAYER_REF_UNRESOLVED)**. 사유는 [HOLD] 줄의 코드로 나온다.
 //     공통점은 「인자나 출력을 고쳐서 해소되지 않는다」이다 — 그래서 1·2가 아니다.
 //
-//     **`--force`로 넘어갈 수 없는 것은 셋이다**(f029375 Minor 12 + 라운드 2 처방 7):
+//     **`--force`로 넘어갈 수 없는 것은 셋이다**(2de8fb4 Minor 12 + 라운드 2 처방 7):
 //     PREV_ARTIFACT_SCHEMA_VIOLATION · PARENT_ARTIFACT_UNREADABLE ·
 //     PREV_ARTIFACT_LAYER_REF_UNRESOLVED. 그리고 exit 2의 PARENT_ARTIFACT_MISSING도
 //     마찬가지다 — 강행하면 고아 참조를 담은 산출물이 기록되기 때문이다.
@@ -497,7 +497,7 @@ function main() {
   }
   const schemaErrors = validateInstance(layerSchema, merged);
   if (schemaErrors.length > 0) {
-    // **위반이 prev에서 왔으면 exit 1은 거짓 안내다(f029375 Minor 12).**
+    // **위반이 prev에서 왔으면 exit 1은 거짓 안내다(2de8fb4 Minor 12).**
     // 이 검증의 대상은 draft가 아니라 **병합 결과**이고, 병합 결과에는 prev에서
     // 온 것이 섞인다 — 잠긴 생존자 노드 전체와, draft 노드에 얹힌 `origin`·
     // `verification`. 그 위반에 대고 exit 1의 계약(「출력을 고쳐 다시 부른다」)을

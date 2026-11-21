@@ -545,7 +545,7 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       (RV-13)(동시 보고: 인용이 깨진 산출물의 유출도 [SECRET]으로 보고) 신설 611 → 612.
   //       (RV-4)·(RV-9)·(RV-11)·(RV-12)는 라벨을 유지한 채 대상을 넓혔다(마스킹 판독 실패 ·
   //       세 계층 CLI · 합성 2건과 스캐너 정의 패턴 전량 · 160자 절단 분기).
-  //       2라운드 적대적 리뷰(보강판 + 15fa4fb 대상)의 생존 변이를 막는 (RV-14)(잎 전수 오염)·
+  //       2라운드 적대적 리뷰(보강판 + 5ae2da4 대상)의 생존 변이를 막는 (RV-14)(잎 전수 오염)·
   //       (RV-15)(보고 완전성)·(RV-16)(origin 무관)·(RV-17)(INCONCLUSIVE 거부)·(SP-6f)(예시가 병합 후
   //       노드 스키마를 통과) 612 → 617. (RV-9)·(RV-13)·(SP-6b)·(SP-6e)·(AC-55)는 라벨을 유지한 채
   //       대상을 넓혔다(stdout 경로 · 상세 · 주석 밖 본문 · 모든 json 블록 · basis enum 전량).
@@ -555,7 +555,7 @@ const EXPECTED_ASSERTIONS_BEFORE_GUARDS = Object.freeze({
   //       드리프트는 라벨을 유지한 채 대상을 넓혔다(빈 디렉터리 · 선택 필드와 둘째 노드 · 병합 불변식 둘 ·
   //       선언된 대상 계층 · 경계값 둘).
   default: 622,
-  // 이력: 도입(`0a42457`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
+  // 이력: 도입(`b07a255`) 이래 **변경 0회**. 「아직 안 적었다」가 아니라 「바뀐 적이 없다」이며,
   //       그 사실 자체가 정보다 — `main()`이 이 두 모드에서 `runCommonSections()`를 아예 돌리지
   //       않으므로 공통 섹션에 단언을 더하는 작업(4~8번이 전부 그랬다)은 구조적으로 여기 닿지
   //       않는다. **이 두 값이 움직이는 변경은 그래서 예외적이고, 움직였다면 negative 픽스처나
@@ -939,7 +939,7 @@ function allowedValuesOf(clause) {
 /**
  * 네 계층 스키마의 `basis`/`externalUrl` 절이 **서로 동형인지**를 관측한다(8번 ②).
  *
- * **왜 필요한가.** `basis: "external"`을 표현 가능하게 만든 커밋(`5f71c32`)은 네 파일을 한꺼번에
+ * **왜 필요한가.** `basis: "external"`을 표현 가능하게 만든 커밋(`7a8a39f`)은 네 파일을 한꺼번에
  * 고쳤지만, 그 뒤 「`evidence`가 비면 `basis`는?」 절을 완화할 때 **plan 하나가 빠졌다** —
  * 나머지 셋은 `enum: ["insufficient","external"]`인데 plan만 `const: "insufficient"`로 남아
  * 다섯 달 가까이 아무도 보지 못했다(정정 5 / 결정 D4). 같은 계약이 네 파일에 손으로 복제되는
@@ -2707,7 +2707,7 @@ function runArtifactContractOracleSmoke() {
   //      **계층 키 집합의 세 번째 사본이다.** (AC-2)가 잡는 것은 `ARTIFACT_LAYERS`의
   //      stateKey이고, 스키마의 `artifacts.required`가 정본인데, `EMPTY_REGISTRY_ARTIFACTS`는
   //      **어느 쪽과도 대조되지 않은 채** `updateRegistry`가 새 레지스트리를 만들 때 쓰는
-  //      골격이다(콜드 리뷰 f029375가 「참조는 자기 파일 한 곳뿐」이라고 지적했다).
+  //      골격이다(콜드 리뷰 2de8fb4가 「참조는 자기 파일 한 곳뿐」이라고 지적했다).
   //      키가 하나 빠지면 required 위반으로 시끄럽게 깨지지만, 키가 **더 있으면**
   //      `additionalProperties`가 없는 한 조용히 통과한다.
   //
@@ -2932,8 +2932,8 @@ function runArtifactContractOracleSmoke() {
   //      재구현인데 가드가 하나도 없다(layer 가드조차 없다). L0 프로덕션 쓰기
   //      (`collect-git-facts.mjs`)와 검증(`invariants.mjs`)이 쓰는 것은 **이쪽**이다.
   //
-  //      **그런데 이 파일은 슬라이스 A라 고칠 수 없다**(`9e1cdd2`, 2026-08-18 생성 —
-  //      `artifact-contract.mjs`·`write-artifact.mjs`는 `f029375`가 만든 슬라이스 B
+  //      **그런데 이 파일은 슬라이스 A라 고칠 수 없다**(`6d40ca8`, 2026-08-18 생성 —
+  //      `artifact-contract.mjs`·`write-artifact.mjs`는 `2de8fb4`가 만든 슬라이스 B
   //      파일이라 달랐다). 예외 표에 행을 추가하는 조건은 「그 항목이 회차 작업을
   //      실제로 막을 때」인데 **막지 않는다** — 두 프로덕션 호출부가 모두 상위에서
   //      가드된다(`collect-git-facts.mjs`는 evidence를 지역에서 조립하고,
@@ -5171,7 +5171,7 @@ function runSourceLineReferenceSmoke() {
 }
 
 /**
- * 슬라이스 A 완료(`97675e7`) 이후 **수정 이력이 0건인** 슬라이스 A 파일과 그 내용 핀.
+ * 슬라이스 A 완료(`7c35e43`) 이후 **수정 이력이 0건인** 슬라이스 A 파일과 그 내용 핀.
  *
  * **왜 이 부분집합인가(사용자 결정, 2026-09-02).** 슬라이스 A 파일은 전부 27건이고 그중
  * 11건은 `slice_plan.md`의 예외 표가 **정당하게** 건드린 것들이다. 그 11건까지 핀하면
@@ -6281,7 +6281,7 @@ function runRenderGateSmoke() {
   //      `checkRenderVerification`의 주석은 「INCONCLUSIVE도 통과가 아니다」라고 적었지만 그 갈래를
   //      보는 단언이 없었다 — (RV-6)은 FAIL, (RV-13)의 엉뚱한 레포는 git 레포라 없는 sha가 FAIL로
   //      분류된다. `--repo`를 **git 레포가 아닌 경로**로 주면 도구 오류(INCONCLUSIVE)가 되는데,
-  //      그것을 경고로 강등하면 레포 경로를 깨뜨리는 것만으로 이 게이트가 꺼진다. 처방 8(`b73b20d`)
+  //      그것을 경고로 강등하면 레포 경로를 깨뜨리는 것만으로 이 게이트가 꺼진다. 처방 8(`ab7cc76`)
   //      때부터 있던 구멍이며 2라운드 리뷰가 찾았다.
   {
     if (HONEST === null) {
@@ -7118,7 +7118,7 @@ function runWriteArtifactOracleSmoke() {
     }
 
     // ---- (WA-29) contentHash가 없는 prev를 CLI 레벨에서 관측한다(8번 ⑤) ----
-    //      **f029375 Minor 8의 잔여분.** `inspectPreviousArtifact`의 세 보류 사유 중
+    //      **2de8fb4 Minor 8의 잔여분.** `inspectPreviousArtifact`의 세 보류 사유 중
     //      PREV_ARTIFACT_UNREADABLE은 (WA-21)이, PREV_ARTIFACT_EDITED는 (WA-20)이
     //      **실행해서** 봤는데 PREV_ARTIFACT_HASH_MISSING만 함수 계약으로만 짚여
     //      있었다 — 즉 그 분기가 실제 CLI에서 exit 3을 내는지, 그리고 그때 정말로
@@ -7153,13 +7153,13 @@ function runWriteArtifactOracleSmoke() {
       report(
         ok,
         "(WA-29) contentHash가 없는 prev는 CLI에서 [HOLD] PREV_ARTIFACT_HASH_MISSING + exit 3이고 " +
-        "기존 파일을 한 바이트도 덮어쓰지 않는다(f029375 Minor 8 잔여 — 세 보류 사유가 같은 깊이로 관측된다)"
+        "기존 파일을 한 바이트도 덮어쓰지 않는다(2de8fb4 Minor 8 잔여 — 세 보류 사유가 같은 깊이로 관측된다)"
       );
     }
 
     // ---- (WA-30)~(WA-32) prev 유래 스키마 위반은 exit 1이 아니라 전용 HOLD다 (10번) ----
     //
-    //      **f029375 Minor 12. 지금까지 열려 있던 유일한 비가역 데이터 손실 경로다.**
+    //      **2de8fb4 Minor 12. 지금까지 열려 있던 유일한 비가역 데이터 손실 경로다.**
     //      쓰기 직전 자기 검증은 draft가 아니라 **병합 결과**를 보는데, 그 결과에는
     //      prev에서 온 것이 섞인다. 위반이 거기서 오면 exit 1(「출력을 고쳐 다시
     //      부른다」)은 **따라도 낫지 않는 안내**이고, 막다른 길에서 사용자가 산출물을
@@ -7201,7 +7201,7 @@ function runWriteArtifactOracleSmoke() {
       report(
         ok,
         "(WA-30) prev의 잠긴 노드에서 온 스키마 위반은 --force로도 [HOLD] PREV_ARTIFACT_SCHEMA_VIOLATION + exit 3이고 " +
-        "산출물도 .bak도 만들지 않는다(f029375 Minor 12 — exit 1의 '출력을 고쳐라'가 거짓 안내이던 경로)"
+        "산출물도 .bak도 만들지 않는다(2de8fb4 Minor 12 — exit 1의 '출력을 고쳐라'가 거짓 안내이던 경로)"
       );
     }
 
